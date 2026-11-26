@@ -1,0 +1,11 @@
+{
+  "mini-trellis-session-start": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "python3 -X utf8 ./hooks/mini-trellis/session-start.py",
+        "timeout": 15
+      }
+    ]
+  }
+}
