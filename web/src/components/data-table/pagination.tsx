@@ -36,83 +36,90 @@ export function DataTablePagination<TData>({
 
   return (
     <div
-      className={cn(
-        'flex items-center justify-between overflow-clip px-2',
-        '@max-2xl/content:flex-col-reverse @max-2xl/content:gap-4',
-        className
-      )}
-      style={{ overflowClipMargin: 1 }}
+      data-slot='data-table-pagination'
+      className={cn('@container/pagination', className)}
     >
-      <div className='flex w-full flex-wrap items-center justify-between gap-2'>
-        <div className='flex items-center gap-2 text-sm font-medium @2xl/content:hidden'>
-          <span>
+      <div className='flex flex-col-reverse items-center justify-between gap-4 px-0.5 py-1 @2xl/pagination:flex-row @2xl/pagination:gap-6'>
+        <div className='flex w-full items-center justify-between gap-2 @2xl/pagination:w-auto'>
+          <div className='flex items-center gap-2'>
+            <Select
+              value={`${table.getState().pagination.pageSize}`}
+              onValueChange={(value) => {
+                table.setPageSize(Number(value))
+              }}
+            >
+              <SelectTrigger
+                size='sm'
+                className='w-auto min-w-20 tabular-nums'
+                aria-label={t('table.rowsPerPage')}
+              >
+                <SelectValue
+                  placeholder={table.getState().pagination.pageSize}
+                />
+              </SelectTrigger>
+              <SelectContent side='top'>
+                {PAGE_SIZE_OPTIONS.map((pageSize) => (
+                  <SelectItem key={pageSize} value={`${pageSize}`}>
+                    {pageSize}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className='text-sm font-medium whitespace-nowrap'>
+              {t('table.rowsPerPage')}
+            </p>
+            {typeof total === 'number' && (
+              <span className='hidden text-sm whitespace-nowrap text-muted-foreground tabular-nums sm:inline'>
+                · {t('table.totalItems', { total })}
+              </span>
+            )}
+          </div>
+
+          <span className='text-sm font-medium whitespace-nowrap text-muted-foreground tabular-nums @2xl/pagination:hidden'>
             {t('table.pageOf', { page: currentPage, total: totalPages })}
           </span>
         </div>
-        <div className='flex items-center gap-2 @max-2xl/content:flex-row-reverse'>
-          <Select
-            value={`${table.getState().pagination.pageSize}`}
-            onValueChange={(value) => {
-              table.setPageSize(Number(value))
-            }}
-          >
-            <SelectTrigger
-              className='h-8 w-17.5'
-              aria-label={t('table.rowsPerPage')}
+
+        <div className='flex max-w-full flex-wrap items-center justify-center gap-4 @2xl/pagination:shrink-0 @2xl/pagination:flex-nowrap @2xl/pagination:gap-5'>
+          <span className='hidden text-sm font-medium whitespace-nowrap text-muted-foreground tabular-nums @2xl/pagination:inline'>
+            {t('table.pageOf', { page: currentPage, total: totalPages })}
+          </span>
+          <div className='flex max-w-full flex-wrap items-center justify-center gap-1.5 @2xl/pagination:flex-nowrap'>
+            <Button
+              type='button'
+              variant='outline'
+              className='hidden size-8 p-0 @md/pagination:inline-flex'
+              onClick={() => table.setPageIndex(0)}
+              disabled={!table.getCanPreviousPage()}
             >
-              <SelectValue placeholder={table.getState().pagination.pageSize} />
-            </SelectTrigger>
-            <SelectContent side='top'>
-              {PAGE_SIZE_OPTIONS.map((pageSize) => (
-                <SelectItem key={pageSize} value={`${pageSize}`}>
-                  {pageSize}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className='hidden text-sm font-medium sm:block'>
-            {t('table.rowsPerPage')}
-          </p>
-          {typeof total === 'number' && (
-            <span className='hidden text-sm text-muted-foreground md:inline'>
-              · {t('table.totalItems', { total })}
-            </span>
-          )}
-        </div>
-      </div>
+              <span className='sr-only'>{t('table.firstPage')}</span>
+              <DoubleArrowLeftIcon className='size-4' />
+            </Button>
+            <Button
+              type='button'
+              variant='outline'
+              className='size-8 p-0'
+              onClick={() => table.previousPage()}
+              disabled={!table.getCanPreviousPage()}
+            >
+              <span className='sr-only'>{t('table.prevPage')}</span>
+              <ChevronLeftIcon className='size-4' />
+            </Button>
 
-      <div className='flex flex-wrap items-center sm:space-x-6 lg:space-x-8'>
-        <div className='hidden items-center justify-center text-sm font-medium whitespace-nowrap @3xl/content:flex'>
-          {t('table.pageOf', { page: currentPage, total: totalPages })}
-        </div>
-        <div className='flex items-center space-x-2'>
-          <Button
-            variant='outline'
-            className='size-8 p-0 @max-md/content:hidden'
-            onClick={() => table.setPageIndex(0)}
-            disabled={!table.getCanPreviousPage()}
-          >
-            <span className='sr-only'>{t('table.firstPage')}</span>
-            <DoubleArrowLeftIcon className='h-4 w-4' />
-          </Button>
-          <Button
-            variant='outline'
-            className='size-8 p-0'
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
-          >
-            <span className='sr-only'>{t('table.prevPage')}</span>
-            <ChevronLeftIcon className='h-4 w-4' />
-          </Button>
-
-          {pageNumbers.map((pageNumber, index) => (
-            <div key={`${pageNumber}-${index}`} className='flex items-center'>
-              {pageNumber === '...' ? (
-                <span className='px-1 text-sm text-muted-foreground'>...</span>
+            {pageNumbers.map((pageNumber, index) =>
+              pageNumber === '...' ? (
+                <span
+                  key={`ellipsis-${index}`}
+                  className='px-1 text-sm text-muted-foreground'
+                >
+                  ...
+                </span>
               ) : (
                 <Button
+                  key={pageNumber}
+                  type='button'
                   variant={currentPage === pageNumber ? 'default' : 'outline'}
-                  className='h-8 min-w-8 px-2'
+                  className='h-8 min-w-8 px-2 tabular-nums'
                   onClick={() => table.setPageIndex((pageNumber as number) - 1)}
                 >
                   <span className='sr-only'>
@@ -123,28 +130,30 @@ export function DataTablePagination<TData>({
                   </span>
                   {pageNumber}
                 </Button>
-              )}
-            </div>
-          ))}
+              )
+            )}
 
-          <Button
-            variant='outline'
-            className='size-8 p-0'
-            onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
-          >
-            <span className='sr-only'>{t('table.nextPage')}</span>
-            <ChevronRightIcon className='h-4 w-4' />
-          </Button>
-          <Button
-            variant='outline'
-            className='size-8 p-0 @max-md/content:hidden'
-            onClick={() => table.setPageIndex(totalPages - 1)}
-            disabled={!table.getCanNextPage()}
-          >
-            <span className='sr-only'>{t('table.lastPage')}</span>
-            <DoubleArrowRightIcon className='h-4 w-4' />
-          </Button>
+            <Button
+              type='button'
+              variant='outline'
+              className='size-8 p-0'
+              onClick={() => table.nextPage()}
+              disabled={!table.getCanNextPage()}
+            >
+              <span className='sr-only'>{t('table.nextPage')}</span>
+              <ChevronRightIcon className='size-4' />
+            </Button>
+            <Button
+              type='button'
+              variant='outline'
+              className='hidden size-8 p-0 @md/pagination:inline-flex'
+              onClick={() => table.setPageIndex(totalPages - 1)}
+              disabled={!table.getCanNextPage()}
+            >
+              <span className='sr-only'>{t('table.lastPage')}</span>
+              <DoubleArrowRightIcon className='size-4' />
+            </Button>
+          </div>
         </div>
       </div>
     </div>

@@ -38,7 +38,7 @@ export function AuditLogRowActions({
         <Button
           variant='ghost'
           size='icon'
-          className='size-8 data-[state=open]:bg-muted'
+          className='size-7 rounded-md align-middle text-muted-foreground hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground data-[state=open]:bg-foreground/10 data-[state=open]:text-foreground dark:hover:bg-foreground/15 dark:focus-visible:bg-foreground/15 dark:data-[state=open]:bg-foreground/15'
           aria-label={t('rowActions.openMenu')}
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
