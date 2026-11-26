@@ -1,0 +1,83 @@
+{
+  "title": "Menus",
+  "description": "Manage navigation hierarchy, node ordering, and permission bindings.",
+  "createMenu": "Create Menu",
+  "expandAll": "Expand All",
+  "collapseAll": "Collapse All",
+  "columns": {
+    "title": "Title",
+    "type": "Type",
+    "code": "Code",
+    "path": "Path",
+    "permission": "Permission",
+    "sortOrder": "Order",
+    "visible": "Visible",
+    "status": "Status"
+  },
+  "types": {
+    "directory": "Directory",
+    "menu": "Menu",
+    "button": "Button"
+  },
+  "status": {
+    "active": "Active",
+    "disabled": "Disabled"
+  },
+  "visibility": {
+    "shown": "Shown",
+    "hidden": "Hidden"
+  },
+  "actions": {
+    "openMenu": "Open menu",
+    "addChild": "Add child",
+    "edit": "Edit node",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "delete": "Delete node",
+    "systemImmutableHint": "Built-in system menus cannot be deleted"
+  },
+  "form": {
+    "createTitle": "Create Menu Node",
+    "createDescription": "Add a directory, menu route, or button permission node.",
+    "editTitle": "Edit Menu Node",
+    "editDescription": "Update menu title, parent, icon, and sort order.",
+    "type": "Node Type",
+    "parent": "Parent Node",
+    "rootParent": "Root (No Parent)",
+    "code": "Code",
+    "codePlaceholder": "e.g. custom_reports",
+    "title": "Title",
+    "titlePlaceholder": "e.g. Reports",
+    "path": "Route Path",
+    "pathPlaceholder": "e.g. /reports",
+    "icon": "Icon",
+    "iconPlaceholder": "Select icon (optional)",
+    "noIcon": "No icon",
+    "permissionCode": "Permission Code",
+    "permissionPlaceholder": "Select permission (optional)",
+    "noPermission": "No permission binding",
+    "sortOrder": "Sort Order",
+    "visible": "Show in Sidebar",
+    "visibleHint": "Hide from sidebar navigation when turned off",
+    "status": "Status",
+    "statusHint": "Disabled nodes are excluded from navigation",
+    "submitCreate": "Create Node",
+    "submitSave": "Save Changes"
+  },
+  "deleteDialog": {
+    "title": "Delete Menu Node",
+    "description": "Delete menu node \"{{title}}\"? This action cannot be undone.",
+    "confirm": "Delete"
+  },
+  "toast": {
+    "created": "Menu node created",
+    "updated": "Menu node updated",
+    "reordered": "Menu order updated",
+    "deleted": "Menu node deleted"
+  },
+  "error": {
+    "loadTitle": "Failed to load menu tree",
+    "retry": "Retry"
+  },
+  "empty": "No menu nodes configured"
+}

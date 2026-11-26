@@ -28,6 +28,19 @@ func (q *Queries) AssignUserRole(ctx context.Context, arg AssignUserRoleParams) 
 	return err
 }
 
+const countMenuChildren = `-- name: CountMenuChildren :one
+SELECT count(*)::bigint
+FROM menus
+WHERE parent_id = $1
+`
+
+func (q *Queries) CountMenuChildren(ctx context.Context, parentID uuid.NullUUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countMenuChildren, parentID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countRoleUsers = `-- name: CountRoleUsers :one
 SELECT count(*)::bigint
 FROM user_roles
@@ -70,6 +83,102 @@ func (q *Queries) CountRoles(ctx context.Context, arg CountRolesParams) (int64, 
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const createMenu = `-- name: CreateMenu :one
+INSERT INTO menus (
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+)
+VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, $9, $10, $11, false, $12, $13, now(), now())
+RETURNING
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+`
+
+type CreateMenuParams struct {
+	ID             uuid.UUID
+	ParentID       uuid.NullUUID
+	Type           string
+	Code           string
+	Title          string
+	Path           string
+	Icon           string
+	PermissionCode pgtype.Text
+	SortOrder      int32
+	Visible        bool
+	Status         string
+	CreatedBy      uuid.NullUUID
+	UpdatedBy      uuid.NullUUID
+}
+
+func (q *Queries) CreateMenu(ctx context.Context, arg CreateMenuParams) (Menu, error) {
+	row := q.db.QueryRow(ctx, createMenu,
+		arg.ID,
+		arg.ParentID,
+		arg.Type,
+		arg.Code,
+		arg.Title,
+		arg.Path,
+		arg.Icon,
+		arg.PermissionCode,
+		arg.SortOrder,
+		arg.Visible,
+		arg.Status,
+		arg.CreatedBy,
+		arg.UpdatedBy,
+	)
+	var i Menu
+	err := row.Scan(
+		&i.ID,
+		&i.ParentID,
+		&i.Type,
+		&i.Code,
+		&i.Title,
+		&i.TitleKey,
+		&i.Path,
+		&i.Icon,
+		&i.PermissionCode,
+		&i.SortOrder,
+		&i.Visible,
+		&i.Status,
+		&i.IsSystem,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const createRole = `-- name: CreateRole :one
@@ -136,6 +245,16 @@ func (q *Queries) CreateRole(ctx context.Context, arg CreateRoleParams) (Role, e
 	return i, err
 }
 
+const deleteMenu = `-- name: DeleteMenu :exec
+DELETE FROM menus
+WHERE id = $1
+`
+
+func (q *Queries) DeleteMenu(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteMenu, id)
+	return err
+}
+
 const deleteRole = `-- name: DeleteRole :exec
 DELETE FROM roles
 WHERE id = $1
@@ -166,6 +285,61 @@ func (q *Queries) DeleteUserRoles(ctx context.Context, userID uuid.UUID) error {
 	return err
 }
 
+const ensureSystemMenu = `-- name: EnsureSystemMenu :one
+INSERT INTO menus (
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_at,
+    updated_at
+)
+VALUES ($1, $2, $3, $4, '', $5, $6, $7, $8, $9, true, 'active', true, now(), now())
+ON CONFLICT (code) DO UPDATE
+SET title_key = EXCLUDED.title_key,
+    is_system = true,
+    updated_at = now()
+RETURNING id
+`
+
+type EnsureSystemMenuParams struct {
+	ID             uuid.UUID
+	ParentID       uuid.NullUUID
+	Type           string
+	Code           string
+	TitleKey       pgtype.Text
+	Path           string
+	Icon           string
+	PermissionCode pgtype.Text
+	SortOrder      int32
+}
+
+func (q *Queries) EnsureSystemMenu(ctx context.Context, arg EnsureSystemMenuParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, ensureSystemMenu,
+		arg.ID,
+		arg.ParentID,
+		arg.Type,
+		arg.Code,
+		arg.TitleKey,
+		arg.Path,
+		arg.Icon,
+		arg.PermissionCode,
+		arg.SortOrder,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const ensureSystemRole = `-- name: EnsureSystemRole :one
 INSERT INTO roles (id, code, name, description, name_key, description_key, is_system, created_at, updated_at)
 VALUES ($1, $2, '', '', $3, $4, true, now(), now())
@@ -194,6 +368,103 @@ func (q *Queries) EnsureSystemRole(ctx context.Context, arg EnsureSystemRolePara
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const getMenuByID = `-- name: GetMenuByID :one
+SELECT
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+FROM menus
+WHERE id = $1
+`
+
+func (q *Queries) GetMenuByID(ctx context.Context, id uuid.UUID) (Menu, error) {
+	row := q.db.QueryRow(ctx, getMenuByID, id)
+	var i Menu
+	err := row.Scan(
+		&i.ID,
+		&i.ParentID,
+		&i.Type,
+		&i.Code,
+		&i.Title,
+		&i.TitleKey,
+		&i.Path,
+		&i.Icon,
+		&i.PermissionCode,
+		&i.SortOrder,
+		&i.Visible,
+		&i.Status,
+		&i.IsSystem,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getMenuByIDForUpdate = `-- name: GetMenuByIDForUpdate :one
+SELECT
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+FROM menus
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetMenuByIDForUpdate(ctx context.Context, id uuid.UUID) (Menu, error) {
+	row := q.db.QueryRow(ctx, getMenuByIDForUpdate, id)
+	var i Menu
+	err := row.Scan(
+		&i.ID,
+		&i.ParentID,
+		&i.Type,
+		&i.Code,
+		&i.Title,
+		&i.TitleKey,
+		&i.Path,
+		&i.Icon,
+		&i.PermissionCode,
+		&i.SortOrder,
+		&i.Visible,
+		&i.Status,
+		&i.IsSystem,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getRoleByID = `-- name: GetRoleByID :one
@@ -316,6 +587,67 @@ type GrantRolePermissionParams struct {
 func (q *Queries) GrantRolePermission(ctx context.Context, arg GrantRolePermissionParams) error {
 	_, err := q.db.Exec(ctx, grantRolePermission, arg.RoleID, arg.PermissionCode)
 	return err
+}
+
+const listMenus = `-- name: ListMenus :many
+SELECT
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+FROM menus
+ORDER BY sort_order ASC, created_at ASC, id ASC
+`
+
+func (q *Queries) ListMenus(ctx context.Context) ([]Menu, error) {
+	rows, err := q.db.Query(ctx, listMenus)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Menu
+	for rows.Next() {
+		var i Menu
+		if err := rows.Scan(
+			&i.ID,
+			&i.ParentID,
+			&i.Type,
+			&i.Code,
+			&i.Title,
+			&i.TitleKey,
+			&i.Path,
+			&i.Icon,
+			&i.PermissionCode,
+			&i.SortOrder,
+			&i.Visible,
+			&i.Status,
+			&i.IsSystem,
+			&i.CreatedBy,
+			&i.UpdatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPermissionCodesByRoleIDs = `-- name: ListPermissionCodesByRoleIDs :many
@@ -711,6 +1043,117 @@ func (q *Queries) ListUserRoleCodes(ctx context.Context, userID uuid.UUID) ([]st
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateMenu = `-- name: UpdateMenu :one
+UPDATE menus
+SET parent_id = $2,
+    type = $3,
+    title = $4,
+    path = $5,
+    icon = $6,
+    permission_code = $7,
+    sort_order = $8,
+    visible = $9,
+    status = $10,
+    updated_by = $11,
+    updated_at = now()
+WHERE id = $1
+RETURNING
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+`
+
+type UpdateMenuParams struct {
+	ID             uuid.UUID
+	ParentID       uuid.NullUUID
+	Type           string
+	Title          string
+	Path           string
+	Icon           string
+	PermissionCode pgtype.Text
+	SortOrder      int32
+	Visible        bool
+	Status         string
+	UpdatedBy      uuid.NullUUID
+}
+
+func (q *Queries) UpdateMenu(ctx context.Context, arg UpdateMenuParams) (Menu, error) {
+	row := q.db.QueryRow(ctx, updateMenu,
+		arg.ID,
+		arg.ParentID,
+		arg.Type,
+		arg.Title,
+		arg.Path,
+		arg.Icon,
+		arg.PermissionCode,
+		arg.SortOrder,
+		arg.Visible,
+		arg.Status,
+		arg.UpdatedBy,
+	)
+	var i Menu
+	err := row.Scan(
+		&i.ID,
+		&i.ParentID,
+		&i.Type,
+		&i.Code,
+		&i.Title,
+		&i.TitleKey,
+		&i.Path,
+		&i.Icon,
+		&i.PermissionCode,
+		&i.SortOrder,
+		&i.Visible,
+		&i.Status,
+		&i.IsSystem,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateMenuOrder = `-- name: UpdateMenuOrder :exec
+UPDATE menus
+SET parent_id = $2,
+    sort_order = $3,
+    updated_by = $4,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdateMenuOrderParams struct {
+	ID        uuid.UUID
+	ParentID  uuid.NullUUID
+	SortOrder int32
+	UpdatedBy uuid.NullUUID
+}
+
+func (q *Queries) UpdateMenuOrder(ctx context.Context, arg UpdateMenuOrderParams) error {
+	_, err := q.db.Exec(ctx, updateMenuOrder,
+		arg.ID,
+		arg.ParentID,
+		arg.SortOrder,
+		arg.UpdatedBy,
+	)
+	return err
 }
 
 const updateRole = `-- name: UpdateRole :one

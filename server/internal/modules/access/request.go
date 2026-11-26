@@ -1,6 +1,7 @@
 package access
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -32,6 +33,97 @@ type updateRoleRequest struct {
 	Name        *string   `json:"name" binding:"omitempty,min=1,max=100"`
 	Description *string   `json:"description" binding:"omitempty,max=500"`
 	Permissions *[]string `json:"permissions"`
+}
+
+type createMenuRequest struct {
+	ParentID       *string `json:"parentId"`
+	Type           string  `json:"type" binding:"required,oneof=directory menu button"`
+	Code           string  `json:"code" binding:"required,min=2,max=64"`
+	Title          string  `json:"title" binding:"required,min=1,max=100"`
+	Path           string  `json:"path" binding:"omitempty,max=255"`
+	Icon           string  `json:"icon" binding:"omitempty,max=64"`
+	PermissionCode string  `json:"permissionCode" binding:"omitempty,max=100"`
+	SortOrder      *int32  `json:"sortOrder"`
+	Visible        *bool   `json:"visible"`
+	Status         string  `json:"status" binding:"omitempty,oneof=active disabled"`
+}
+
+type optionalNullableString struct {
+	Set   bool
+	Value *string
+}
+
+func (o *optionalNullableString) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	o.Value = &s
+	return nil
+}
+
+type updateMenuRequest struct {
+	ParentID       optionalNullableString `json:"parentId"`
+	Type           *string                `json:"type" binding:"omitempty,oneof=directory menu button"`
+	Title          *string                `json:"title" binding:"omitempty,min=1,max=100"`
+	Path           *string                `json:"path" binding:"omitempty,max=255"`
+	Icon           *string                `json:"icon" binding:"omitempty,max=64"`
+	PermissionCode *string                `json:"permissionCode" binding:"omitempty,max=100"`
+	SortOrder      *int32                 `json:"sortOrder"`
+	Visible        *bool                  `json:"visible"`
+	Status         *string                `json:"status" binding:"omitempty,oneof=active disabled"`
+}
+
+type reorderMenuItemRequest struct {
+	ID        string  `json:"id" binding:"required"`
+	ParentID  *string `json:"parentId"`
+	SortOrder int32   `json:"sortOrder"`
+}
+
+type reorderMenusRequest struct {
+	Items []reorderMenuItemRequest `json:"items" binding:"required"`
+}
+
+func (r reorderMenusRequest) toInputItems() ([]ReorderMenuItem, error) {
+	out := make([]ReorderMenuItem, 0, len(r.Items))
+	for _, it := range r.Items {
+		id, err := uuid.Parse(strings.TrimSpace(it.ID))
+		if err != nil || id == uuid.Nil {
+			return nil, apperr.Validation([]apperr.FieldError{{
+				Field:   "items",
+				Message: "VALIDATION_UUID",
+			}})
+		}
+		parentID, err := parseOptionalUUID(it.ParentID, "items", ErrCodeMenuInvalidParent)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ReorderMenuItem{
+			ID:        id,
+			ParentID:  parentID,
+			SortOrder: it.SortOrder,
+		})
+	}
+	return out, nil
+}
+
+func parseOptionalUUID(raw *string, field, errCode string) (*uuid.UUID, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil, nil
+	}
+	parsed, err := uuid.Parse(strings.TrimSpace(*raw))
+	if err != nil || parsed == uuid.Nil {
+		return nil, apperr.Validation([]apperr.FieldError{{
+			Field:   field,
+			Message: errCode,
+		}})
+	}
+	return &parsed, nil
 }
 
 func bindListRolesRequest(c *gin.Context) (RoleListFilter, error) {
@@ -74,7 +166,7 @@ func bindListRolesRequest(c *gin.Context) (RoleListFilter, error) {
 	}, nil
 }
 
-func parseRoleIDParam(c *gin.Context) (uuid.UUID, error) {
+func parseUUIDParam(c *gin.Context) (uuid.UUID, error) {
 	raw := strings.TrimSpace(c.Param("id"))
 	parsed, err := uuid.Parse(raw)
 	if err != nil {

@@ -2,7 +2,7 @@
 
 Tianshu 是一个单仓库全栈后台脚手架：`server/`（Go + Gin + PostgreSQL + sqlc + Goose）通过 `//go:embed` 嵌入 `web/`（Vite + React 19 + TypeScript + TanStack Router/Query/Table + Tailwind CSS v4 + shadcn/ui + Zustand），实现单二进制部署。
 
-> 当前状态：`server/` 与 `web/` 基础框架底座、`access`（细粒度权限目录、RBAC 缓存中间件、角色 CRUD 与前端 `/roles` 权限矩阵页）、`setup`（首次初始化向导）、`auth`（登录/Refresh 轮换与重放检测/软冷却/JWT 鉴权）、`audit`（脱敏审计落库、保留期清理与前端 `/audit-logs` 只读检索页）与 `identity`（用户 CRUD、超管/自我保护与前端 `/users` 管理页）已落地；`files`、个人中心/会话与 `dashboard` 待按垂直切片逐步实现。需求基线见 [docs/prd/prd.md](./docs/prd/prd.md)，所有技术与流程契约以 `.trellis/spec/` 为准。
+> 当前状态：`server/` 与 `web/` 基础框架底座、`access`（细粒度权限目录、RBAC 缓存中间件、角色 CRUD 与前端 `/roles` 权限矩阵页、动态菜单树管理与前端 `/menus` 页面）、`setup`（首次初始化向导）、`auth`（登录/Refresh 轮换与重放检测/软冷却/JWT 鉴权）、`audit`（脱敏审计落库、保留期清理与前端 `/audit-logs` 只读检索页）与 `identity`（用户 CRUD、超管/自我保护与前端 `/users` 管理页）已落地；`files`、个人中心/会话与 `dashboard` 待按垂直切片逐步实现。需求基线见 [docs/prd/prd.md](./docs/prd/prd.md)，所有技术与流程契约以 `.trellis/spec/` 为准。
 
 ## Spec 导航（动手前先读对应域）
 

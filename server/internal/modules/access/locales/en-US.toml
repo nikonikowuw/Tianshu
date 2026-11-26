@@ -57,3 +57,34 @@ ACCESS_PERM_FILES_UPLOAD_DESC = "Upload new file resources to storage"
 
 ACCESS_PERM_FILES_DELETE_NAME = "Delete Files"
 ACCESS_PERM_FILES_DELETE_DESC = "Delete file metadata and stored objects"
+
+ACCESS_PERM_MENUS_READ_NAME = "View Menus"
+ACCESS_PERM_MENUS_READ_DESC = "View the menu tree and node bindings"
+
+ACCESS_PERM_MENUS_CREATE_NAME = "Create Menus"
+ACCESS_PERM_MENUS_CREATE_DESC = "Create directory, menu, and button nodes"
+
+ACCESS_PERM_MENUS_UPDATE_NAME = "Update Menus"
+ACCESS_PERM_MENUS_UPDATE_DESC = "Edit menu metadata, hierarchy, and sort order"
+
+ACCESS_PERM_MENUS_DELETE_NAME = "Delete Menus"
+ACCESS_PERM_MENUS_DELETE_DESC = "Delete custom leaf menu nodes"
+
+ACCESS_MENU_DIR_GENERAL = "General"
+ACCESS_MENU_DASHBOARD = "Dashboard"
+ACCESS_MENU_DIR_SYSTEM = "System"
+ACCESS_MENU_USERS = "Users"
+ACCESS_MENU_ROLES = "Roles & Permissions"
+ACCESS_MENU_MENUS = "Menus"
+ACCESS_MENU_AUDIT_LOGS = "Audit Logs"
+
+MENUS_NOT_FOUND = "Requested menu node was not found"
+MENUS_CODE_CONFLICT = "Menu code already exists"
+MENUS_SYSTEM_IMMUTABLE = "Built-in system menu cannot be deleted or change code/type"
+MENUS_HAS_CHILDREN = "Please remove or move child nodes before deleting"
+MENUS_CYCLE_DETECTED = "Cannot set a menu's parent to itself or a descendant"
+MENUS_INVALID_PARENT = "Parent menu does not exist or is incompatible with this node type"
+ACCESS_INVALID_MENU_TYPE = "Menu type must be directory, menu, or button"
+ACCESS_INVALID_MENU_TITLE = "Menu title must be between 1 and 100 characters"
+ACCESS_INVALID_MENU_PATH = "Menu path must start with / and be at most 255 characters"
+ACCESS_INVALID_MENU_STATUS = "Menu status must be active or disabled"

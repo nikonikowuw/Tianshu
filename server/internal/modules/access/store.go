@@ -45,6 +45,35 @@ type updateRoleRecord struct {
 	ActorID     *uuid.UUID
 }
 
+type createMenuRecord struct {
+	ID             uuid.UUID
+	ParentID       *uuid.UUID
+	Type           string
+	Code           string
+	Title          string
+	Path           string
+	Icon           string
+	PermissionCode string
+	SortOrder      int32
+	Visible        bool
+	Status         string
+	ActorID        *uuid.UUID
+}
+
+type updateMenuRecord struct {
+	ID             uuid.UUID
+	ParentID       *uuid.UUID
+	Type           string
+	Title          string
+	Path           string
+	Icon           string
+	PermissionCode string
+	SortOrder      int32
+	Visible        bool
+	Status         string
+	ActorID        *uuid.UUID
+}
+
 // store defines the private persistence boundary owned by the access module.
 type store interface {
 	UpsertPermission(ctx context.Context, def PermissionDef) error
@@ -73,6 +102,16 @@ type store interface {
 	DeleteUserRoles(ctx context.Context, userID uuid.UUID) error
 	ListUserIDsByRoleIDs(ctx context.Context, roleIDs []uuid.UUID) ([]uuid.UUID, error)
 	ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error)
+
+	EnsureSystemMenu(ctx context.Context, id uuid.UUID, parentID *uuid.UUID, def SystemMenuDef) (uuid.UUID, error)
+	ListMenus(ctx context.Context) ([]Menu, error)
+	GetMenuByID(ctx context.Context, id uuid.UUID) (Menu, error)
+	GetMenuByIDForUpdate(ctx context.Context, id uuid.UUID) (Menu, error)
+	CreateMenu(ctx context.Context, rec createMenuRecord) (Menu, error)
+	UpdateMenu(ctx context.Context, rec updateMenuRecord) (Menu, error)
+	UpdateMenuOrder(ctx context.Context, id uuid.UUID, parentID *uuid.UUID, sortOrder int32, actorID *uuid.UUID) error
+	CountMenuChildren(ctx context.Context, id uuid.UUID) (int64, error)
+	DeleteMenu(ctx context.Context, id uuid.UUID) error
 }
 
 // TxRunner executes fn inside a database transaction propagated via ctx.
@@ -368,6 +407,142 @@ func (s *pgStore) ListUserIDsByRoleIDs(ctx context.Context, roleIDs []uuid.UUID)
 
 func (s *pgStore) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error) {
 	return s.queries(ctx).ListUserIDsByRoleCode(ctx, code)
+}
+
+func (s *pgStore) EnsureSystemMenu(ctx context.Context, id uuid.UUID, parentID *uuid.UUID, def SystemMenuDef) (uuid.UUID, error) {
+	return s.queries(ctx).EnsureSystemMenu(ctx, dbgen.EnsureSystemMenuParams{
+		ID:             id,
+		ParentID:       ptrToNullUUID(parentID),
+		Type:           def.Type,
+		Code:           def.Code,
+		TitleKey:       pgtype.Text{String: def.TitleKey, Valid: def.TitleKey != ""},
+		Path:           def.Path,
+		Icon:           def.Icon,
+		PermissionCode: pgtype.Text{String: def.PermissionCode, Valid: def.PermissionCode != ""},
+		SortOrder:      def.SortOrder,
+	})
+}
+
+func (s *pgStore) ListMenus(ctx context.Context) ([]Menu, error) {
+	rows, err := s.queries(ctx).ListMenus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Menu, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, mapDBMenu(r))
+	}
+	return out, nil
+}
+
+func (s *pgStore) GetMenuByID(ctx context.Context, id uuid.UUID) (Menu, error) {
+	r, err := s.queries(ctx).GetMenuByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Menu{}, errMenuNotFound
+	}
+	if err != nil {
+		return Menu{}, err
+	}
+	return mapDBMenu(r), nil
+}
+
+func (s *pgStore) GetMenuByIDForUpdate(ctx context.Context, id uuid.UUID) (Menu, error) {
+	r, err := s.queries(ctx).GetMenuByIDForUpdate(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Menu{}, errMenuNotFound
+	}
+	if err != nil {
+		return Menu{}, err
+	}
+	return mapDBMenu(r), nil
+}
+
+func (s *pgStore) CreateMenu(ctx context.Context, rec createMenuRecord) (Menu, error) {
+	r, err := s.queries(ctx).CreateMenu(ctx, dbgen.CreateMenuParams{
+		ID:             rec.ID,
+		ParentID:       ptrToNullUUID(rec.ParentID),
+		Type:           rec.Type,
+		Code:           rec.Code,
+		Title:          rec.Title,
+		Path:           rec.Path,
+		Icon:           rec.Icon,
+		PermissionCode: pgtype.Text{String: rec.PermissionCode, Valid: rec.PermissionCode != ""},
+		SortOrder:      rec.SortOrder,
+		Visible:        rec.Visible,
+		Status:         rec.Status,
+		CreatedBy:      ptrToNullUUID(rec.ActorID),
+		UpdatedBy:      ptrToNullUUID(rec.ActorID),
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			return Menu{}, errMenuCodeConflict
+		}
+		return Menu{}, err
+	}
+	return mapDBMenu(r), nil
+}
+
+func (s *pgStore) UpdateMenu(ctx context.Context, rec updateMenuRecord) (Menu, error) {
+	r, err := s.queries(ctx).UpdateMenu(ctx, dbgen.UpdateMenuParams{
+		ID:             rec.ID,
+		ParentID:       ptrToNullUUID(rec.ParentID),
+		Type:           rec.Type,
+		Title:          rec.Title,
+		Path:           rec.Path,
+		Icon:           rec.Icon,
+		PermissionCode: pgtype.Text{String: rec.PermissionCode, Valid: rec.PermissionCode != ""},
+		SortOrder:      rec.SortOrder,
+		Visible:        rec.Visible,
+		Status:         rec.Status,
+		UpdatedBy:      ptrToNullUUID(rec.ActorID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Menu{}, errMenuNotFound
+	}
+	if err != nil {
+		return Menu{}, err
+	}
+	return mapDBMenu(r), nil
+}
+
+func (s *pgStore) UpdateMenuOrder(ctx context.Context, id uuid.UUID, parentID *uuid.UUID, sortOrder int32, actorID *uuid.UUID) error {
+	return s.queries(ctx).UpdateMenuOrder(ctx, dbgen.UpdateMenuOrderParams{
+		ID:        id,
+		ParentID:  ptrToNullUUID(parentID),
+		SortOrder: sortOrder,
+		UpdatedBy: ptrToNullUUID(actorID),
+	})
+}
+
+func (s *pgStore) CountMenuChildren(ctx context.Context, id uuid.UUID) (int64, error) {
+	return s.queries(ctx).CountMenuChildren(ctx, uuid.NullUUID{UUID: id, Valid: true})
+}
+
+func (s *pgStore) DeleteMenu(ctx context.Context, id uuid.UUID) error {
+	return s.queries(ctx).DeleteMenu(ctx, id)
+}
+
+func mapDBMenu(r dbgen.Menu) Menu {
+	return Menu{
+		ID:             r.ID,
+		ParentID:       nullUUIDToPtr(r.ParentID),
+		Type:           r.Type,
+		Code:           r.Code,
+		Title:          r.Title,
+		TitleKey:       r.TitleKey.String,
+		Path:           r.Path,
+		Icon:           r.Icon,
+		PermissionCode: r.PermissionCode.String,
+		SortOrder:      r.SortOrder,
+		Visible:        r.Visible,
+		Status:         r.Status,
+		IsSystem:       r.IsSystem,
+		Children:       make([]Menu, 0),
+		CreatedBy:      nullUUIDToPtr(r.CreatedBy),
+		UpdatedBy:      nullUUIDToPtr(r.UpdatedBy),
+		CreatedAt:      r.CreatedAt.Time.UTC(),
+		UpdatedAt:      r.UpdatedAt.Time.UTC(),
+	}
 }
 
 func mapDBRole(row dbgen.Role) Role {

@@ -233,3 +233,185 @@ SELECT ur.user_id
 FROM user_roles ur
 INNER JOIN roles r ON r.id = ur.role_id
 WHERE r.code = $1;
+
+-- name: EnsureSystemMenu :one
+INSERT INTO menus (
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_at,
+    updated_at
+)
+VALUES ($1, $2, $3, $4, '', $5, $6, $7, $8, $9, true, 'active', true, now(), now())
+ON CONFLICT (code) DO UPDATE
+SET title_key = EXCLUDED.title_key,
+    is_system = true,
+    updated_at = now()
+RETURNING id;
+
+-- name: ListMenus :many
+SELECT
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+FROM menus
+ORDER BY sort_order ASC, created_at ASC, id ASC;
+
+-- name: GetMenuByID :one
+SELECT
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+FROM menus
+WHERE id = $1;
+
+-- name: GetMenuByIDForUpdate :one
+SELECT
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+FROM menus
+WHERE id = $1
+FOR UPDATE;
+
+-- name: CreateMenu :one
+INSERT INTO menus (
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+)
+VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, $9, $10, $11, false, $12, $13, now(), now())
+RETURNING
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at;
+
+-- name: UpdateMenu :one
+UPDATE menus
+SET parent_id = $2,
+    type = $3,
+    title = $4,
+    path = $5,
+    icon = $6,
+    permission_code = $7,
+    sort_order = $8,
+    visible = $9,
+    status = $10,
+    updated_by = $11,
+    updated_at = now()
+WHERE id = $1
+RETURNING
+    id,
+    parent_id,
+    type,
+    code,
+    title,
+    title_key,
+    path,
+    icon,
+    permission_code,
+    sort_order,
+    visible,
+    status,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at;
+
+-- name: UpdateMenuOrder :exec
+UPDATE menus
+SET parent_id = $2,
+    sort_order = $3,
+    updated_by = $4,
+    updated_at = now()
+WHERE id = $1;
+
+-- name: CountMenuChildren :one
+SELECT count(*)::bigint
+FROM menus
+WHERE parent_id = $1;
+
+-- name: DeleteMenu :exec
+DELETE FROM menus
+WHERE id = $1;
