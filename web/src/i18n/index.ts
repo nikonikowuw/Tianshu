@@ -1,9 +1,11 @@
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
+import enAudit from './locales/en-US/audit.json'
 import enAuth from './locales/en-US/auth.json'
 import enCommon from './locales/en-US/common.json'
 import enErrors from './locales/en-US/errors.json'
 import enValidation from './locales/en-US/validation.json'
+import zhAudit from './locales/zh-CN/audit.json'
 import zhAuth from './locales/zh-CN/auth.json'
 import zhCommon from './locales/zh-CN/common.json'
 import zhErrors from './locales/zh-CN/errors.json'
@@ -34,17 +36,19 @@ void i18n.use(initReactI18next).init({
   fallbackLng: 'zh-CN',
   supportedLngs: [...SUPPORTED_LANGUAGES],
   defaultNS: 'common',
-  ns: ['common', 'auth', 'errors', 'validation'],
+  ns: ['common', 'auth', 'audit', 'errors', 'validation'],
   resources: {
     'zh-CN': {
       common: zhCommon,
       auth: zhAuth,
+      audit: zhAudit,
       errors: zhErrors,
       validation: zhValidation,
     },
     'en-US': {
       common: enCommon,
       auth: enAuth,
+      audit: enAudit,
       errors: enErrors,
       validation: enValidation,
     },

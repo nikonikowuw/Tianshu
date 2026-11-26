@@ -373,4 +373,62 @@ describe('useTableUrlState', () => {
       tag: 'x|y',
     })
   })
+
+  it('syncs columnFilters and globalFilter when search changes externally', async () => {
+    const navigate = vi.fn() as Mock<NavigateFn>
+    const { result, rerender } = await renderHook(
+      (props?: { search: Record<string, unknown> }) =>
+        useTableUrlState({
+          search: props?.search ?? {},
+          navigate,
+          pagination: { defaultPage: 1, defaultPageSize: 20 },
+          globalFilter: { enabled: true, key: 'q' },
+          columnFilters: [
+            { columnId: 'status', searchKey: 'status', type: 'array' },
+          ],
+        }),
+      { initialProps: { search: { q: 'initial', status: ['success'] } } }
+    )
+
+    expect(result.current.globalFilter).toBe('initial')
+    expect(result.current.columnFilters).toEqual([
+      { id: 'status', value: ['success'] },
+    ])
+
+    await rerender({ search: { q: 'back-nav', status: ['failure'] } })
+
+    expect(result.current.globalFilter).toBe('back-nav')
+    expect(result.current.columnFilters).toEqual([
+      { id: 'status', value: ['failure'] },
+    ])
+  })
+
+  it('derives and updates sorting via URL search params', async () => {
+    const navigate = vi.fn() as Mock<NavigateFn>
+    const prev = { page: 3, sort: 'created_at', order: 'desc' }
+    const { result, act } = await renderHook(() =>
+      useTableUrlState({
+        search: prev,
+        navigate,
+        pagination: { defaultPage: 1, defaultPageSize: 20 },
+        sorting: {
+          enabled: true,
+          defaultSort: 'created_at',
+          defaultOrder: 'desc',
+        },
+      })
+    )
+
+    expect(result.current.sorting).toEqual([{ id: 'created_at', desc: true }])
+
+    await act(() => {
+      result.current.onSortingChange?.([{ id: 'action', desc: false }])
+    })
+
+    expect(applyLastSearchFn(navigate, prev)).toEqual({
+      page: undefined,
+      sort: 'action',
+      order: 'asc',
+    })
+  })
 })

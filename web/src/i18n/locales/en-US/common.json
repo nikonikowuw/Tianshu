@@ -33,5 +33,24 @@
   "password": {
     "show": "Show password",
     "hide": "Hide password"
+  },
+  "table": {
+    "filterPlaceholder": "Filter...",
+    "reset": "Reset",
+    "view": "View",
+    "toggleColumns": "Toggle columns",
+    "asc": "Asc",
+    "desc": "Desc",
+    "hide": "Hide",
+    "noResults": "No results found.",
+    "clearFilters": "Clear filters",
+    "selectedCount": "{{count}} selected",
+    "rowsPerPage": "Rows per page",
+    "pageOf": "Page {{page}} of {{total}}",
+    "firstPage": "Go to first page",
+    "prevPage": "Go to previous page",
+    "nextPage": "Go to next page",
+    "lastPage": "Go to last page",
+    "totalItems": "{{total}} total"
   }
 }

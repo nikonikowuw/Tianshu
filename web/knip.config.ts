@@ -12,7 +12,6 @@ const config: KnipConfig = {
   ignoreDependencies: [
     '@radix-ui/*',
     'date-fns',
-    'react-day-picker',
     'recharts',
   ],
   ignoreExportsUsedInFile: true,
