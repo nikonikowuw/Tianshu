@@ -1,0 +1,68 @@
+# OS & Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Environment & Local Secrets
+.env
+.env.*
+!.env.example
+config.local.toml
+server/configs/config.local.toml
+*.local.toml
+*.pem
+*.key
+*.crt
+
+# Go / Backend (server/)
+/bin/
+/server/bin/
+/server/tmp/
+/server/data/
+/server/uploads/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+*.coverprofile
+
+# Embedded frontend assets (keep .gitkeep so clean clone compiles)
+server/internal/webui/dist/*
+!server/internal/webui/dist/.gitkeep
+
+# Frontend (web/)
+node_modules/
+/web/dist/
+/web/dist-ssr/
+/web/.vite/
+/web/coverage/
+/web/test-results/
+/web/playwright-report/
+/web/blob-report/
+/web/playwright/.cache/
+*.tsbuildinfo
+
+# Logs & Temporary Files
+*.log
+npm-debug.log*
+pnpm-debug.log*
+/logs/
+/tmp/
+
+# AI Host Runtime Directories (keep plain-text .trellis/ only)
+.dsh/
+.claude/
+.cursor/
+.codex/
+.opencode/
+.kiro/
+.windsurf/
