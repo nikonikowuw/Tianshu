@@ -17,11 +17,12 @@
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "knip": "knip",
-    "test": "vitest run --browser.headless",
-    "test:watch": "vitest --browser.headless",
-    "test:coverage": "vitest run --coverage --browser.headless",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "test:browser:install": "playwright install chromium --with-deps"
+    "test:browser:install": "playwright install chromium --with-deps",
+    "test:headed": "vitest run --browser.headless=false --browser.ui=false"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
