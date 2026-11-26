@@ -73,6 +73,8 @@
 }
 
 @theme inline {
+  --font-brand:
+    'Plus Jakarta Sans Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-inter: 'Inter', 'sans-serif';
   --font-manrope: 'Manrope', 'sans-serif';
 

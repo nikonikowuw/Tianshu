@@ -44,6 +44,8 @@ export default defineConfig({
   optimizeDeps: {
     include: [
       '@hookform/resolvers/zod',
+      '@radix-ui/react-avatar',
+      '@radix-ui/react-collapsible',
       '@radix-ui/react-dialog',
       '@radix-ui/react-dropdown-menu',
       '@radix-ui/react-popover',

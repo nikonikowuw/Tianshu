@@ -92,7 +92,7 @@ export function AuthShell({
             <div className='flex size-9 items-center justify-center rounded-xl border border-background/80 bg-card/85 text-foreground shadow-[0_1px_2px_oklch(0_0_0/0.06),0_6px_16px_-4px_oklch(0.2_0.04_265/0.12)] backdrop-blur-xl dark:border-foreground/15 dark:bg-card/75 dark:shadow-[0_1px_0_oklch(1_0_0/0.1)_inset,0_8px_20px_-4px_oklch(0_0_0/0.55)]'>
               <Logo className='size-[18px]' />
             </div>
-            <span className='text-[15px] font-semibold tracking-tight text-foreground'>
+            <span className='font-brand text-[16px] font-bold tracking-[-0.025em] text-foreground'>
               {t('common:appName')}
             </span>
           </div>
