@@ -69,6 +69,7 @@
 
 - 列：`code`（PK）、`module`、`name_key`、`description_key`、`updated_at`。
 - 权限码在 Go 代码声明，启动时 upsert；DB 是投影，不是声明源。
+- 动作粒度约定：权限码采用 `<resource>:<action>` 细粒度动作拆分（`read` / `create` / `update` / `delete`，文件上传为 `upload`），不将增删改合并为单一 `write`。
 - 双语策略：存储 `name_key`/`description_key`，运行时按 `Accept-Language` 从模块语言包解析展示文案，不存单语展示文本；`module` 存稳定模块码。
 - 删除代码中的权限码时，不要直接级联删除角色关联；先标记 `deprecated`，确认无引用后清理并写审计。
 - `role_permissions.permission_code` 外键指向本表；删除权限码前必须处理关联。

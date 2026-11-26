@@ -11,12 +11,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"tianshu/internal/modules/access"
 	"tianshu/internal/platform/cache"
 	"tianshu/internal/platform/config"
 	"tianshu/internal/platform/database"
 	"tianshu/internal/platform/httpserver"
 	"tianshu/internal/platform/i18n"
 	"tianshu/internal/platform/logger"
+	"tianshu/internal/platform/security"
 	"tianshu/internal/platform/storage"
 	"tianshu/migrations"
 )
@@ -26,10 +28,12 @@ type App struct {
 	cfg     config.Config
 	log     *slog.Logger
 	i18n    *i18n.Bundle
+	hasher  *security.PasswordHasher
 	db      *pgxpool.Pool
 	tx      *database.TxManager
 	cache   cache.Cache
 	storage storage.Storage
+	access  *access.Service
 	engine  *gin.Engine
 	server  *http.Server
 }
@@ -51,8 +55,16 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init i18n bundle: %w", err)
 	}
+	if err := bundle.RegisterFS("access", access.LocalesFS, "locales"); err != nil {
+		return nil, fmt.Errorf("register access locales: %w", err)
+	}
 	if err := bundle.Validate(); err != nil {
 		return nil, fmt.Errorf("validate i18n bundle: %w", err)
+	}
+
+	hasher, err := security.NewPasswordHasher(security.DefaultArgon2Params())
+	if err != nil {
+		return nil, fmt.Errorf("init password hasher: %w", err)
 	}
 
 	var (
@@ -74,6 +86,16 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 
 	memCache := cache.NewMemory()
+
+	var accessSvc *access.Service
+	if pool != nil {
+		accessSvc = access.NewService(pool, tx, memCache, log)
+		if err := accessSvc.SyncCatalog(ctx); err != nil {
+			pool.Close()
+			_ = memCache.Close()
+			return nil, fmt.Errorf("sync access catalog: %w", err)
+		}
+	}
 
 	store, err := initStorage(cfg.Storage)
 	if err != nil {
@@ -103,10 +125,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		cfg:     cfg,
 		log:     log,
 		i18n:    bundle,
+		hasher:  hasher,
 		db:      pool,
 		tx:      tx,
 		cache:   memCache,
 		storage: store,
+		access:  accessSvc,
 		engine:  engine,
 	}
 	application.registerRoutes()

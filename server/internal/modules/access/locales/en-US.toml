@@ -1,0 +1,45 @@
+# Access module roles, permissions, and errors (en-US)
+ACCESS_ROLE_NOT_FOUND = "Requested role was not found"
+ROLES_IN_USE = "Role is currently assigned to users and cannot be deleted"
+
+ACCESS_ROLE_SUPER_ADMIN_NAME = "Super Administrator"
+ACCESS_ROLE_SUPER_ADMIN_DESC = "Built-in system role with full access to all capabilities"
+
+ACCESS_PERM_DASHBOARD_READ_NAME = "View Dashboard"
+ACCESS_PERM_DASHBOARD_READ_DESC = "View system overview metrics and recent activity"
+
+ACCESS_PERM_USERS_READ_NAME = "View Users"
+ACCESS_PERM_USERS_READ_DESC = "View user directory and account details"
+
+ACCESS_PERM_USERS_CREATE_NAME = "Create Users"
+ACCESS_PERM_USERS_CREATE_DESC = "Create new user accounts and assign initial roles"
+
+ACCESS_PERM_USERS_UPDATE_NAME = "Update Users"
+ACCESS_PERM_USERS_UPDATE_DESC = "Edit user profiles, toggle status, reset passwords, and update roles"
+
+ACCESS_PERM_USERS_DELETE_NAME = "Delete Users"
+ACCESS_PERM_USERS_DELETE_DESC = "Soft-delete user accounts and revoke all active sessions"
+
+ACCESS_PERM_ROLES_READ_NAME = "View Roles & Permissions"
+ACCESS_PERM_ROLES_READ_DESC = "View roles, role details, and the permission catalog"
+
+ACCESS_PERM_ROLES_CREATE_NAME = "Create Roles"
+ACCESS_PERM_ROLES_CREATE_DESC = "Create custom roles and assign permission sets"
+
+ACCESS_PERM_ROLES_UPDATE_NAME = "Update Roles"
+ACCESS_PERM_ROLES_UPDATE_DESC = "Update role metadata and permission assignments"
+
+ACCESS_PERM_ROLES_DELETE_NAME = "Delete Roles"
+ACCESS_PERM_ROLES_DELETE_DESC = "Delete unused custom roles"
+
+ACCESS_PERM_AUDIT_READ_NAME = "View Audit Logs"
+ACCESS_PERM_AUDIT_READ_DESC = "Search and inspect system operation and security audit logs"
+
+ACCESS_PERM_FILES_READ_NAME = "View Files"
+ACCESS_PERM_FILES_READ_DESC = "Browse and download stored file metadata and content"
+
+ACCESS_PERM_FILES_UPLOAD_NAME = "Upload Files"
+ACCESS_PERM_FILES_UPLOAD_DESC = "Upload new file resources to storage"
+
+ACCESS_PERM_FILES_DELETE_NAME = "Delete Files"
+ACCESS_PERM_FILES_DELETE_DESC = "Delete file metadata and stored objects"

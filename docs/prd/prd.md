@@ -89,7 +89,7 @@ flowchart TD
 
 ### 3.4 声明式权限码 RBAC（单租户）
 
-- **声明与同步**：权限码以常量形式在 Go 代码中声明（如 `dashboard:read`、`users:read`、`users:write`、`roles:read`、`roles:write`、`audit:read`、`files:read`、`files:write`），服务启动时自动 upsert 到 `permissions` 表。
+- **声明与同步**：权限码以常量形式在 Go 代码中声明，按标准动作细粒度拆分（`dashboard:read`、`users:read`、`users:create`、`users:update`、`users:delete`、`roles:read`、`roles:create`、`roles:update`、`roles:delete`、`audit:read`、`files:read`、`files:upload`、`files:delete`），服务启动时自动 upsert 到 `permissions` 表。
 - **超管保护**：系统内置 `super_admin` 角色（`is_system = true`），拥有全量权限，禁止删除该角色、禁止移除或禁用系统中最后一名活跃超级管理员。
 - **缓存与失效**：用户聚合权限通过 `Cache` 接口缓存（默认进程内内存，配置 Redis 后自动切换）；当角色权限变更或用户角色变更时主动失效对应缓存。
 - **前端联动**：登录后调用 `GET /api/v1/auth/me` 获取用户档案与 `permissions: string[]`，驱动侧边栏菜单过滤、TanStack Router 路由守卫与 `<PermissionGuard>` 操作按钮显隐。
@@ -183,11 +183,11 @@ flowchart TD
 
 - **核心功能**：
   - `GET /api/v1/users`（`users:read`）：支持分页、关键词搜索（用户名/邮箱/昵称）、状态筛选（`active` / `disabled`）、角色筛选，返回用户信息、关联角色及审计字段（创建时间、创建人等）。
-  - `POST /api/v1/users`（`users:write`）：创建新用户并分配初始角色，校验用户名与邮箱唯一性，写入 `created_by` / `updated_by` 与审计日志。
+  - `POST /api/v1/users`（`users:create`）：创建新用户并分配初始角色，校验用户名与邮箱唯一性，写入 `created_by` / `updated_by` 与审计日志。
   - `GET /api/v1/users/:id`（`users:read`）：查询用户详情。
-  - `PATCH /api/v1/users/:id`（`users:write`）：编辑用户基础资料、状态、重置密码及重新分配角色，更新 `updated_by`，角色变更时立即失效用户权限缓存；若禁用用户同时吊销其所有活跃会话。
-  - `DELETE /api/v1/users/:id`（`users:write`）：软删除用户（写入 `deleted_at` 并吊销其全部活跃会话，禁止删除自身、禁止删除最后一名超管）。
-  - 前端 `/users` 页面：基于沉淀的通用 CRUD DataTable 构建，支持服务端分页/搜索/筛选、新增/编辑弹窗、状态切换、角色多选与二次确认删除，操作按钮受 `<PermissionGuard code="users:write">` 控制。
+  - `PATCH /api/v1/users/:id`（`users:update`）：编辑用户基础资料、状态、重置密码及重新分配角色，更新 `updated_by`，角色变更时立即失效用户权限缓存；若禁用用户同时吊销其所有活跃会话。
+  - `DELETE /api/v1/users/:id`（`users:delete`）：软删除用户（写入 `deleted_at` 并吊销其全部活跃会话，禁止删除自身、禁止删除最后一名超管）。
+  - 前端 `/users` 页面：基于沉淀的通用 CRUD DataTable 构建，支持服务端分页/搜索/筛选、新增/编辑弹窗、状态切换、角色多选与二次确认删除，各操作按钮分别受对应细粒度权限码（`users:create` / `users:update` / `users:delete`）控制。
 - **验收标准**：
   - 重复用户名/邮箱创建返回 `409` 及对应语言提示；
   - 禁用在线用户后，其会话被吊销且无法刷新续期；
@@ -198,13 +198,13 @@ flowchart TD
 - **核心功能**：
   - `GET /api/v1/permissions`（`roles:read`）：返回全部声明式权限码目录（按模块分组，名称与描述根据 `Accept-Language` 实时翻译）。
   - `GET /api/v1/roles`（`roles:read`）：分页查询角色列表（含关联用户数、权限数、是否系统角色及审计字段）。
-  - `POST /api/v1/roles`（`roles:write`）：新建自定义角色并勾选权限码集合。
-  - `PATCH /api/v1/roles/:id`（`roles:write`）：修改角色信息与权限码集合（`super_admin` 禁止修改 code 或剥夺全量权限），变更后失效相关用户权限缓存。
-  - `DELETE /api/v1/roles/:id`（`roles:write`）：删除自定义角色（系统角色或仍绑定用户的角色按规则拒绝删除并返回清晰提示）。
+  - `POST /api/v1/roles`（`roles:create`）：新建自定义角色并勾选权限码集合。
+  - `PATCH /api/v1/roles/:id`（`roles:update`）：修改角色信息与权限码集合（`super_admin` 禁止修改 code 或剥夺全量权限），变更后失效相关用户权限缓存。
+  - `DELETE /api/v1/roles/:id`（`roles:delete`）：删除自定义角色（系统角色或仍绑定用户的角色按规则拒绝删除并返回清晰提示）。
   - 前端 `/roles` 页面：DataTable 列表 + 按模块分组的权限矩阵勾选弹窗。
 - **验收标准**：
   - 切换前端语言（中 ↔ 英）后，权限矩阵中的权限名称与描述同步切换语言；
-  - 为普通角色勾选或取消 `users:write` 权限后，该角色下用户的接口鉴权立即生效。
+  - 为普通角色勾选或取消 `users:delete` / `users:update` 等细粒度权限后，该角色下用户的接口鉴权立即生效。
 
 ### M6：个人中心与系统设置（Profile & Settings）
 
@@ -233,10 +233,10 @@ flowchart TD
   - 后端 `internal/platform/storage` 抽象统一 `Storage` 接口（`Put`、`Get`、`Delete`、`Stat`），内置两种驱动并通过 `config.toml` 切换：
     - `local`：本地磁盘目录存储（默认，零外部服务依赖即可运行）；
     - `s3`：兼容 AWS S3 / MinIO 对象存储。
-  - `POST /api/v1/files`（`files:write` 或头像上传专用许可）：multipart 上传，校验文件大小上限（通用默认 10 MiB 可配置，头像 2 MiB）与内容嗅探 MIME 白名单（图片 `jpeg/png/webp/gif` 且禁用 `image/svg+xml`、文档 `pdf/txt/csv/docx/xlsx/pptx` 强制附件下载），头像上传执行纯 Go 重编码缩放与去 EXIF，计算 SHA-256，持久化至存储驱动并写入 `files` 元数据表。
+  - `POST /api/v1/files`（`files:upload` 或头像上传专用许可）：multipart 上传，校验文件大小上限（通用默认 10 MiB 可配置，头像 2 MiB）与内容嗅探 MIME 白名单（图片 `jpeg/png/webp/gif` 且禁用 `image/svg+xml`、文档 `pdf/txt/csv/docx/xlsx/pptx` 强制附件下载），头像上传执行纯 Go 重编码缩放与去 EXIF，计算 SHA-256，持久化至存储驱动并写入 `files` 元数据表。
   - `GET /api/v1/files`（`files:read`）：分页查询文件列表（支持按文件名、MIME 类型筛选）。
   - `GET /api/v1/files/:id/content`（鉴权下载/预览，头像可受控访问）：流式输出文件内容与正确 `Content-Type` / `Content-Disposition`。
-  - `DELETE /api/v1/files/:id`（`files:write`）：删除存储对象及元数据记录。
+  - `DELETE /api/v1/files/:id`（`files:delete`）：删除存储对象及元数据记录。
   - 前端 `/files` 页面：拖拽/按钮上传、文件列表、图片预览、下载与删除。
 - **验收标准**：
   - 默认 `local` 模式下上传、预览、下载、删除全链路畅通；

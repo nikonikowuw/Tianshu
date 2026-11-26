@@ -174,3 +174,20 @@ Topics: [.trellis/spec/workflow/review.md](../../spec/workflow/review.md)
 ### Git Commits
 
 (No associated commits)
+
+
+## Session 11: RBAC 权限码采用标准动作细粒度拆分
+<!-- trellis-session: v=3 fp=8ae445c79878daf9 -->
+
+**Date**: 2026-11-26
+**Task**: RBAC 权限码采用标准动作细粒度拆分
+**Branch**: `feat/access-core`
+
+### Summary
+
+用户确认 RBAC 权限码采用标准动作全拆（13 项：dashboard:read、users:read/create/update/delete、roles:read/create/update/delete、audit:read、files:read/upload/delete），不将增删改合并为单一 write；已同步至 access 模块权限目录、双语词条、docs/prd/prd.md 与 .trellis/spec/backend/data-model.md。
+Topics: [.trellis/spec/backend/data-model.md](../../spec/backend/data-model.md), [docs/prd/prd.md](../../../docs/prd/prd.md)
+
+### Git Commits
+
+(No associated commits)

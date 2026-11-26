@@ -23,7 +23,7 @@ describe('useAuthStore', () => {
     expect(state.status).toBe('authenticated')
     expect(state.accessToken).toBe('mem-token')
     expect(state.hasPermission('users:read')).toBe(true)
-    expect(state.hasPermission('users:write')).toBe(false)
+    expect(state.hasPermission('users:delete')).toBe(false)
     expect(window.localStorage.getItem('accessToken')).toBeNull()
   })
 })

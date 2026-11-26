@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -16,6 +17,29 @@ import (
 )
 
 type txCtxKey struct{}
+
+type txState struct {
+	tx        pgx.Tx
+	mu        sync.Mutex
+	afterDone []func()
+}
+
+func (s *txState) addAfterCommit(fn func()) {
+	s.mu.Lock()
+	s.afterDone = append(s.afterDone, fn)
+	s.mu.Unlock()
+}
+
+func (s *txState) runAfterCommit() {
+	s.mu.Lock()
+	hooks := s.afterDone
+	s.afterDone = nil
+	s.mu.Unlock()
+
+	for _, fn := range hooks {
+		fn()
+	}
+}
 
 // DBTX matches the sqlc-generated query interface implemented by both *pgxpool.Pool and pgx.Tx.
 type DBTX interface {
@@ -67,8 +91,9 @@ func NewTxManager(pool *pgxpool.Pool) *TxManager {
 
 // WithinTx executes fn inside a transaction stored in ctx.
 // If ctx already carries an active transaction, fn reuses it without starting a nested tx.
+// Callbacks registered via AfterCommit run in FIFO order only after the outermost transaction commits.
 func (m *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if _, ok := TxFromContext(ctx); ok {
+	if _, ok := txStateFromContext(ctx); ok {
 		return fn(ctx)
 	}
 
@@ -77,7 +102,8 @@ func (m *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) e
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 
-	txCtx := context.WithValue(ctx, txCtxKey{}, tx)
+	state := &txState{tx: tx}
+	txCtx := context.WithValue(ctx, txCtxKey{}, state)
 	if err := fn(txCtx); err != nil {
 		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
 			return fmt.Errorf("rollback transaction after %w: %v", err, rbErr)
@@ -88,16 +114,54 @@ func (m *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) e
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
+
+	state.runAfterCommit()
 	return nil
+}
+
+// AfterCommit schedules fn to run after the active transaction in ctx commits.
+// If ctx has no active transaction, fn runs immediately.
+func AfterCommit(ctx context.Context, fn func()) {
+	if fn == nil {
+		return
+	}
+	if state, ok := txStateFromContext(ctx); ok {
+		state.addAfterCommit(fn)
+		return
+	}
+	fn()
+}
+
+// WithSimulatedTx runs fn with a simulated transaction context for unit tests that verify AfterCommit ordering.
+// If fn returns nil, registered AfterCommit hooks run; otherwise they are discarded.
+func WithSimulatedTx(ctx context.Context, fn func(txCtx context.Context) error) error {
+	if _, ok := txStateFromContext(ctx); ok {
+		return fn(ctx)
+	}
+	state := &txState{}
+	txCtx := context.WithValue(ctx, txCtxKey{}, state)
+	if err := fn(txCtx); err != nil {
+		return err
+	}
+	state.runAfterCommit()
+	return nil
+}
+
+func txStateFromContext(ctx context.Context) (*txState, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	state, ok := ctx.Value(txCtxKey{}).(*txState)
+	return state, ok && state != nil
 }
 
 // TxFromContext returns the active pgx.Tx carried in ctx, if any.
 func TxFromContext(ctx context.Context) (pgx.Tx, bool) {
-	if ctx == nil {
+	state, ok := txStateFromContext(ctx)
+	if !ok || state.tx == nil {
 		return nil, false
 	}
-	tx, ok := ctx.Value(txCtxKey{}).(pgx.Tx)
-	return tx, ok && tx != nil
+	return state.tx, true
 }
 
 // Executor returns the active transaction from ctx or falls back to the connection pool.

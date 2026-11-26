@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -46,16 +47,39 @@ func TestArchitectureBoundaries(t *testing.T) {
 		}
 		relSlash := filepath.ToSlash(rel)
 
-		if _, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly|parser.ParseComments); err != nil {
+		fileAST, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
 			t.Errorf("parse %s: %v", relSlash, err)
 			return nil
 		}
 
 		checkEmbedAllowlist(t, relSlash, path)
+		checkModuleStoreEncapsulation(t, relSlash, fileAST)
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk server root: %v", err)
+	}
+}
+
+func checkModuleStoreEncapsulation(t *testing.T, relPath string, fileAST *ast.File) {
+	t.Helper()
+	if !strings.HasPrefix(relPath, "internal/modules/") || strings.Contains(relPath, "/internal/dbgen/") {
+		return
+	}
+	for _, decl := range fileAST.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil && (d.Name.Name == "NewStore" || d.Name.Name == "NewPGStore") {
+				t.Errorf("%s must not export %s (store must stay private inside module)", relPath, d.Name.Name)
+			}
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				if ts, ok := spec.(*ast.TypeSpec); ok && (ts.Name.Name == "Store" || ts.Name.Name == "PGStore") {
+					t.Errorf("%s must not export %s (store must stay private inside module)", relPath, ts.Name.Name)
+				}
+			}
+		}
 	}
 }
 
