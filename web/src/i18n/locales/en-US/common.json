@@ -21,6 +21,7 @@
     "system": "System",
     "users": "Users",
     "roles": "Roles & Permissions",
+    "menus": "Menus",
     "auditLogs": "Audit Logs",
     "files": "Files",
     "settings": "Settings"

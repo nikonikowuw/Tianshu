@@ -1,0 +1,83 @@
+{
+  "title": "菜单管理",
+  "description": "管理系统导航菜单层级、节点排序与关联权限码。",
+  "createMenu": "新增菜单",
+  "expandAll": "全部展开",
+  "collapseAll": "全部折叠",
+  "columns": {
+    "title": "菜单名称",
+    "type": "类型",
+    "code": "编码",
+    "path": "路由路径",
+    "permission": "权限码",
+    "sortOrder": "排序",
+    "visible": "显示",
+    "status": "状态"
+  },
+  "types": {
+    "directory": "目录",
+    "menu": "菜单",
+    "button": "按钮"
+  },
+  "status": {
+    "active": "启用",
+    "disabled": "禁用"
+  },
+  "visibility": {
+    "shown": "显示",
+    "hidden": "隐藏"
+  },
+  "actions": {
+    "openMenu": "打开操作菜单",
+    "addChild": "新增子节点",
+    "edit": "编辑节点",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "delete": "删除节点",
+    "systemImmutableHint": "系统内置菜单不可删除"
+  },
+  "form": {
+    "createTitle": "新增菜单节点",
+    "createDescription": "配置目录、菜单页面或按钮权限节点。",
+    "editTitle": "编辑菜单节点",
+    "editDescription": "修改菜单名称、层级归属、图标与排序。",
+    "type": "节点类型",
+    "parent": "上级节点",
+    "rootParent": "顶级节点（无上级）",
+    "code": "节点编码",
+    "codePlaceholder": "例如 custom_reports",
+    "title": "显示名称",
+    "titlePlaceholder": "例如 报表中心",
+    "path": "路由路径",
+    "pathPlaceholder": "例如 /reports",
+    "icon": "图标",
+    "iconPlaceholder": "选择图标（可选）",
+    "noIcon": "无图标",
+    "permissionCode": "关联权限码",
+    "permissionPlaceholder": "选择权限码（可选）",
+    "noPermission": "不绑定权限码",
+    "sortOrder": "排序值",
+    "visible": "侧边栏显示",
+    "visibleHint": "关闭后不在侧边栏导航中展示",
+    "status": "启用状态",
+    "statusHint": "禁用后不参与导航渲染",
+    "submitCreate": "创建节点",
+    "submitSave": "保存修改"
+  },
+  "deleteDialog": {
+    "title": "删除菜单节点",
+    "description": "确认删除菜单节点「{{title}}」吗？删除后不可恢复。",
+    "confirm": "确认删除"
+  },
+  "toast": {
+    "created": "菜单节点已创建",
+    "updated": "菜单节点已更新",
+    "reordered": "菜单排序已更新",
+    "deleted": "菜单节点已删除"
+  },
+  "error": {
+    "loadTitle": "加载菜单树失败",
+    "retry": "重试"
+  },
+  "empty": "暂无菜单配置"
+}

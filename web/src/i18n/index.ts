@@ -4,6 +4,7 @@ import enAudit from './locales/en-US/audit.json'
 import enAuth from './locales/en-US/auth.json'
 import enCommon from './locales/en-US/common.json'
 import enErrors from './locales/en-US/errors.json'
+import enMenus from './locales/en-US/menus.json'
 import enRoles from './locales/en-US/roles.json'
 import enUsers from './locales/en-US/users.json'
 import enValidation from './locales/en-US/validation.json'
@@ -11,6 +12,7 @@ import zhAudit from './locales/zh-CN/audit.json'
 import zhAuth from './locales/zh-CN/auth.json'
 import zhCommon from './locales/zh-CN/common.json'
 import zhErrors from './locales/zh-CN/errors.json'
+import zhMenus from './locales/zh-CN/menus.json'
 import zhRoles from './locales/zh-CN/roles.json'
 import zhUsers from './locales/zh-CN/users.json'
 import zhValidation from './locales/zh-CN/validation.json'
@@ -40,7 +42,16 @@ void i18n.use(initReactI18next).init({
   fallbackLng: 'zh-CN',
   supportedLngs: [...SUPPORTED_LANGUAGES],
   defaultNS: 'common',
-  ns: ['common', 'auth', 'audit', 'roles', 'users', 'errors', 'validation'],
+  ns: [
+    'common',
+    'auth',
+    'audit',
+    'roles',
+    'users',
+    'menus',
+    'errors',
+    'validation',
+  ],
   resources: {
     'zh-CN': {
       common: zhCommon,
@@ -48,6 +59,7 @@ void i18n.use(initReactI18next).init({
       audit: zhAudit,
       roles: zhRoles,
       users: zhUsers,
+      menus: zhMenus,
       errors: zhErrors,
       validation: zhValidation,
     },
@@ -57,6 +69,7 @@ void i18n.use(initReactI18next).init({
       audit: enAudit,
       roles: enRoles,
       users: enUsers,
+      menus: enMenus,
       errors: enErrors,
       validation: enValidation,
     },

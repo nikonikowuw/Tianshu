@@ -12,5 +12,8 @@
   "roleCodeFormat": "角色编码须为 2-64 位小写字母、数字、下划线或连字符，且以小写字母开头",
   "roleNameMax": "角色名称长度不能超过 100 个字符",
   "roleDescriptionMax": "角色描述长度不能超过 500 个字符",
-  "usernameFormat": "用户名仅支持小写字母、数字、点、下划线和连字符"
+  "usernameFormat": "用户名仅支持小写字母、数字、点、下划线和连字符",
+  "menuCodeFormat": "菜单编码须为 2-64 位小写字母、数字、下划线或连字符，且以小写字母开头",
+  "menuTitleMax": "菜单名称长度不能超过 100 个字符",
+  "menuPathFormat": "菜单路径须以 / 开头且不能超过 255 个字符"
 }
