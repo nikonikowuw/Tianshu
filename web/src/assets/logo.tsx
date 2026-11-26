@@ -27,10 +27,10 @@ export function Logo({ variant = 'mono', className, ...props }: LogoProps) {
       strokeWidth='2.2'
       strokeLinecap='round'
       strokeLinejoin='round'
+      aria-hidden='true'
       className={cn('size-6 shrink-0', className)}
       {...props}
     >
-      <title>Tianshu</title>
       {isBrand && (
         <defs>
           <linearGradient

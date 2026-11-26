@@ -38,7 +38,7 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size='lg' asChild>
-              <Link to='/'>
+              <Link to='/' aria-label={appName}>
                 <div className='flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground'>
                   <Logo className='size-[18px]' />
                 </div>

@@ -27,14 +27,14 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 
 describe('AppSidebar', () => {
-  it('keeps the brand logo badge a 32x32 square when collapsed', async () => {
+  it('keeps the brand logo badge a 32x32 square and preserves accessible name when collapsed', async () => {
     await page.viewport(1280, 720)
     const { getByRole } = await render(
       <I18nextProvider i18n={i18n}>
         <LayoutProvider>
           <SidebarProvider defaultOpen={false}>
             <AppSidebar
-              appName='Tianshu'
+              appName='Custom Console'
               navGroups={[]}
               user={{ name: 'Admin', email: 'admin@example.com' }}
               onSignOut={() => {}}
@@ -44,7 +44,7 @@ describe('AppSidebar', () => {
       </I18nextProvider>
     )
 
-    const brandLink = getByRole('link', { name: /Tianshu/i })
+    const brandLink = getByRole('link', { name: 'Custom Console' })
     await expect.element(brandLink).toBeVisible()
 
     const linkEl = brandLink.element()
@@ -74,7 +74,7 @@ describe('AppSidebar', () => {
       </I18nextProvider>
     )
 
-    const brandTitle = getByText('Tianshu').last()
+    const brandTitle = getByText('Tianshu')
     const brandSubtitle = getByText('天枢控制台')
     await expect.element(brandTitle).toBeVisible()
     await expect.element(brandSubtitle).toBeVisible()
