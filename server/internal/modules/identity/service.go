@@ -89,3 +89,44 @@ func (s *Service) CreateInitialAdmin(ctx context.Context, input CreateInitialAdm
 	}
 	return user, nil
 }
+
+// GetAuthCredentials looks up an active/disabled (non-deleted) user by normalized username or email.
+func (s *Service) GetAuthCredentials(ctx context.Context, identifier string) (AuthCredentials, error) {
+	normalized := strings.ToLower(strings.TrimSpace(identifier))
+	creds, err := s.store.GetUserForAuthByIdentifier(ctx, normalized)
+	if errors.Is(err, errUserNotFound) {
+		return AuthCredentials{}, userNotFoundError()
+	}
+	if err != nil {
+		return AuthCredentials{}, apperr.Internal(fmt.Errorf("lookup user credentials: %w", err))
+	}
+	return creds, nil
+}
+
+// GetByID returns a non-deleted user by ID.
+func (s *Service) GetByID(ctx context.Context, id uuid.UUID) (User, error) {
+	user, err := s.store.GetUserByID(ctx, id)
+	if errors.Is(err, errUserNotFound) {
+		return User{}, userNotFoundError()
+	}
+	if err != nil {
+		return User{}, apperr.Internal(fmt.Errorf("get user %s: %w", id, err))
+	}
+	return user, nil
+}
+
+// RecordLogin updates last_login_at for id.
+func (s *Service) RecordLogin(ctx context.Context, id uuid.UUID) error {
+	if err := s.store.UpdateUserLastLogin(ctx, id); err != nil {
+		return apperr.Internal(fmt.Errorf("update last login: %w", err))
+	}
+	return nil
+}
+
+// UpdatePasswordHash replaces the stored password hash (e.g. transparent Argon2id parameter upgrade).
+func (s *Service) UpdatePasswordHash(ctx context.Context, id uuid.UUID, newHash string) error {
+	if err := s.store.UpdateUserPasswordHash(ctx, id, newHash); err != nil {
+		return apperr.Internal(fmt.Errorf("update password hash: %w", err))
+	}
+	return nil
+}

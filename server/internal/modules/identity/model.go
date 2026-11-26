@@ -23,6 +23,17 @@ type User struct {
 	UpdatedAt   time.Time
 }
 
+// AuthCredentials is an internal credential record used exclusively by the auth adapter.
+// It must never be serialized to HTTP responses or logs.
+type AuthCredentials struct {
+	ID           uuid.UUID
+	Username     string
+	Email        string
+	DisplayName  string
+	Status       string
+	PasswordHash string
+}
+
 // CreateInitialAdminInput carries validated fields to create the first super administrator.
 type CreateInitialAdminInput struct {
 	Username    string

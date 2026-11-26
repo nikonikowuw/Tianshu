@@ -2,7 +2,7 @@
 
 适用范围：`web/`（Vite + React 19 + TypeScript + TanStack Router/Query/Table + Tailwind CSS v4 + shadcn/ui + Zustand）。
 
-当前已完成 `web/` 基础框架底座及 `/setup` 首次初始化向导（含路由引导守卫、双语校验与服务端 422 字段回填）；其余业务页面将随对应后端垂直切片逐步接入。具体页面字段与业务功能归属 [docs/prd/prd.md](../../../docs/prd/prd.md)；后端 HTTP、安全与单二进制 embed 契约见 [backend/index.md](../backend/index.md)。
+当前已完成 `web/` 基础框架底座、`/setup` 首次初始化向导与 `/sign-in` 完整登录鉴权闭环（含路由守卫、内存 Access Token、单飞静默刷新与跨标签登出）；后续业务 CRUD 页将随对应后端模块逐步接入。具体页面字段与业务功能归属 [docs/prd/prd.md](../../../docs/prd/prd.md)；后端 HTTP、安全与单二进制 embed 契约见 [backend/index.md](../backend/index.md)。
 
 | 文档                                     | 内容                                                                       | 何时读                              |
 | ---------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------- |

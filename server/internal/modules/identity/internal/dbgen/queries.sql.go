@@ -86,3 +86,97 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateU
 	)
 	return i, err
 }
+
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, username, email, display_name, status, created_at, updated_at
+FROM users
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+type GetUserByIDRow struct {
+	ID          uuid.UUID
+	Username    string
+	Email       string
+	DisplayName string
+	Status      string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i GetUserByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.DisplayName,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserForAuthByIdentifier = `-- name: GetUserForAuthByIdentifier :one
+SELECT id, username, email, password_hash, display_name, status
+FROM users
+WHERE deleted_at IS NULL
+  AND (lower(username) = $1 OR lower(email) = $1)
+LIMIT 1
+`
+
+type GetUserForAuthByIdentifierRow struct {
+	ID           uuid.UUID
+	Username     string
+	Email        string
+	PasswordHash string
+	DisplayName  string
+	Status       string
+}
+
+func (q *Queries) GetUserForAuthByIdentifier(ctx context.Context, username string) (GetUserForAuthByIdentifierRow, error) {
+	row := q.db.QueryRow(ctx, getUserForAuthByIdentifier, username)
+	var i GetUserForAuthByIdentifierRow
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.PasswordHash,
+		&i.DisplayName,
+		&i.Status,
+	)
+	return i, err
+}
+
+const updateUserLastLogin = `-- name: UpdateUserLastLogin :exec
+UPDATE users
+SET last_login_at = now(),
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+func (q *Queries) UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, updateUserLastLogin, id)
+	return err
+}
+
+const updateUserPasswordHash = `-- name: UpdateUserPasswordHash :exec
+UPDATE users
+SET password_hash = $2,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+type UpdateUserPasswordHashParams struct {
+	ID           uuid.UUID
+	PasswordHash string
+}
+
+func (q *Queries) UpdateUserPasswordHash(ctx context.Context, arg UpdateUserPasswordHashParams) error {
+	_, err := q.db.Exec(ctx, updateUserPasswordHash, arg.ID, arg.PasswordHash)
+	return err
+}

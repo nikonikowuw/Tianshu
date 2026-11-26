@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"tianshu/internal/modules/access"
+	"tianshu/internal/modules/auth"
 	"tianshu/internal/modules/identity"
 	"tianshu/internal/modules/setup"
 	"tianshu/internal/platform/cache"
@@ -31,12 +32,14 @@ type App struct {
 	log          *slog.Logger
 	i18n         *i18n.Bundle
 	hasher       *security.PasswordHasher
+	jwt          *security.JWTManager
 	db           *pgxpool.Pool
 	tx           *database.TxManager
 	cache        cache.Cache
 	storage      storage.Storage
 	access       *access.Service
 	identity     *identity.Service
+	authHandler  *auth.Handler
 	setupHandler *setup.Handler
 	engine       *gin.Engine
 	server       *http.Server
@@ -68,6 +71,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	if err := bundle.RegisterFS("setup", setup.LocalesFS, "locales"); err != nil {
 		return nil, fmt.Errorf("register setup locales: %w", err)
 	}
+	if err := bundle.RegisterFS("auth", auth.LocalesFS, "locales"); err != nil {
+		return nil, fmt.Errorf("register auth locales: %w", err)
+	}
 	if err := bundle.Validate(); err != nil {
 		return nil, fmt.Errorf("validate i18n bundle: %w", err)
 	}
@@ -75,6 +81,10 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	hasher, err := security.NewPasswordHasher(security.DefaultArgon2Params())
 	if err != nil {
 		return nil, fmt.Errorf("init password hasher: %w", err)
+	}
+	jwtMgr, err := security.NewJWTManager(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL)
+	if err != nil {
+		return nil, fmt.Errorf("init jwt manager: %w", err)
 	}
 
 	var (
@@ -100,6 +110,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	var (
 		accessSvc    *access.Service
 		identitySvc  *identity.Service
+		authHandler  *auth.Handler
 		setupHandler *setup.Handler
 	)
 	if pool != nil {
@@ -125,6 +136,19 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			return nil, fmt.Errorf("init setup service: %w", err)
 		}
 		setupHandler = setup.NewHandler(setupSvc)
+
+		authSvc := auth.NewService(
+			cfg.Auth,
+			pool,
+			&authIdentityAdapter{svc: identitySvc},
+			&authAccessAdapter{svc: accessSvc},
+			hasher,
+			jwtMgr,
+			tx,
+			memCache,
+			log,
+		)
+		authHandler = auth.NewHandler(authSvc, cfg.CORS.AllowedOrigins)
 	}
 
 	store, err := initStorage(cfg.Storage)
@@ -156,12 +180,14 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		log:          log,
 		i18n:         bundle,
 		hasher:       hasher,
+		jwt:          jwtMgr,
 		db:           pool,
 		tx:           tx,
 		cache:        memCache,
 		storage:      store,
 		access:       accessSvc,
 		identity:     identitySvc,
+		authHandler:  authHandler,
 		setupHandler: setupHandler,
 		engine:       engine,
 	}

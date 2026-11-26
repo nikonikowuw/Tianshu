@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -15,6 +16,10 @@ import (
 type store interface {
 	CountUsers(ctx context.Context) (int64, error)
 	CreateUser(ctx context.Context, params createUserRecord) (User, error)
+	GetUserForAuthByIdentifier(ctx context.Context, normalizedIdentifier string) (AuthCredentials, error)
+	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
+	UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error
+	UpdateUserPasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error
 }
 
 type createUserRecord struct {
@@ -79,4 +84,52 @@ func (s *pgStore) CreateUser(ctx context.Context, rec createUserRecord) (User, e
 		CreatedAt:   row.CreatedAt.Time,
 		UpdatedAt:   row.UpdatedAt.Time,
 	}, nil
+}
+
+func (s *pgStore) GetUserForAuthByIdentifier(ctx context.Context, normalizedIdentifier string) (AuthCredentials, error) {
+	row, err := s.queries(ctx).GetUserForAuthByIdentifier(ctx, normalizedIdentifier)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AuthCredentials{}, errUserNotFound
+	}
+	if err != nil {
+		return AuthCredentials{}, err
+	}
+	return AuthCredentials{
+		ID:           row.ID,
+		Username:     row.Username,
+		Email:        row.Email,
+		DisplayName:  row.DisplayName,
+		Status:       row.Status,
+		PasswordHash: row.PasswordHash,
+	}, nil
+}
+
+func (s *pgStore) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
+	row, err := s.queries(ctx).GetUserByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, errUserNotFound
+	}
+	if err != nil {
+		return User{}, err
+	}
+	return User{
+		ID:          row.ID,
+		Username:    row.Username,
+		Email:       row.Email,
+		DisplayName: row.DisplayName,
+		Status:      row.Status,
+		CreatedAt:   row.CreatedAt.Time,
+		UpdatedAt:   row.UpdatedAt.Time,
+	}, nil
+}
+
+func (s *pgStore) UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error {
+	return s.queries(ctx).UpdateUserLastLogin(ctx, id)
+}
+
+func (s *pgStore) UpdateUserPasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error {
+	return s.queries(ctx).UpdateUserPasswordHash(ctx, dbgen.UpdateUserPasswordHashParams{
+		ID:           id,
+		PasswordHash: passwordHash,
+	})
 }

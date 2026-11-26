@@ -17,6 +17,7 @@ const (
 var (
 	errUsernameConflict = errors.New("username conflict")
 	errEmailConflict    = errors.New("email conflict")
+	errUserNotFound     = errors.New("user not found")
 )
 
 func usernameExistsError() *apperr.Error {
@@ -29,4 +30,8 @@ func emailExistsError() *apperr.Error {
 
 func invalidPasswordError() *apperr.Error {
 	return apperr.New(422, ErrCodeInvalidPassword)
+}
+
+func userNotFoundError() *apperr.Error {
+	return apperr.NotFound(ErrCodeUserNotFound)
 }

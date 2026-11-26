@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tianshu/internal/modules/auth"
 	"tianshu/internal/platform/httpserver"
 	"tianshu/internal/shared/apperr"
 	"tianshu/internal/webui"
@@ -23,6 +24,13 @@ func (a *App) registerRoutes() {
 	apiV1 := a.engine.Group("/api/v1")
 	if a.setupHandler != nil {
 		a.setupHandler.RegisterPublicRoutes(apiV1)
+	}
+	if a.authHandler != nil {
+		a.authHandler.RegisterPublicRoutes(apiV1)
+
+		authedV1 := apiV1.Group("")
+		authedV1.Use(auth.RequireAuth(a.jwt))
+		a.authHandler.RegisterRoutes(authedV1)
 	}
 
 	spaHandler := webui.Handler()

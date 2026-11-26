@@ -14,7 +14,7 @@ const signInSearchSchema = z.object({
 
 export const Route = createFileRoute('/(auth)/sign-in')({
   validateSearch: signInSearchSchema,
-  beforeLoad: async ({ context }) => {
+  beforeLoad: async ({ context, search }) => {
     try {
       const status = await context.queryClient.ensureQueryData(
         setupStatusQueryOptions
@@ -27,6 +27,18 @@ export const Route = createFileRoute('/(auth)/sign-in')({
         throw error
       }
     }
+
+    if (context.auth.getStatus() === 'unknown') {
+      const ok = await context.auth.ensureSession()
+      if (ok) {
+        throw redirect({ to: sanitizeRedirect(search.redirect), replace: true })
+      }
+    } else if (context.auth.getStatus() === 'authenticated') {
+      throw redirect({ to: sanitizeRedirect(search.redirect), replace: true })
+    }
   },
-  component: SignIn,
+  component: function SignInRouteComponent() {
+    const { redirect: redirectTo } = Route.useSearch()
+    return <SignIn redirectTo={redirectTo} />
+  },
 })
