@@ -98,10 +98,15 @@
 | `AUTH_TOKEN_EXPIRED`        | 401  | Access Token 过期              |
 | `AUTH_REFRESH_REUSED`       | 401  | Refresh Token 重放，会话已吊销 |
 | `SETUP_ALREADY_INITIALIZED` | 409  | Setup 已完成                   |
-| `USERS_EMAIL_CONFLICT`      | 409  | 邮箱冲突                       |
-| `USERS_USERNAME_CONFLICT`   | 409  | 用户名冲突                     |
-| `USERS_LAST_SUPER_ADMIN`    | 409  | 最后一名活跃超管保护           |
-| `ROLES_SYSTEM_IMMUTABLE`    | 409  | 系统角色不可改/删              |
+| `USERS_EMAIL_CONFLICT`           | 409  | 邮箱冲突                       |
+| `USERS_USERNAME_CONFLICT`        | 409  | 用户名冲突                     |
+| `USERS_NOT_FOUND`                | 404  | 用户不存在                     |
+| `USERS_INVALID_PASSWORD`         | 422  | 密码长度不满足 8–128 要求      |
+| `USERS_INVALID_ROLE`             | 422  | 角色 ID 无效或不存在           |
+| `USERS_LAST_SUPER_ADMIN`         | 409  | 最后一名活跃超管保护           |
+| `USERS_SELF_OPERATION_FORBIDDEN` | 409  | 禁止对自身执行删除/禁用/摘除超管 |
+| `USERS_SUPER_ADMIN_PROTECTED`    | 403  | 非超管禁止操作超管账号或授予/撤销超管角色 |
+| `ROLES_SYSTEM_IMMUTABLE`         | 409  | 系统角色不可改/删              |
 | `ROLES_CODE_CONFLICT`       | 409  | 角色编码已存在                 |
 | `ROLES_IN_USE`              | 409  | 角色仍绑定用户                 |
 | `FILES_TYPE_NOT_ALLOWED`    | 400  | MIME/类型不允许                |
@@ -168,7 +173,44 @@
 - 前端手写 DTO 与本文对齐；不引入 OpenAPI 双向代码生成。
 - 破坏性变更必须新开 `/api/v2`，或在 PRD/本文件明确迁移窗口；新增字段不算破坏性变更。
 
-## 11. 暂不纳入 v1
+## 11. Users 与 Role Options 端点契约
+
+### `GET /api/v1/roles/options`
+
+- 权限：`users:read` 或 `roles:read`（满足其一即可）。
+- 响应 `200`：`{ "items": [{ "id": "uuid", "code": "super_admin", "name": "超级管理员", "isSystem": true }] }`；系统角色 `name` 按 `Accept-Language` 翻译，排序 `is_system DESC, code ASC`。
+
+### `GET /api/v1/users`（`users:read`）
+
+- 查询参数：
+  - `page`（默认 `1`）、`pageSize`（默认 `20`，范围 `10..100`）
+  - `q`（最大 100 字符）：匹配 `username`、`email`、`display_name`（大小写不敏感 `ILIKE`）
+  - `status`（重复 key：`?status=active&status=disabled`，白名单 `active` / `disabled`）
+  - `roleId`（重复 key：`?roleId=<uuid>`，多值取并集匹配）
+  - `sort`（白名单：`created_at` / `updated_at` / `username` / `last_login_at`）、`order`（`asc` / `desc`）；默认排序：`created_at DESC, id DESC`
+- 响应 `200`：`Paginated<UserDTO>`，`UserDTO` 字段：`id`, `username`, `email`, `displayName`, `status`, `lastLoginAt`（RFC3339 或 `null`）, `roles`（`[{ id, code, name, isSystem }]`，空为 `[]`）, `createdBy` / `updatedBy`（`{ id, username }` 或 `null`）, `createdAt`, `updatedAt`。
+
+### `GET /api/v1/users/:id`（`users:read`）
+
+- 响应 `200`：`UserDTO`；不存在返回 `404 USERS_NOT_FOUND`。
+
+### `POST /api/v1/users`（`users:create`）
+
+- 请求：`{ username, email, displayName?, password, status?, roleIds[] }`（`username` 3–64、`email` ≤255、`displayName` ≤100、`password` 8–128、`status` 默认 `active`）。
+- 响应 `201`：`UserDTO`。非 `super_admin` 授予 `super_admin` 返回 `403 USERS_SUPER_ADMIN_PROTECTED`；无效 `roleIds` 返回 `422`；用户名/邮箱冲突返回 `409`。
+
+### `PATCH /api/v1/users/:id`（`users:update`）
+
+- 请求（全可选指针语义，未传表示不修改；`username` 不可修改）：`{ email?, displayName?, status?, password?, roleIds? }`。
+- 响应 `200`：`UserDTO`。
+- 约束：禁止非超管编辑/禁用/重设超管账号或授予/撤销超管（`403 USERS_SUPER_ADMIN_PROTECTED`）；禁止禁用自己或移除自己的 `super_admin`（`409 USERS_SELF_OPERATION_FORBIDDEN`）；禁用或移除最后一名活跃超管返回 `409 USERS_LAST_SUPER_ADMIN`。禁用或重置密码时吊销目标用户全部活跃会话，角色变更在事务提交后失效目标用户权限缓存。
+
+### `DELETE /api/v1/users/:id`（`users:delete`）
+
+- 响应 `204`（无响应体）。软删除用户，同事务内清空 `user_roles` 并吊销全部活跃会话。
+- 约束：禁止删除自身（`409 USERS_SELF_OPERATION_FORBIDDEN`）；禁止非超管删除超管（`403 USERS_SUPER_ADMIN_PROTECTED`）；禁止删除最后一名活跃超管（`409 USERS_LAST_SUPER_ADMIN`）。
+
+## 12. 暂不纳入 v1
 
 - 通用 `Idempotency-Key` 重放表：Setup 用数据库咨询锁/唯一约束保证幂等；文件上传用 SHA-256 去重作为后续增强。
 - GraphQL、gRPC 对外接口、批量导入接口。

@@ -31,7 +31,8 @@
 - 并发刷新：同一 session 用行锁/`pg_advisory_xact_lock` 串行化；在 `replaced_at + 30~60s` 幂等宽限期内识别多标签页并发，避免互相误杀。
 - 登出：吊销当前 session 并清 Cookie；清 Cookie 的 Path/属性必须与设置时一致。
 - 改密：校验旧密码，吊销除当前 session 外的所有会话；可选择轮换当前 session。
-- 禁用/软删除用户：显式吊销该用户全部 session（软删除不触发外键 `ON DELETE CASCADE`）；若存在物理清理，再由外键级联清理 `user_sessions`。
+- 禁用/软删除用户/管理员重置他人密码：显式吊销该用户全部 session（软删除不触发外键 `ON DELETE CASCADE`）；若存在物理清理，再由外键级联清理 `user_sessions`。
+- **用户管理提权与自我保护**：只有当前持有 `super_admin` 角色的操作者可以授予/撤销 `super_admin` 角色，以及编辑、禁用或删除 `super_admin` 账号（否则返回 `403 USERS_SUPER_ADMIN_PROTECTED`）；操作者禁止删除自身、禁用自身或移除自身的 `super_admin` 角色（`409 USERS_SELF_OPERATION_FORBIDDEN`）。
 - 会话列表只返回当前用户自己的记录；`id`、IP、UA、最近使用时间、当前设备标记；不返回 token/hash。
 - 过期/已吊销 session 与过期 `refresh_token_history` 由 janitor 定期清理；不要无限增长。
 

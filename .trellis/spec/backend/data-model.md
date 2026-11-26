@@ -55,7 +55,7 @@
 - `status`：`active` / `disabled`，`CHECK` 约束；不要用布尔 `is_active`。
 - `avatar_file_id`：`uuid null references files(id) on delete set null`。
 - `password_hash` 只出现在认证内部；禁止进入任何 DTO、审计 metadata、日志。
-- 删除策略：采用**软删除**（写入 `deleted_at timestamptz null`），所有常规查询默认排除 `deleted_at IS NOT NULL`，并在同一业务流程中显式吊销其全部 `user_sessions`（软删除不触发外键 `ON DELETE CASCADE`）；若未来引入恢复已删除用户能力，需先校验用户名/邮箱唯一冲突。
+- 删除策略：采用**软删除**（写入 `deleted_at timestamptz null`），所有常规查询默认排除 `deleted_at IS NOT NULL`，并在同一事务中清空 `user_roles` 绑定（避免已删除用户继续计入角色 `userCount` 与 `ROLES_IN_USE` 保护）且显式吊销其全部 `user_sessions`（软删除不触发外键 `ON DELETE CASCADE`）；若未来引入恢复已删除用户能力，需先校验用户名/邮箱唯一冲突。
 
 ### roles
 
@@ -163,7 +163,7 @@
 ## 8. 并发与锁
 
 - Setup：`pg_advisory_xact_lock` + `users == 0` 检查，保证并发只成功一次。
-- 最后一名活跃超管：禁用/删除/移除角色时在同一事务内 `SELECT ... FOR UPDATE` 或 advisory lock，再统计活跃超管；不能先查后改。
+- 最后一名活跃超管：禁用/删除/移除角色时在同一事务内通过 `pg_advisory_xact_lock`（`usersSuperAdminGuardKey`）串行化并 `SELECT ... FOR UPDATE` 锁定目标用户，再统计活跃超管数量；不能先查后改。
 - 角色删除/用户分配：同一事务内检查引用并删除，避免“检查时无用户、删除后用户被分配”。
 - 唯一冲突交给数据库唯一索引，捕获后映射 `409`；不要用“先查再插”替代约束。
 - 缓存失效在事务提交后执行；回滚时不能留下已失效/已写入的脏缓存。
