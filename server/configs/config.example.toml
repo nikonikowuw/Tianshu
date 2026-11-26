@@ -1,0 +1,52 @@
+[app]
+env = "development" # development | production
+name = "tianshu"
+
+[server]
+addr = ":8080"
+read_timeout = "15s"
+write_timeout = "30s"
+idle_timeout = "60s"
+shutdown_timeout = "10s"
+trusted_proxies = []
+
+[cors]
+enabled = false
+allowed_origins = []
+
+[database]
+dsn = "postgres://tianshu:tianshu@localhost:5432/tianshu?sslmode=disable"
+auto_migrate = true
+max_conns = 25
+min_conns = 2
+max_conn_lifetime = "30m"
+
+[cache]
+driver = "memory" # memory | redis
+redis_addr = "localhost:6379"
+redis_password = ""
+redis_db = 0
+
+[storage]
+driver = "local" # local | s3
+local_root = "./data/uploads"
+max_file_size_bytes = 10485760   # 10 MiB
+max_avatar_size_bytes = 2097152  # 2 MiB
+
+[auth]
+# Production requires a strong random secret (>= 32 bytes) via TIANSHU_AUTH__JWT_SECRET.
+jwt_secret = "dev-only-change-me-at-least-32-bytes-secret"
+access_token_ttl = "15m"
+refresh_token_ttl = "168h"
+cookie_secure = false
+
+[setup]
+mode = "token" # token | local | open
+token = ""     # Optional preset token; if empty in token mode, a random one-time token is printed at startup.
+allow_open = false
+
+[audit]
+retention_days = 180
+
+[log]
+level = "info" # debug | info | warn | error

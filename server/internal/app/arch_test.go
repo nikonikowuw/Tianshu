@@ -1,0 +1,189 @@
+package app_test
+
+import (
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"tianshu/internal/app"
+	"tianshu/internal/platform/config"
+)
+
+const modulePrefix = "tianshu/"
+
+// TestArchitectureBoundaries enforces package dependency direction and //go:embed allowlist.
+func TestArchitectureBoundaries(t *testing.T) {
+	serverRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("resolve server root: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	err = filepath.WalkDir(serverRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == ".git" || name == "tmp" || name == "bin" || name == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		rel, err := filepath.Rel(serverRoot, path)
+		if err != nil {
+			return err
+		}
+		relSlash := filepath.ToSlash(rel)
+
+		if _, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly|parser.ParseComments); err != nil {
+			t.Errorf("parse %s: %v", relSlash, err)
+			return nil
+		}
+
+		checkEmbedAllowlist(t, relSlash, path)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk server root: %v", err)
+	}
+}
+
+func checkEmbedAllowlist(t *testing.T, relPath, fullPath string) {
+	t.Helper()
+	raw, err := os.ReadFile(fullPath)
+	if err != nil {
+		t.Errorf("read %s: %v", relPath, err)
+		return
+	}
+	if !strings.Contains(string(raw), "//go:embed") {
+		return
+	}
+
+	allowed := relPath == "internal/webui/webui.go" ||
+		strings.HasPrefix(relPath, "migrations/") ||
+		strings.HasPrefix(relPath, "internal/platform/i18n/") ||
+		isModuleLocalesFile(relPath)
+
+	if !allowed {
+		t.Errorf("%s uses //go:embed outside allowed locations", relPath)
+	}
+}
+
+func isModuleLocalesFile(relPath string) bool {
+	parts := strings.Split(relPath, "/")
+	return len(parts) == 4 && parts[0] == "internal" && parts[1] == "modules" && parts[3] == "locales.go"
+}
+
+func TestPackageDependencyDirection(t *testing.T) {
+	serverRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("resolve server root: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	err = filepath.WalkDir(serverRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			if d.Name() == "tmp" || d.Name() == "bin" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		rel, err := filepath.Rel(serverRoot, path)
+		if err != nil {
+			return err
+		}
+		relSlash := filepath.ToSlash(rel)
+
+		fileAST, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Errorf("parse %s: %v", relSlash, err)
+			return nil
+		}
+
+		for _, spec := range fileAST.Imports {
+			imp := strings.Trim(spec.Path.Value, `"`)
+			verifyImportRule(t, relSlash, imp)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk server root: %v", err)
+	}
+}
+
+func verifyImportRule(t *testing.T, relPath, imp string) {
+	t.Helper()
+
+	switch {
+	case strings.HasPrefix(relPath, "internal/webui/"):
+		if strings.Contains(imp, ".") || strings.HasPrefix(imp, modulePrefix) {
+			t.Errorf("webui package %s must only import Go stdlib, got %q", relPath, imp)
+		}
+	case strings.HasPrefix(relPath, "internal/shared/"):
+		if strings.HasPrefix(imp, modulePrefix+"internal/platform/") ||
+			strings.HasPrefix(imp, modulePrefix+"internal/modules/") ||
+			imp == modulePrefix+"internal/app" {
+			t.Errorf("shared package %s must remain a leaf, got %q", relPath, imp)
+		}
+	case strings.HasPrefix(relPath, "internal/platform/"):
+		if strings.HasPrefix(imp, modulePrefix+"internal/modules/") || imp == modulePrefix+"internal/app" {
+			t.Errorf("platform package %s must not import modules or app, got %q", relPath, imp)
+		}
+	case strings.HasPrefix(relPath, "internal/modules/"):
+		curDomain := strings.Split(relPath, "/")[2]
+		if rest, ok := strings.CutPrefix(imp, modulePrefix+"internal/modules/"); ok {
+			targetDomain := strings.Split(rest, "/")[0]
+			if targetDomain != curDomain {
+				t.Errorf("module %s (%s) must not import sibling module %s", curDomain, relPath, targetDomain)
+			}
+		}
+	case strings.HasPrefix(relPath, "cmd/server/"):
+		if strings.HasPrefix(imp, modulePrefix+"internal/modules/") {
+			t.Errorf("cmd/server (%s) must wire via internal/app, not import %q", relPath, imp)
+		}
+	}
+}
+
+func TestAppAPINotFoundReturnsJSON(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.Env = "test"
+	cfg.Storage.LocalRoot = t.TempDir()
+
+	application, err := app.New(t.Context(), cfg, app.Options{SkipDB: true})
+	if err != nil {
+		t.Fatalf("app.New() error = %v", err)
+	}
+	defer func() { _ = application.Close(t.Context()) }()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/not-found", nil)
+	rec := httptest.NewRecorder()
+	application.Engine().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", rec.Header().Get("Content-Type"))
+	}
+	if rec.Header().Get("X-Request-Id") == "" {
+		t.Fatal("missing X-Request-Id header")
+	}
+}

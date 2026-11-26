@@ -1,0 +1,23 @@
+{
+  "generic": "请求失败，请稍后重试",
+  "network": "网络连接异常，请检查服务是否可用",
+  "serverError": "服务器内部错误（请求 ID：{{requestId}}）",
+  "sessionExpired": "登录状态已失效，请重新登录",
+  "accountDisabled": "当前账号已被禁用，请联系管理员",
+  "unauthorized": {
+    "title": "未授权访问",
+    "description": "请登录后再访问该页面。"
+  },
+  "forbidden": {
+    "title": "无访问权限",
+    "description": "您当前账号没有权限访问此资源。"
+  },
+  "notFound": {
+    "title": "页面不存在",
+    "description": "您访问的页面不存在或已被移除。"
+  },
+  "internal": {
+    "title": "系统发生异常",
+    "description": "服务器遇到未预期错误，请稍后重试。"
+  }
+}

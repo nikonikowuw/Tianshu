@@ -1,0 +1,13 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/tianshu ./cmd/server"
+  entrypoint = ["./tmp/tianshu"]
+  delay = 500
+  include_ext = ["go", "toml", "sql"]
+  exclude_dir = ["tmp", "bin", "internal/webui/dist"]
+  exclude_regex = ["_test\\.go$"]
+
+[misc]
+  clean_on_exit = true

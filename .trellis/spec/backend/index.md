@@ -1,6 +1,6 @@
 # Backend Spec
 
-适用范围：`server/`（Go 服务）。当前仓库尚无 `server/` 实现；本目录是待实现的契约，不是现状描述。
+适用范围：`server/`（Go 服务）。当前已完成 `internal/platform/*`、`internal/shared/*`、`internal/webui`、`migrations/00001_init_schema.sql` 与 `internal/app` 基础底座；`internal/modules/*` 业务模块尚未实现。
 
 | 文档 | 内容 | 何时读 |
 | --- | --- | --- |

@@ -1,0 +1,3 @@
+version: "2"
+# Append one sql entry per business module that owns SQL queries.
+sql: []

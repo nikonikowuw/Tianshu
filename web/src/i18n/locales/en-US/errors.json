@@ -1,0 +1,23 @@
+{
+  "generic": "Request failed, please try again later",
+  "network": "Network error, please check if the server is reachable",
+  "serverError": "Internal server error (Request ID: {{requestId}})",
+  "sessionExpired": "Your session has expired, please sign in again",
+  "accountDisabled": "Your account has been disabled, please contact an administrator",
+  "unauthorized": {
+    "title": "Unauthorized Access",
+    "description": "Please sign in with appropriate credentials to view this page."
+  },
+  "forbidden": {
+    "title": "Access Forbidden",
+    "description": "You do not have permission to view this resource."
+  },
+  "notFound": {
+    "title": "Page Not Found",
+    "description": "The page you are looking for does not exist or has been removed."
+  },
+  "internal": {
+    "title": "Something went wrong",
+    "description": "An unexpected error occurred on the server. Please try again later."
+  }
+}

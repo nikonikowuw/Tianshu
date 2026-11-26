@@ -2,7 +2,7 @@
 
 Tianshu 是一个单仓库全栈后台脚手架：`server/`（Go + Gin + PostgreSQL + sqlc + Goose）通过 `//go:embed` 嵌入 `web/`（Vite + React 19 + TypeScript + TanStack Router/Query/Table + Tailwind CSS v4 + shadcn/ui + Zustand），实现单二进制部署。
 
-> 当前状态：仓库尚无 `server/` 与 `web/` 产品代码；需求基线见 [docs/prd/prd.md](./docs/prd/prd.md)，所有技术与流程契约以 `.trellis/spec/` 为准。
+> 当前状态：`server/` 与 `web/` 基础框架底座（含单二进制前端嵌入、平台基础设施、i18n 与架构守护测试）已就绪；业务模块（`setup`/`auth`/`access`/`identity`/`audit`/`files`/`dashboard`）待按垂直切片逐步实现。需求基线见 [docs/prd/prd.md](./docs/prd/prd.md)，所有技术与流程契约以 `.trellis/spec/` 为准。
 
 ## Spec 导航（动手前先读对应域）
 

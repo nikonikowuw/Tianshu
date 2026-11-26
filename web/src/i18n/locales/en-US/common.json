@@ -1,0 +1,33 @@
+{
+  "appName": "Tianshu",
+  "loading": "Loading...",
+  "cancel": "Cancel",
+  "confirm": "Confirm",
+  "retry": "Retry",
+  "backHome": "Back to Home",
+  "goBack": "Go Back",
+  "signOut": "Sign out",
+  "signOutTitle": "Sign out",
+  "signOutDesc": "Are you sure you want to sign out of your current session?",
+  "language": {
+    "label": "Switch language",
+    "zhCN": "简体中文",
+    "enUS": "English"
+  },
+  "nav": {
+    "general": "General",
+    "dashboard": "Dashboard",
+    "system": "System",
+    "users": "Users",
+    "roles": "Roles & Permissions",
+    "auditLogs": "Audit Logs",
+    "files": "Files",
+    "settings": "Settings"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "description": "Tianshu base scaffold is ready. Business modules will be added in vertical slices.",
+    "readyCardTitle": "Platform Ready",
+    "readyCardDesc": "Single-binary Go embed, bilingual i18n, RouterContext guards, and unified API client are wired."
+  }
+}
