@@ -15,7 +15,10 @@ import (
 	"tianshu/internal/platform/database"
 )
 
-const pgCodeUniqueViolation = "23505"
+const (
+	pgCodeForeignKeyViolation = "23503"
+	pgCodeUniqueViolation     = "23505"
+)
 
 type listRolesQuery struct {
 	Q                  string
@@ -118,10 +121,14 @@ func (s *pgStore) GetRoleIDByCode(ctx context.Context, code string) (uuid.UUID, 
 }
 
 func (s *pgStore) AssignUserRole(ctx context.Context, userID, roleID uuid.UUID) error {
-	return s.queries(ctx).AssignUserRole(ctx, dbgen.AssignUserRoleParams{
+	err := s.queries(ctx).AssignUserRole(ctx, dbgen.AssignUserRoleParams{
 		UserID: userID,
 		RoleID: roleID,
 	})
+	if isForeignKeyViolation(err, "user_roles_role_id_fkey") {
+		return errRoleNotFound
+	}
+	return err
 }
 
 func (s *pgStore) ListUserRoleCodes(ctx context.Context, userID uuid.UUID) ([]string, error) {
@@ -338,4 +345,9 @@ func escapeLikePattern(s string) string {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == pgCodeUniqueViolation
+}
+
+func isForeignKeyViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgCodeForeignKeyViolation && pgErr.ConstraintName == constraint
 }

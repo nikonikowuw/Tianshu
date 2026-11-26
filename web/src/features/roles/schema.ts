@@ -34,7 +34,9 @@ export const rolesSearchSchema = z.object({
     .optional()
     .catch(undefined),
   type: stringOrArray
-    .transform((arr) => arr.filter((v) => v === 'system' || v === 'custom'))
+    .transform((arr) =>
+      Array.from(new Set(arr.filter((v) => v === 'system' || v === 'custom')))
+    )
     .optional()
     .catch([]),
   sort: z

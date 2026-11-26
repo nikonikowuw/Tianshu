@@ -24,7 +24,8 @@
     "openMenu": "Open actions menu",
     "view": "View permissions",
     "edit": "Edit role",
-    "delete": "Delete role"
+    "delete": "Delete role",
+    "deleteDisabledInUse": "This role is assigned to users and cannot be deleted"
   },
   "sheet": {
     "createTitle": "Create Role",
@@ -33,6 +34,7 @@
     "editDesc": "Update role metadata and permissions. Changes take effect immediately for assigned users.",
     "viewTitle": "Role Permissions",
     "viewSystemDesc": "Built-in system roles are protected, hold full permissions, and cannot be modified or deleted.",
+    "viewCustomDesc": "Viewing role details and permission assignments in read-only mode. Use the actions menu to edit.",
     "viewReadOnlyDesc": "You have read-only access to roles. Contact an administrator to request changes.",
     "codeLabel": "Role Code",
     "codePlaceholder": "e.g. ops_editor",

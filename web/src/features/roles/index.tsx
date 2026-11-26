@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
-import { useAuthStore } from '@/stores/auth-store'
+import { usePermission } from '@/lib/auth/use-permission'
 import { type NavigateFn } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
 import { Header } from '@/components/layout/header'
@@ -25,11 +25,11 @@ export function Roles() {
   const queryClient = useQueryClient()
   const search = route.useSearch()
   const routeNavigate = route.useNavigate()
-  const permissions = useAuthStore((s) => s.permissions)
-
-  const canCreate = permissions.includes('roles:create')
-  const canUpdate = permissions.includes('roles:update')
-  const canDelete = permissions.includes('roles:delete')
+  // Subscribe to the in-memory permission list so a 403-triggered /auth/me sync
+  // refreshes toolbar and row actions without a manual reload.
+  const canCreate = usePermission('roles:create')
+  const canUpdate = usePermission('roles:update')
+  const canDelete = usePermission('roles:delete')
 
   const [sheetState, setSheetState] = useState<{
     open: boolean

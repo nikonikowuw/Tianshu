@@ -436,6 +436,9 @@ func (s *Service) AssignRoleByCode(ctx context.Context, userID uuid.UUID, roleCo
 			return apperr.Internal(fmt.Errorf("lookup role %s: %w", roleCode, err))
 		}
 		if err := s.store.AssignUserRole(txCtx, userID, roleID); err != nil {
+			if errors.Is(err, errRoleNotFound) {
+				return roleNotFoundError()
+			}
 			return apperr.Internal(fmt.Errorf("assign role %s to user %s: %w", roleCode, userID, err))
 		}
 

@@ -516,4 +516,115 @@ describe('roles feature', () => {
     await changeAppLanguage('en-US')
     await expect.element(getByText('View Dashboard')).toBeVisible()
   })
+
+  it('maps 422 field errors back to form fields instead of a global banner', async () => {
+    mockStandardGet()
+    postMock.mockRejectedValueOnce(
+      new ApiError({
+        status: 422,
+        code: 'VALIDATION_FAILED',
+        message: '请求参数校验失败',
+        fieldErrors: {
+          code: '角色编码已存在',
+          permissions: '包含未注册的权限码',
+        },
+      })
+    )
+
+    const { getByRole, getByLabelText, getByText } = await renderRoles()
+    await expect.element(getByText('运营编辑')).toBeVisible()
+
+    await userEvent.click(getByRole('button', { name: '新增角色' }))
+    await userEvent.fill(
+      getByLabelText('角色编码', { exact: true }),
+      'ops_editor'
+    )
+    await userEvent.fill(
+      getByLabelText('角色名称', { exact: true }),
+      '重复角色'
+    )
+    await userEvent.click(getByRole('button', { name: '创建角色' }))
+
+    // Field messages render under their own controls; the global banner stays hidden.
+    await expect.element(getByText('角色编码已存在')).toBeVisible()
+    await expect.element(getByText('包含未注册的权限码')).toBeVisible()
+    await expect.element(getByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('renders inline list error with retry and recovers on refetch', async () => {
+    mockStandardGet()
+    getMock.mockRejectedValueOnce(
+      new ApiError({
+        status: 500,
+        code: 'INTERNAL_ERROR',
+        message: '服务器内部错误，请稍后重试',
+      })
+    )
+
+    const { getByRole, getByText } = await renderRoles()
+
+    const alert = getByRole('alert')
+    await expect.element(alert).toBeVisible()
+    await expect.element(getByText('加载角色列表失败')).toBeVisible()
+
+    await alert.getByRole('button', { name: '重试' }).click()
+    await expect.element(getByText('运营编辑')).toBeVisible()
+    await expect.element(alert).not.toBeInTheDocument()
+  })
+
+  it('distinguishes empty data from no-match filters and clears filters on request', async () => {
+    const emptyPage: RolesPage = { items: [], total: 0, page: 1, pageSize: 20 }
+    getMock.mockImplementation((url: string, opts?: { params?: unknown }) => {
+      const q = (opts?.params as URLSearchParams | undefined)?.get('q')
+      if (url === '/permissions') {
+        return Promise.resolve({
+          data: i18n.language === 'en-US' ? catalogEn : catalogZh,
+        })
+      }
+      if (q === 'no-match') {
+        return Promise.resolve({ data: emptyPage })
+      }
+      return Promise.resolve({
+        data: {
+          items: sampleRoles,
+          total: sampleRoles.length,
+          page: 1,
+          pageSize: 20,
+        } satisfies RolesPage,
+      })
+    })
+
+    const { getByRole, getByText } = await renderRoles({
+      initialSearch: { q: 'no-match' },
+    })
+    await expect.element(getByText('没有符合筛选条件的角色')).toBeVisible()
+
+    await userEvent.click(getByRole('button', { name: '清除筛选' }))
+    await expect.element(getByText('运营编辑')).toBeVisible()
+  })
+
+  it('shows the empty-data state when no role matches and no filter is active', async () => {
+    getMock.mockImplementation((url: string) => {
+      if (url === '/permissions') {
+        return Promise.resolve({
+          data: i18n.language === 'en-US' ? catalogEn : catalogZh,
+        })
+      }
+      return Promise.resolve({
+        data: {
+          items: [],
+          total: 0,
+          page: 1,
+          pageSize: 20,
+        } satisfies RolesPage,
+      })
+    })
+
+    const { getByText, container } = await renderRoles()
+    await expect.element(getByText('暂无角色数据')).toBeVisible()
+    // The filtered-empty copy must not leak into the unfiltered empty state.
+    expect(container.textContent?.includes('没有符合筛选条件的角色')).toBe(
+      false
+    )
+  })
 })

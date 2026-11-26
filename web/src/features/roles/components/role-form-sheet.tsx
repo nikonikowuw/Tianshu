@@ -80,6 +80,9 @@ export function RoleFormSheet({
 
   const isReadOnly = mode === 'view' || Boolean(role?.isSystem)
   const isEdit = mode === 'edit' && role !== null && !role.isSystem
+  // Viewing a custom role through the read-only entry is not a permission problem,
+  // so it must not reuse the "contact an administrator" copy.
+  const isCustomView = mode === 'view' && role !== null && !role.isSystem
 
   const schema = useMemo(
     () =>
@@ -245,9 +248,11 @@ export function RoleFormSheet({
       ? t('sheet.createDesc')
       : role?.isSystem
         ? t('sheet.viewSystemDesc')
-        : isReadOnly
-          ? t('sheet.viewReadOnlyDesc')
-          : t('sheet.editDesc')
+        : isCustomView
+          ? t('sheet.viewCustomDesc')
+          : isReadOnly
+            ? t('sheet.viewReadOnlyDesc')
+            : t('sheet.editDesc')
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>

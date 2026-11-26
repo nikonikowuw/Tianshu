@@ -29,7 +29,6 @@ Tianshu 是一个单仓库全栈后台脚手架：`server/`（Go + Gin + Postgre
 - 详细 CI 与校验顺序见 [`.trellis/spec/backend/testing.md`](./.trellis/spec/backend/testing.md) 与 [`.trellis/spec/frontend/testing.md`](./.trellis/spec/frontend/testing.md)。
 
 <!-- TRELLIS:START -->
-
 # mini-trellis
 
 This project uses mini-trellis as a memory layer. Working knowledge lives under `.trellis/`:

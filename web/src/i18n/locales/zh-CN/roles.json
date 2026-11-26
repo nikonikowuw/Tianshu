@@ -24,7 +24,8 @@
     "openMenu": "打开操作菜单",
     "view": "查看权限",
     "edit": "编辑角色",
-    "delete": "删除角色"
+    "delete": "删除角色",
+    "deleteDisabledInUse": "该角色仍绑定了用户，无法删除"
   },
   "sheet": {
     "createTitle": "新增角色",
@@ -33,6 +34,7 @@
     "editDesc": "修改角色信息与权限集合，保存后立即对关联用户生效。",
     "viewTitle": "角色权限详情",
     "viewSystemDesc": "系统内置角色受保护，拥有全量系统权限且不可修改或删除。",
+    "viewCustomDesc": "以只读模式查看自定义角色信息与权限分配，可通过操作菜单进入编辑。",
     "viewReadOnlyDesc": "当前账号仅拥有查看权限，如需调整请联系管理员。",
     "codeLabel": "角色编码",
     "codePlaceholder": "例如：ops_editor",

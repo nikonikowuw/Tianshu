@@ -67,11 +67,26 @@ export function RoleRowActions({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               disabled={deleteDisabled}
+              aria-disabled={deleteDisabled || undefined}
+              aria-describedby={
+                deleteDisabled ? `role-delete-disabled-${role.id}` : undefined
+              }
+              title={
+                deleteDisabled ? t('rowActions.deleteDisabledInUse') : undefined
+              }
               className='text-destructive focus:text-destructive'
               onSelect={() => onDelete(role)}
             >
               <Trash2 className='size-4' />
               <span>{t('rowActions.delete')}</span>
+              {deleteDisabled && (
+                <span
+                  id={`role-delete-disabled-${role.id}`}
+                  className='sr-only'
+                >
+                  {t('rowActions.deleteDisabledInUse')}
+                </span>
+              )}
             </DropdownMenuItem>
           </>
         )}
