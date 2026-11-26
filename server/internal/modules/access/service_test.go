@@ -25,6 +25,8 @@ type fakeStore struct {
 	rolesByCode map[string]uuid.UUID
 	rolePerms   map[uuid.UUID]map[string]struct{}
 	userRoles   map[uuid.UUID]map[uuid.UUID]struct{}
+	menusByID   map[uuid.UUID]Menu
+	menusByCode map[string]uuid.UUID
 
 	listRolesCalls int
 	listPermsCalls int
@@ -60,6 +62,8 @@ func newFakeStore() *fakeStore {
 		rolesByCode: make(map[string]uuid.UUID),
 		rolePerms:   make(map[uuid.UUID]map[string]struct{}),
 		userRoles:   make(map[uuid.UUID]map[uuid.UUID]struct{}),
+		menusByID:   make(map[uuid.UUID]Menu),
+		menusByCode: make(map[string]uuid.UUID),
 	}
 }
 
@@ -401,6 +405,142 @@ func (f *fakeStore) ListUserIDsByRoleCode(_ context.Context, code string) ([]uui
 		return nil, nil
 	}
 	return f.ListRoleUserIDs(context.Background(), roleID)
+}
+
+func (f *fakeStore) EnsureSystemMenu(_ context.Context, id uuid.UUID, parentID *uuid.UUID, def SystemMenuDef) (uuid.UUID, error) {
+	if existingID, ok := f.menusByCode[def.Code]; ok {
+		m := f.menusByID[existingID]
+		m.TitleKey = def.TitleKey
+		m.IsSystem = true
+		f.menusByID[existingID] = m
+		return existingID, nil
+	}
+	now := time.Now().UTC()
+	m := Menu{
+		ID:             id,
+		ParentID:       parentID,
+		Type:           def.Type,
+		Code:           def.Code,
+		TitleKey:       def.TitleKey,
+		Path:           def.Path,
+		Icon:           def.Icon,
+		PermissionCode: def.PermissionCode,
+		SortOrder:      def.SortOrder,
+		Visible:        true,
+		Status:         MenuStatusActive,
+		IsSystem:       true,
+		Children:       make([]Menu, 0),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	f.menusByID[id] = m
+	f.menusByCode[def.Code] = id
+	return id, nil
+}
+
+func (f *fakeStore) ListMenus(_ context.Context) ([]Menu, error) {
+	out := make([]Menu, 0, len(f.menusByID))
+	for _, m := range f.menusByID {
+		out = append(out, m)
+	}
+	slices.SortFunc(out, func(a, b Menu) int {
+		if c := cmp.Compare(a.SortOrder, b.SortOrder); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.CreatedAt.UnixNano(), b.CreatedAt.UnixNano())
+	})
+	return out, nil
+}
+
+func (f *fakeStore) GetMenuByID(_ context.Context, id uuid.UUID) (Menu, error) {
+	m, ok := f.menusByID[id]
+	if !ok {
+		return Menu{}, errMenuNotFound
+	}
+	return m, nil
+}
+
+func (f *fakeStore) GetMenuByIDForUpdate(ctx context.Context, id uuid.UUID) (Menu, error) {
+	return f.GetMenuByID(ctx, id)
+}
+
+func (f *fakeStore) CreateMenu(_ context.Context, rec createMenuRecord) (Menu, error) {
+	if _, exists := f.menusByCode[rec.Code]; exists {
+		return Menu{}, errMenuCodeConflict
+	}
+	now := time.Now().UTC()
+	m := Menu{
+		ID:             rec.ID,
+		ParentID:       rec.ParentID,
+		Type:           rec.Type,
+		Code:           rec.Code,
+		Title:          rec.Title,
+		Path:           rec.Path,
+		Icon:           rec.Icon,
+		PermissionCode: rec.PermissionCode,
+		SortOrder:      rec.SortOrder,
+		Visible:        rec.Visible,
+		Status:         rec.Status,
+		IsSystem:       false,
+		Children:       make([]Menu, 0),
+		CreatedBy:      rec.ActorID,
+		UpdatedBy:      rec.ActorID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	f.menusByID[rec.ID] = m
+	f.menusByCode[rec.Code] = rec.ID
+	return m, nil
+}
+
+func (f *fakeStore) UpdateMenu(_ context.Context, rec updateMenuRecord) (Menu, error) {
+	m, ok := f.menusByID[rec.ID]
+	if !ok {
+		return Menu{}, errMenuNotFound
+	}
+	m.ParentID = rec.ParentID
+	m.Type = rec.Type
+	m.Title = rec.Title
+	m.Path = rec.Path
+	m.Icon = rec.Icon
+	m.PermissionCode = rec.PermissionCode
+	m.SortOrder = rec.SortOrder
+	m.Visible = rec.Visible
+	m.Status = rec.Status
+	m.UpdatedBy = rec.ActorID
+	m.UpdatedAt = time.Now().UTC()
+	f.menusByID[rec.ID] = m
+	return m, nil
+}
+
+func (f *fakeStore) UpdateMenuOrder(_ context.Context, id uuid.UUID, parentID *uuid.UUID, sortOrder int32, actorID *uuid.UUID) error {
+	m, ok := f.menusByID[id]
+	if !ok {
+		return errMenuNotFound
+	}
+	m.ParentID = parentID
+	m.SortOrder = sortOrder
+	m.UpdatedBy = actorID
+	f.menusByID[id] = m
+	return nil
+}
+
+func (f *fakeStore) CountMenuChildren(_ context.Context, id uuid.UUID) (int64, error) {
+	var n int64
+	for _, m := range f.menusByID {
+		if m.ParentID != nil && *m.ParentID == id {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeStore) DeleteMenu(_ context.Context, id uuid.UUID) error {
+	if m, ok := f.menusByID[id]; ok {
+		delete(f.menusByCode, m.Code)
+		delete(f.menusByID, id)
+	}
+	return nil
 }
 
 func TestSyncCatalogIdempotentAndGrantsAllToSuperAdmin(t *testing.T) {

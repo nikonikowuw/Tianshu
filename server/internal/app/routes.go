@@ -35,11 +35,15 @@ func (a *App) registerRoutes() {
 		a.authHandler.RegisterRoutes(authedV1)
 		if a.accessHandler != nil && a.access != nil {
 			a.accessHandler.RegisterRoutes(authedV1, access.RoutePermissions{
-				RequireRead:    access.RequirePermission(a.access, access.PermRolesRead),
-				RequireOptions: access.RequireAnyPermission(a.access, access.PermUsersRead, access.PermRolesRead),
-				RequireCreate:  access.RequirePermission(a.access, access.PermRolesCreate),
-				RequireUpdate:  access.RequirePermission(a.access, access.PermRolesUpdate),
-				RequireDelete:  access.RequirePermission(a.access, access.PermRolesDelete),
+				RequireRead:       access.RequirePermission(a.access, access.PermRolesRead),
+				RequireOptions:    access.RequireAnyPermission(a.access, access.PermUsersRead, access.PermRolesRead),
+				RequireCreate:     access.RequirePermission(a.access, access.PermRolesCreate),
+				RequireUpdate:     access.RequirePermission(a.access, access.PermRolesUpdate),
+				RequireDelete:     access.RequirePermission(a.access, access.PermRolesDelete),
+				RequireMenuRead:   access.RequirePermission(a.access, access.PermMenusRead),
+				RequireMenuCreate: access.RequirePermission(a.access, access.PermMenusCreate),
+				RequireMenuUpdate: access.RequirePermission(a.access, access.PermMenusUpdate),
+				RequireMenuDelete: access.RequirePermission(a.access, access.PermMenusDelete),
 			})
 		}
 		if a.identityHandler != nil && a.access != nil {

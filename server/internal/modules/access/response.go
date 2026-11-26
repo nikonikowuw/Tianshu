@@ -37,6 +37,30 @@ type listRoleOptionsResponse struct {
 	Items []roleOptionResponse `json:"items"`
 }
 
+type menuResponse struct {
+	ID             string         `json:"id"`
+	ParentID       *string        `json:"parentId"`
+	Type           string         `json:"type"`
+	Code           string         `json:"code"`
+	Title          string         `json:"title"`
+	Path           string         `json:"path"`
+	Icon           string         `json:"icon"`
+	PermissionCode string         `json:"permissionCode"`
+	SortOrder      int32          `json:"sortOrder"`
+	Visible        bool           `json:"visible"`
+	Status         string         `json:"status"`
+	IsSystem       bool           `json:"isSystem"`
+	Children       []menuResponse `json:"children"`
+	CreatedBy      *string        `json:"createdBy"`
+	UpdatedBy      *string        `json:"updatedBy"`
+	CreatedAt      string         `json:"createdAt"`
+	UpdatedAt      string         `json:"updatedAt"`
+}
+
+type listMenuTreeResponse struct {
+	Items []menuResponse `json:"items"`
+}
+
 type roleResponse struct {
 	ID              string   `json:"id"`
 	Code            string   `json:"code"`
@@ -132,6 +156,44 @@ func toListRoleOptionsResponse(refs []RoleRef, locale string, bundle *i18n.Bundl
 		})
 	}
 	return listRoleOptionsResponse{Items: items}
+}
+
+func toMenuResponse(m Menu, locale string, bundle *i18n.Bundle) menuResponse {
+	title := m.Title
+	if title == "" && m.TitleKey != "" {
+		title = translateKey(bundle, locale, m.TitleKey, m.Code)
+	}
+	children := make([]menuResponse, 0, len(m.Children))
+	for _, ch := range m.Children {
+		children = append(children, toMenuResponse(ch, locale, bundle))
+	}
+	return menuResponse{
+		ID:             m.ID.String(),
+		ParentID:       uuidPtrToStringPtr(m.ParentID),
+		Type:           m.Type,
+		Code:           m.Code,
+		Title:          title,
+		Path:           m.Path,
+		Icon:           m.Icon,
+		PermissionCode: m.PermissionCode,
+		SortOrder:      m.SortOrder,
+		Visible:        m.Visible,
+		Status:         m.Status,
+		IsSystem:       m.IsSystem,
+		Children:       children,
+		CreatedBy:      uuidPtrToStringPtr(m.CreatedBy),
+		UpdatedBy:      uuidPtrToStringPtr(m.UpdatedBy),
+		CreatedAt:      m.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:      m.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func toMenuTreeResponse(menus []Menu, locale string, bundle *i18n.Bundle) listMenuTreeResponse {
+	items := make([]menuResponse, 0, len(menus))
+	for _, m := range menus {
+		items = append(items, toMenuResponse(m, locale, bundle))
+	}
+	return listMenuTreeResponse{Items: items}
 }
 
 func translateKey(bundle *i18n.Bundle, locale, key, fallback string) string {

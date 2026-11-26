@@ -106,3 +106,94 @@ type RoleRef struct {
 	NameKey  string
 	IsSystem bool
 }
+
+// Menu node types and statuses matching the PostgreSQL CHECK constraints on menus.
+const (
+	MenuTypeDirectory = "directory"
+	MenuTypeMenu      = "menu"
+	MenuTypeButton    = "button"
+
+	MenuStatusActive   = "active"
+	MenuStatusDisabled = "disabled"
+)
+
+// SystemMenuDef describes a built-in navigation menu node seeded at startup.
+type SystemMenuDef struct {
+	ParentCode     string
+	Code           string
+	Type           string
+	TitleKey       string
+	Path           string
+	Icon           string
+	PermissionCode string
+	SortOrder      int32
+}
+
+// Menu represents a menu/permission tree node.
+type Menu struct {
+	ID             uuid.UUID
+	ParentID       *uuid.UUID
+	Type           string
+	Code           string
+	Title          string
+	TitleKey       string
+	Path           string
+	Icon           string
+	PermissionCode string
+	SortOrder      int32
+	Visible        bool
+	Status         string
+	IsSystem       bool
+	Children       []Menu
+	CreatedBy      *uuid.UUID
+	UpdatedBy      *uuid.UUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// CreateMenuInput defines the parameters for creating a menu node.
+type CreateMenuInput struct {
+	ParentID       *uuid.UUID
+	Type           string
+	Code           string
+	Title          string
+	Path           string
+	Icon           string
+	PermissionCode string
+	SortOrder      int32
+	Visible        bool
+	Status         string
+	ActorID        *uuid.UUID
+	Meta           RequestMeta
+}
+
+// UpdateMenuInput defines partial update fields for a menu node.
+type UpdateMenuInput struct {
+	MenuID         uuid.UUID
+	ParentID       *uuid.UUID
+	ClearParent    bool
+	Type           *string
+	Title          *string
+	Path           *string
+	Icon           *string
+	PermissionCode *string
+	SortOrder      *int32
+	Visible        *bool
+	Status         *string
+	ActorID        *uuid.UUID
+	Meta           RequestMeta
+}
+
+// ReorderMenuItem describes a single menu node's new parent and sort order.
+type ReorderMenuItem struct {
+	ID        uuid.UUID
+	ParentID  *uuid.UUID
+	SortOrder int32
+}
+
+// ReorderMenusInput defines batch reorder parameters for menu nodes.
+type ReorderMenusInput struct {
+	Items   []ReorderMenuItem
+	ActorID *uuid.UUID
+	Meta    RequestMeta
+}

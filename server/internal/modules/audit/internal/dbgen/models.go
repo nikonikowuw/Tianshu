@@ -38,6 +38,26 @@ type File struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type Menu struct {
+	ID             uuid.UUID
+	ParentID       uuid.NullUUID
+	Type           string
+	Code           string
+	Title          string
+	TitleKey       pgtype.Text
+	Path           string
+	Icon           string
+	PermissionCode pgtype.Text
+	SortOrder      int32
+	Visible        bool
+	Status         string
+	IsSystem       bool
+	CreatedBy      uuid.NullUUID
+	UpdatedBy      uuid.NullUUID
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type Permission struct {
 	Code           string
 	Module         string

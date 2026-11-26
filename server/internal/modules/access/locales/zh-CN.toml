@@ -57,3 +57,34 @@ ACCESS_PERM_FILES_UPLOAD_DESC = "向系统存储上传文件资源"
 
 ACCESS_PERM_FILES_DELETE_NAME = "删除文件"
 ACCESS_PERM_FILES_DELETE_DESC = "删除系统文件元数据及存储对象"
+
+ACCESS_PERM_MENUS_READ_NAME = "查看菜单管理"
+ACCESS_PERM_MENUS_READ_DESC = "查看系统菜单树与权限节点配置"
+
+ACCESS_PERM_MENUS_CREATE_NAME = "创建菜单"
+ACCESS_PERM_MENUS_CREATE_DESC = "新增目录、菜单页面与按钮权限节点"
+
+ACCESS_PERM_MENUS_UPDATE_NAME = "编辑菜单"
+ACCESS_PERM_MENUS_UPDATE_DESC = "编辑菜单信息、层级归属与排序"
+
+ACCESS_PERM_MENUS_DELETE_NAME = "删除菜单"
+ACCESS_PERM_MENUS_DELETE_DESC = "删除自定义叶子菜单节点"
+
+ACCESS_MENU_DIR_GENERAL = "通用"
+ACCESS_MENU_DASHBOARD = "仪表盘"
+ACCESS_MENU_DIR_SYSTEM = "系统管理"
+ACCESS_MENU_USERS = "用户管理"
+ACCESS_MENU_ROLES = "角色与权限"
+ACCESS_MENU_MENUS = "菜单管理"
+ACCESS_MENU_AUDIT_LOGS = "审计日志"
+
+MENUS_NOT_FOUND = "指定的菜单节点不存在"
+MENUS_CODE_CONFLICT = "菜单编码已存在"
+MENUS_SYSTEM_IMMUTABLE = "系统内置菜单不可删除或修改编码与类型"
+MENUS_HAS_CHILDREN = "请先删除或移走该菜单下的子节点"
+MENUS_CYCLE_DETECTED = "不能将菜单的父级设置为自身或其子孙节点"
+MENUS_INVALID_PARENT = "指定的父级菜单不存在或类型不兼容"
+ACCESS_INVALID_MENU_TYPE = "菜单类型仅支持 directory、menu 或 button"
+ACCESS_INVALID_MENU_TITLE = "菜单名称长度须在 1-100 个字符之间"
+ACCESS_INVALID_MENU_PATH = "菜单路径须以 / 开头且不超过 255 个字符"
+ACCESS_INVALID_MENU_STATUS = "菜单状态仅支持 active 或 disabled"

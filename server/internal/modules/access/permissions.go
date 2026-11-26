@@ -21,6 +21,11 @@ const (
 	PermRolesUpdate = "roles:update"
 	PermRolesDelete = "roles:delete"
 
+	PermMenusRead   = "menus:read"
+	PermMenusCreate = "menus:create"
+	PermMenusUpdate = "menus:update"
+	PermMenusDelete = "menus:delete"
+
 	PermAuditRead = "audit:read"
 
 	PermFilesRead   = "files:read"
@@ -82,6 +87,30 @@ var permissionCatalog = []PermissionDef{
 		Module:         "access",
 		NameKey:        "ACCESS_PERM_ROLES_DELETE_NAME",
 		DescriptionKey: "ACCESS_PERM_ROLES_DELETE_DESC",
+	},
+	{
+		Code:           PermMenusRead,
+		Module:         "access",
+		NameKey:        "ACCESS_PERM_MENUS_READ_NAME",
+		DescriptionKey: "ACCESS_PERM_MENUS_READ_DESC",
+	},
+	{
+		Code:           PermMenusCreate,
+		Module:         "access",
+		NameKey:        "ACCESS_PERM_MENUS_CREATE_NAME",
+		DescriptionKey: "ACCESS_PERM_MENUS_CREATE_DESC",
+	},
+	{
+		Code:           PermMenusUpdate,
+		Module:         "access",
+		NameKey:        "ACCESS_PERM_MENUS_UPDATE_NAME",
+		DescriptionKey: "ACCESS_PERM_MENUS_UPDATE_DESC",
+	},
+	{
+		Code:           PermMenusDelete,
+		Module:         "access",
+		NameKey:        "ACCESS_PERM_MENUS_DELETE_NAME",
+		DescriptionKey: "ACCESS_PERM_MENUS_DELETE_DESC",
 	},
 	{
 		Code:           PermAuditRead,
@@ -172,4 +201,74 @@ func PermissionGroups() []PermissionGroupDef {
 // SystemRoles returns a defensive copy of all built-in system roles.
 func SystemRoles() []SystemRoleDef {
 	return slices.Clone(systemRoleCatalog)
+}
+
+var systemMenuCatalog = []SystemMenuDef{
+	{
+		Code:      "dir_general",
+		Type:      MenuTypeDirectory,
+		TitleKey:  "ACCESS_MENU_DIR_GENERAL",
+		SortOrder: 10,
+	},
+	{
+		ParentCode:     "dir_general",
+		Code:           "menu_dashboard",
+		Type:           MenuTypeMenu,
+		TitleKey:       "ACCESS_MENU_DASHBOARD",
+		Path:           "/",
+		Icon:           "LayoutDashboard",
+		PermissionCode: PermDashboardRead,
+		SortOrder:      10,
+	},
+	{
+		Code:      "dir_system",
+		Type:      MenuTypeDirectory,
+		TitleKey:  "ACCESS_MENU_DIR_SYSTEM",
+		SortOrder: 20,
+	},
+	{
+		ParentCode:     "dir_system",
+		Code:           "menu_users",
+		Type:           MenuTypeMenu,
+		TitleKey:       "ACCESS_MENU_USERS",
+		Path:           "/users",
+		Icon:           "Users",
+		PermissionCode: PermUsersRead,
+		SortOrder:      10,
+	},
+	{
+		ParentCode:     "dir_system",
+		Code:           "menu_roles",
+		Type:           MenuTypeMenu,
+		TitleKey:       "ACCESS_MENU_ROLES",
+		Path:           "/roles",
+		Icon:           "Shield",
+		PermissionCode: PermRolesRead,
+		SortOrder:      20,
+	},
+	{
+		ParentCode:     "dir_system",
+		Code:           "menu_menus",
+		Type:           MenuTypeMenu,
+		TitleKey:       "ACCESS_MENU_MENUS",
+		Path:           "/menus",
+		Icon:           "ListTree",
+		PermissionCode: PermMenusRead,
+		SortOrder:      30,
+	},
+	{
+		ParentCode:     "dir_system",
+		Code:           "menu_audit_logs",
+		Type:           MenuTypeMenu,
+		TitleKey:       "ACCESS_MENU_AUDIT_LOGS",
+		Path:           "/audit-logs",
+		Icon:           "ScrollText",
+		PermissionCode: PermAuditRead,
+		SortOrder:      40,
+	},
+}
+
+// SystemMenus returns a defensive copy of the built-in navigation menu tree.
+func SystemMenus() []SystemMenuDef {
+	return slices.Clone(systemMenuCatalog)
 }

@@ -113,7 +113,8 @@ func (s *Service) SyncCatalog(ctx context.Context) error {
 				}
 			}
 		}
-		return nil
+
+		return s.syncSystemMenus(txCtx)
 	})
 }
 

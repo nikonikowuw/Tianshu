@@ -18,12 +18,25 @@ const (
 	ErrCodeInvalidPermissionCode = "ACCESS_INVALID_PERMISSION_CODE"
 	ErrCodeInvalidNumber         = "ACCESS_INVALID_NUMBER"
 	ErrCodeInvalidBool           = "ACCESS_INVALID_BOOL"
+
+	ErrCodeMenuNotFound        = "MENUS_NOT_FOUND"
+	ErrCodeMenuCodeConflict    = "MENUS_CODE_CONFLICT"
+	ErrCodeMenuSystemImmutable = "MENUS_SYSTEM_IMMUTABLE"
+	ErrCodeMenuHasChildren     = "MENUS_HAS_CHILDREN"
+	ErrCodeMenuCycleDetected   = "MENUS_CYCLE_DETECTED"
+	ErrCodeMenuInvalidParent   = "MENUS_INVALID_PARENT"
+	ErrCodeInvalidMenuType     = "ACCESS_INVALID_MENU_TYPE"
+	ErrCodeInvalidMenuTitle    = "ACCESS_INVALID_MENU_TITLE"
+	ErrCodeInvalidMenuPath     = "ACCESS_INVALID_MENU_PATH"
+	ErrCodeInvalidMenuStatus   = "ACCESS_INVALID_MENU_STATUS"
 )
 
 // Internal store sentinels translated by Service into apperr.Error.
 var (
 	errRoleNotFound     = errors.New("role not found")
 	errRoleCodeConflict = errors.New("role code already exists")
+	errMenuNotFound     = errors.New("menu not found")
+	errMenuCodeConflict = errors.New("menu code already exists")
 )
 
 func roleNotFoundError() *apperr.Error {
@@ -36,6 +49,26 @@ func roleInUseError() *apperr.Error {
 
 func roleSystemImmutableError() *apperr.Error {
 	return apperr.Conflict(ErrCodeRoleSystemImmutable)
+}
+
+func menuNotFoundError() *apperr.Error {
+	return apperr.NotFound(ErrCodeMenuNotFound)
+}
+
+func menuCodeConflictError() *apperr.Error {
+	return apperr.Conflict(ErrCodeMenuCodeConflict)
+}
+
+func menuSystemImmutableError() *apperr.Error {
+	return apperr.Conflict(ErrCodeMenuSystemImmutable)
+}
+
+func menuHasChildrenError() *apperr.Error {
+	return apperr.Conflict(ErrCodeMenuHasChildren)
+}
+
+func menuCycleDetectedError() *apperr.Error {
+	return apperr.Conflict(ErrCodeMenuCycleDetected)
 }
 
 func roleCodeConflictError() *apperr.Error {
