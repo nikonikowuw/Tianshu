@@ -3,23 +3,28 @@ package identity
 import (
 	"context"
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"tianshu/internal/modules/identity/internal/dbgen"
 	"tianshu/internal/platform/database"
 )
 
-type store interface {
-	CountUsers(ctx context.Context) (int64, error)
-	CreateUser(ctx context.Context, params createUserRecord) (User, error)
-	GetUserForAuthByIdentifier(ctx context.Context, normalizedIdentifier string) (AuthCredentials, error)
-	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
-	UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error
-	UpdateUserPasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error
+type listUsersQuery struct {
+	Q         string
+	Statuses  []string
+	FilterIDs bool
+	IDs       []uuid.UUID
+	Sort      string
+	Order     string
+	Offset    int32
+	Limit     int32
 }
 
 type createUserRecord struct {
@@ -31,6 +36,32 @@ type createUserRecord struct {
 	Status       string
 	CreatedBy    uuid.NullUUID
 	UpdatedBy    uuid.NullUUID
+}
+
+type updateUserProfileRecord struct {
+	ID          uuid.UUID
+	Email       string
+	DisplayName string
+	Status      string
+	UpdatedBy   *uuid.UUID
+}
+
+type store interface {
+	CountUsers(ctx context.Context) (int64, error)
+	CreateUser(ctx context.Context, params createUserRecord) (User, error)
+	GetUserForAuthByIdentifier(ctx context.Context, normalizedIdentifier string) (AuthCredentials, error)
+	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
+	UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error
+	UpdateUserPasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error
+
+	CountUsersFiltered(ctx context.Context, q listUsersQuery) (int64, error)
+	ListUsers(ctx context.Context, q listUsersQuery) ([]UserDetail, error)
+	GetUserDetailByID(ctx context.Context, id uuid.UUID) (UserDetail, error)
+	GetUserByIDForUpdate(ctx context.Context, id uuid.UUID) (User, error)
+	UpdateUserProfile(ctx context.Context, rec updateUserProfileRecord) error
+	UpdateUserPasswordByAdmin(ctx context.Context, id uuid.UUID, passwordHash string, updatedBy *uuid.UUID) error
+	SoftDeleteUser(ctx context.Context, id uuid.UUID, updatedBy *uuid.UUID) error
+	CountActiveUsersByIDs(ctx context.Context, ids []uuid.UUID) (int64, error)
 }
 
 type pgStore struct {
@@ -63,14 +94,8 @@ func (s *pgStore) CreateUser(ctx context.Context, rec createUserRecord) (User, e
 		UpdatedBy:    rec.UpdatedBy,
 	})
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			switch pgErr.ConstraintName {
-			case "uq_users_username_lower":
-				return User{}, errUsernameConflict
-			case "uq_users_email_lower":
-				return User{}, errEmailConflict
-			}
+		if mapped := mapUserUniqueConflict(err); mapped != nil {
+			return User{}, mapped
 		}
 		return User{}, err
 	}
@@ -81,8 +106,8 @@ func (s *pgStore) CreateUser(ctx context.Context, rec createUserRecord) (User, e
 		Email:       row.Email,
 		DisplayName: row.DisplayName,
 		Status:      row.Status,
-		CreatedAt:   row.CreatedAt.Time,
-		UpdatedAt:   row.UpdatedAt.Time,
+		CreatedAt:   row.CreatedAt.Time.UTC(),
+		UpdatedAt:   row.UpdatedAt.Time.UTC(),
 	}, nil
 }
 
@@ -118,8 +143,8 @@ func (s *pgStore) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		Email:       row.Email,
 		DisplayName: row.DisplayName,
 		Status:      row.Status,
-		CreatedAt:   row.CreatedAt.Time,
-		UpdatedAt:   row.UpdatedAt.Time,
+		CreatedAt:   row.CreatedAt.Time.UTC(),
+		UpdatedAt:   row.UpdatedAt.Time.UTC(),
 	}, nil
 }
 
@@ -132,4 +157,194 @@ func (s *pgStore) UpdateUserPasswordHash(ctx context.Context, id uuid.UUID, pass
 		ID:           id,
 		PasswordHash: passwordHash,
 	})
+}
+
+func (s *pgStore) CountUsersFiltered(ctx context.Context, q listUsersQuery) (int64, error) {
+	return s.queries(ctx).CountUsersFiltered(ctx, dbgen.CountUsersFilteredParams{
+		Q:         escapeLikePattern(q.Q),
+		Statuses:  nonNilStrings(q.Statuses),
+		FilterIds: q.FilterIDs,
+		Ids:       nonNilUUIDs(q.IDs),
+	})
+}
+
+func (s *pgStore) ListUsers(ctx context.Context, q listUsersQuery) ([]UserDetail, error) {
+	rows, err := s.queries(ctx).ListUsers(ctx, dbgen.ListUsersParams{
+		Q:          escapeLikePattern(q.Q),
+		Statuses:   nonNilStrings(q.Statuses),
+		FilterIds:  q.FilterIDs,
+		Ids:        nonNilUUIDs(q.IDs),
+		SortBy:     q.Sort,
+		SortOrder:  q.Order,
+		PageOffset: q.Offset,
+		PageLimit:  q.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UserDetail, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, mapDetailRow(
+			r.ID, r.Username, r.Email, r.DisplayName, r.Status,
+			r.LastLoginAt, r.CreatedBy, r.CreatedByUsername, r.UpdatedBy, r.UpdatedByUsername,
+			r.CreatedAt, r.UpdatedAt,
+		))
+	}
+	return out, nil
+}
+
+func (s *pgStore) GetUserDetailByID(ctx context.Context, id uuid.UUID) (UserDetail, error) {
+	r, err := s.queries(ctx).GetUserDetailByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UserDetail{}, errUserNotFound
+	}
+	if err != nil {
+		return UserDetail{}, err
+	}
+	return mapDetailRow(
+		r.ID, r.Username, r.Email, r.DisplayName, r.Status,
+		r.LastLoginAt, r.CreatedBy, r.CreatedByUsername, r.UpdatedBy, r.UpdatedByUsername,
+		r.CreatedAt, r.UpdatedAt,
+	), nil
+}
+
+func (s *pgStore) GetUserByIDForUpdate(ctx context.Context, id uuid.UUID) (User, error) {
+	r, err := s.queries(ctx).GetUserByIDForUpdate(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, errUserNotFound
+	}
+	if err != nil {
+		return User{}, err
+	}
+	return User{
+		ID:          r.ID,
+		Username:    r.Username,
+		Email:       r.Email,
+		DisplayName: r.DisplayName,
+		Status:      r.Status,
+		CreatedAt:   r.CreatedAt.Time.UTC(),
+		UpdatedAt:   r.UpdatedAt.Time.UTC(),
+	}, nil
+}
+
+func (s *pgStore) UpdateUserProfile(ctx context.Context, rec updateUserProfileRecord) error {
+	_, err := s.queries(ctx).UpdateUserProfile(ctx, dbgen.UpdateUserProfileParams{
+		ID:          rec.ID,
+		Email:       rec.Email,
+		DisplayName: rec.DisplayName,
+		Status:      rec.Status,
+		UpdatedBy:   ptrToNullUUID(rec.UpdatedBy),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errUserNotFound
+	}
+	if err != nil {
+		if mapped := mapUserUniqueConflict(err); mapped != nil {
+			return mapped
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *pgStore) UpdateUserPasswordByAdmin(ctx context.Context, id uuid.UUID, passwordHash string, updatedBy *uuid.UUID) error {
+	return s.queries(ctx).UpdateUserPasswordByAdmin(ctx, dbgen.UpdateUserPasswordByAdminParams{
+		ID:           id,
+		PasswordHash: passwordHash,
+		UpdatedBy:    ptrToNullUUID(updatedBy),
+	})
+}
+
+func (s *pgStore) SoftDeleteUser(ctx context.Context, id uuid.UUID, updatedBy *uuid.UUID) error {
+	return s.queries(ctx).SoftDeleteUser(ctx, dbgen.SoftDeleteUserParams{
+		ID:        id,
+		UpdatedBy: ptrToNullUUID(updatedBy),
+	})
+}
+
+func (s *pgStore) CountActiveUsersByIDs(ctx context.Context, ids []uuid.UUID) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	return s.queries(ctx).CountActiveUsersByIDs(ctx, ids)
+}
+
+func mapDetailRow(
+	id uuid.UUID,
+	username, email, displayName, status string,
+	lastLoginAt pgtype.Timestamptz,
+	createdBy uuid.NullUUID,
+	createdByUsername pgtype.Text,
+	updatedBy uuid.NullUUID,
+	updatedByUsername pgtype.Text,
+	createdAt, updatedAt pgtype.Timestamptz,
+) UserDetail {
+	var lastLoginPtr *time.Time
+	if lastLoginAt.Valid {
+		t := lastLoginAt.Time.UTC()
+		lastLoginPtr = &t
+	}
+	return UserDetail{
+		ID:          id,
+		Username:    username,
+		Email:       email,
+		DisplayName: displayName,
+		Status:      status,
+		LastLoginAt: lastLoginPtr,
+		Roles:       make([]RoleRef, 0),
+		CreatedBy:   toActorRef(createdBy, createdByUsername),
+		UpdatedBy:   toActorRef(updatedBy, updatedByUsername),
+		CreatedAt:   createdAt.Time.UTC(),
+		UpdatedAt:   updatedAt.Time.UTC(),
+	}
+}
+
+func toActorRef(id uuid.NullUUID, username pgtype.Text) *ActorRef {
+	if !id.Valid {
+		return nil
+	}
+	return &ActorRef{
+		ID:       id.UUID,
+		Username: username.String,
+	}
+}
+
+func ptrToNullUUID(val *uuid.UUID) uuid.NullUUID {
+	if val == nil || *val == uuid.Nil {
+		return uuid.NullUUID{}
+	}
+	return uuid.NullUUID{UUID: *val, Valid: true}
+}
+
+func mapUserUniqueConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		switch pgErr.ConstraintName {
+		case "uq_users_username_lower":
+			return errUsernameConflict
+		case "uq_users_email_lower":
+			return errEmailConflict
+		}
+	}
+	return nil
+}
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func escapeLikePattern(s string) string {
+	return likeEscaper.Replace(s)
+}
+
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return make([]string, 0)
+	}
+	return in
+}
+
+func nonNilUUIDs(in []uuid.UUID) []uuid.UUID {
+	if in == nil {
+		return make([]uuid.UUID, 0)
+	}
+	return in
 }

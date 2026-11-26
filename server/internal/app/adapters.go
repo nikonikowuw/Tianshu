@@ -182,3 +182,91 @@ func (a *accessActorAdapter) GetUsername(ctx context.Context, userID uuid.UUID) 
 	}
 	return user.Username, nil
 }
+
+// identityAccessAdapter bridges access.Service into identity.RoleManager.
+type identityAccessAdapter struct {
+	svc *access.Service
+}
+
+var _ identity.RoleManager = (*identityAccessAdapter)(nil)
+
+func (a *identityAccessAdapter) ResolveRoles(ctx context.Context, ids []uuid.UUID) ([]identity.RoleRef, error) {
+	refs, err := a.svc.ResolveRoles(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	return toIdentityRoleRefs(refs), nil
+}
+
+func (a *identityAccessAdapter) ListRolesByUserIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID][]identity.RoleRef, error) {
+	m, err := a.svc.ListRolesByUserIDs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID][]identity.RoleRef, len(m))
+	for uid, refs := range m {
+		out[uid] = toIdentityRoleRefs(refs)
+	}
+	return out, nil
+}
+
+func (a *identityAccessAdapter) ListUserIDsByRoleIDs(ctx context.Context, roleIDs []uuid.UUID) ([]uuid.UUID, error) {
+	return a.svc.ListUserIDsByRoleIDs(ctx, roleIDs)
+}
+
+func (a *identityAccessAdapter) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error) {
+	return a.svc.ListUserIDsByRoleCode(ctx, code)
+}
+
+func (a *identityAccessAdapter) ReplaceUserRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
+	return a.svc.ReplaceUserRoles(ctx, userID, roleIDs)
+}
+
+func toIdentityRoleRefs(in []access.RoleRef) []identity.RoleRef {
+	out := make([]identity.RoleRef, 0, len(in))
+	for _, r := range in {
+		out = append(out, identity.RoleRef{
+			ID:       r.ID,
+			Code:     r.Code,
+			Name:     r.Name,
+			NameKey:  r.NameKey,
+			IsSystem: r.IsSystem,
+		})
+	}
+	return out
+}
+
+// identitySessionAdapter bridges auth.Service into identity.SessionRevoker using late binding to break construction order cycles.
+type identitySessionAdapter struct {
+	svc *auth.Service
+}
+
+var _ identity.SessionRevoker = (*identitySessionAdapter)(nil)
+
+func (a *identitySessionAdapter) RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) error {
+	if a.svc == nil {
+		return nil
+	}
+	return a.svc.RevokeAllUserSessions(ctx, userID)
+}
+
+// identityAuditAdapter bridges audit.Service into identity.AuditRecorder.
+type identityAuditAdapter struct {
+	svc *audit.Service
+}
+
+var _ identity.AuditRecorder = (*identityAuditAdapter)(nil)
+
+func (a *identityAuditAdapter) Record(ctx context.Context, entry identity.AuditEntry) error {
+	return a.svc.Record(ctx, audit.RecordInput{
+		ActorID:       entry.ActorID,
+		ActorUsername: entry.ActorUsername,
+		Action:        entry.Action,
+		Resource:      entry.Resource,
+		ResourceID:    entry.ResourceID,
+		Status:        entry.Status,
+		IPAddress:     entry.IPAddress,
+		UserAgent:     entry.UserAgent,
+		Metadata:      entry.Metadata,
+	})
+}

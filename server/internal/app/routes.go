@@ -8,6 +8,7 @@ import (
 
 	"tianshu/internal/modules/access"
 	"tianshu/internal/modules/auth"
+	"tianshu/internal/modules/identity"
 	"tianshu/internal/platform/httpserver"
 	"tianshu/internal/shared/apperr"
 	"tianshu/internal/webui"
@@ -34,10 +35,19 @@ func (a *App) registerRoutes() {
 		a.authHandler.RegisterRoutes(authedV1)
 		if a.accessHandler != nil && a.access != nil {
 			a.accessHandler.RegisterRoutes(authedV1, access.RoutePermissions{
-				RequireRead:   access.RequirePermission(a.access, access.PermRolesRead),
-				RequireCreate: access.RequirePermission(a.access, access.PermRolesCreate),
-				RequireUpdate: access.RequirePermission(a.access, access.PermRolesUpdate),
-				RequireDelete: access.RequirePermission(a.access, access.PermRolesDelete),
+				RequireRead:    access.RequirePermission(a.access, access.PermRolesRead),
+				RequireOptions: access.RequireAnyPermission(a.access, access.PermUsersRead, access.PermRolesRead),
+				RequireCreate:  access.RequirePermission(a.access, access.PermRolesCreate),
+				RequireUpdate:  access.RequirePermission(a.access, access.PermRolesUpdate),
+				RequireDelete:  access.RequirePermission(a.access, access.PermRolesDelete),
+			})
+		}
+		if a.identityHandler != nil && a.access != nil {
+			a.identityHandler.RegisterRoutes(authedV1, identity.RoutePermissions{
+				RequireRead:   access.RequirePermission(a.access, access.PermUsersRead),
+				RequireCreate: access.RequirePermission(a.access, access.PermUsersCreate),
+				RequireUpdate: access.RequirePermission(a.access, access.PermUsersUpdate),
+				RequireDelete: access.RequirePermission(a.access, access.PermUsersDelete),
 			})
 		}
 		if a.auditHandler != nil && a.access != nil {
