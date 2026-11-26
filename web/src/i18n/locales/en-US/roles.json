@@ -48,6 +48,14 @@
     "selectAll": "Select all",
     "clearAll": "Clear all",
     "permissionsLoadFailed": "Failed to load permission catalog",
+    "otherPermissions": "Other Unbound Permissions",
+    "expandAll": "Expand",
+    "collapseAll": "Collapse",
+    "nodeTypes": {
+      "directory": "Dir",
+      "menu": "Menu",
+      "button": "Action"
+    },
     "saveCreate": "Create Role",
     "saveEdit": "Save Changes",
     "close": "Close"

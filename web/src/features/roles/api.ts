@@ -3,6 +3,7 @@ import type {
   CreateRolePayload,
   PermissionsCatalogResponse,
   RoleItem,
+  RoleMenuTreeResponse,
   RolesListParams,
   RolesPage,
   UpdateRolePayload,
@@ -37,6 +38,15 @@ export async function fetchPermissionsCatalog(
     '/permissions',
     { signal }
   )
+  return response.data
+}
+
+export async function fetchRoleMenuTree(
+  signal?: AbortSignal
+): Promise<RoleMenuTreeResponse> {
+  const response = await apiClient.get<RoleMenuTreeResponse>('/menus/tree', {
+    signal,
+  })
   return response.data
 }
 

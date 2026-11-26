@@ -9,7 +9,6 @@ import { normalizeApiError } from '@/lib/api/error'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Form,
   FormControl,
@@ -34,6 +33,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import {
   permissionsCatalogQueryOptions,
+  roleMenuTreeQueryOptions,
   useCreateRoleMutation,
   useUpdateRoleMutation,
 } from '../queries'
@@ -43,6 +43,7 @@ import {
   type RoleFormValues,
 } from '../schema'
 import type { RoleItem } from '../types'
+import { RolePermissionTree } from './role-permission-tree'
 
 export type RoleSheetMode = 'create' | 'edit' | 'view'
 
@@ -107,6 +108,11 @@ export function RoleFormSheet({
     enabled: open,
   })
 
+  const { data: menuTreeData } = useQuery({
+    ...roleMenuTreeQueryOptions(i18n.language),
+    enabled: open,
+  })
+
   const createMutation = useCreateRoleMutation()
   const updateMutation = useUpdateRoleMutation()
   const isSubmitting = createMutation.isPending || updateMutation.isPending
@@ -144,10 +150,6 @@ export function RoleFormSheet({
     () => watchedPermissions ?? [],
     [watchedPermissions]
   )
-  const selectedSet = useMemo(
-    () => new Set(selectedPermissions),
-    [selectedPermissions]
-  )
 
   const allPermissionCodes = useMemo(() => {
     if (!catalog) return []
@@ -160,30 +162,6 @@ export function RoleFormSheet({
       shouldDirty: true,
       shouldValidate: true,
     })
-  }
-
-  const togglePermission = (code: string, checked: boolean) => {
-    if (isReadOnly) return
-    const next = new Set(selectedPermissions)
-    if (checked) {
-      next.add(code)
-    } else {
-      next.delete(code)
-    }
-    updatePermissionsField(Array.from(next))
-  }
-
-  const toggleGroup = (codes: string[], checked: boolean) => {
-    if (isReadOnly) return
-    const next = new Set(selectedPermissions)
-    for (const code of codes) {
-      if (checked) {
-        next.add(code)
-      } else {
-        next.delete(code)
-      }
-    }
-    updatePermissionsField(Array.from(next))
   }
 
   const handleSubmit = form.handleSubmit(async (values) => {
@@ -429,92 +407,13 @@ export function RoleFormSheet({
                           </AlertDescription>
                         </Alert>
                       ) : (
-                        <div className='space-y-3'>
-                          {catalog?.groups.map((group) => {
-                            const groupCodes = group.permissions.map(
-                              (p) => p.code
-                            )
-                            const selectedCount = groupCodes.filter((c) =>
-                              selectedSet.has(c)
-                            ).length
-                            const allSelected =
-                              groupCodes.length > 0 &&
-                              selectedCount === groupCodes.length
-                            const someSelected =
-                              selectedCount > 0 && !allSelected
-                            const groupChecked: boolean | 'indeterminate' =
-                              allSelected
-                                ? true
-                                : someSelected
-                                  ? 'indeterminate'
-                                  : false
-
-                            return (
-                              <div
-                                key={group.module}
-                                className='rounded-lg border bg-card'
-                              >
-                                <div className='flex items-center justify-between border-b bg-muted/35 px-3.5 py-2.5'>
-                                  <label className='flex cursor-pointer items-center gap-2.5 text-sm font-medium'>
-                                    <Checkbox
-                                      checked={groupChecked}
-                                      disabled={isReadOnly || isSubmitting}
-                                      aria-label={group.label}
-                                      className='data-[state=indeterminate]:border-primary data-[state=indeterminate]:bg-primary/20 data-[state=indeterminate]:text-primary'
-                                      onCheckedChange={(checked) =>
-                                        toggleGroup(
-                                          groupCodes,
-                                          checked === true
-                                        )
-                                      }
-                                    />
-                                    <span>{group.label}</span>
-                                  </label>
-                                  <span className='font-mono text-xs text-muted-foreground tabular-nums'>
-                                    {selectedCount}/{groupCodes.length}
-                                  </span>
-                                </div>
-
-                                <div className='grid gap-1 p-2 sm:grid-cols-2'>
-                                  {group.permissions.map((perm) => {
-                                    const checked = selectedSet.has(perm.code)
-                                    return (
-                                      <label
-                                        key={perm.code}
-                                        className='flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-2 transition-colors hover:bg-muted/50'
-                                      >
-                                        <Checkbox
-                                          checked={checked}
-                                          disabled={isReadOnly || isSubmitting}
-                                          className='mt-0.5'
-                                          onCheckedChange={(val) =>
-                                            togglePermission(
-                                              perm.code,
-                                              val === true
-                                            )
-                                          }
-                                        />
-                                        <div className='min-w-0 flex-1'>
-                                          <div className='text-sm leading-tight font-medium'>
-                                            {perm.name}
-                                          </div>
-                                          {perm.description && (
-                                            <p className='mt-0.5 text-xs leading-snug text-muted-foreground'>
-                                              {perm.description}
-                                            </p>
-                                          )}
-                                          <span className='mt-1 inline-block font-mono text-[11px] text-muted-foreground/80'>
-                                            {perm.code}
-                                          </span>
-                                        </div>
-                                      </label>
-                                    )
-                                  })}
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
+                        <RolePermissionTree
+                          menuTree={menuTreeData?.items ?? []}
+                          groups={catalog?.groups ?? []}
+                          selectedPermissions={selectedPermissions}
+                          disabled={isReadOnly || isSubmitting}
+                          onChange={updatePermissionsField}
+                        />
                       )}
                       <FormMessage />
                     </FormItem>

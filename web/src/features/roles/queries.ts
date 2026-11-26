@@ -8,6 +8,7 @@ import {
   createRole,
   deleteRole,
   fetchPermissionsCatalog,
+  fetchRoleMenuTree,
   fetchRoles,
   updateRole,
 } from './api'
@@ -22,6 +23,16 @@ export const rolesKeys = {
   list: (params: RolesListParams, lang: string) =>
     ['roles', 'list', lang, params] as const,
   permissions: (lang: string) => ['permissions', 'catalog', lang] as const,
+  menuTree: (lang: string) => ['roles', 'menu-tree', lang] as const,
+}
+
+export function roleMenuTreeQueryOptions(lang: string) {
+  return queryOptions({
+    queryKey: rolesKeys.menuTree(lang),
+    queryFn: ({ signal }) => fetchRoleMenuTree(signal),
+    staleTime: 60 * 1000,
+    meta: { silent: true },
+  })
 }
 
 export function permissionsCatalogQueryOptions(lang: string) {
