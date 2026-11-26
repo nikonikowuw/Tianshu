@@ -1,7 +1,21 @@
-import { type SVGProps } from 'react'
+import { useId, type SVGProps } from 'react'
 import { cn } from '@/lib/utils'
 
-export function Logo({ className, ...props }: SVGProps<SVGSVGElement>) {
+type LogoProps = SVGProps<SVGSVGElement> & {
+  /**
+   * - `mono`: inherits currentColor for small UI surfaces (sidebar, buttons, glass badges).
+   * - `brand`: uses the aurora gradient palette for standalone brand showcases.
+   */
+  variant?: 'mono' | 'brand'
+}
+
+/**
+ * Tianshu (天枢) brand mark: 270° armillary arc, central T-pivot, and Dubhe polar beacon.
+ */
+export function Logo({ variant = 'mono', className, ...props }: LogoProps) {
+  const gradientId = useId()
+  const isBrand = variant === 'brand'
+
   return (
     <svg
       viewBox='0 0 24 24'
@@ -9,22 +23,40 @@ export function Logo({ className, ...props }: SVGProps<SVGSVGElement>) {
       height='24'
       width='24'
       fill='none'
-      stroke='currentColor'
-      strokeWidth='1.75'
+      stroke={isBrand ? `url(#${gradientId})` : 'currentColor'}
+      strokeWidth='2.2'
       strokeLinecap='round'
       strokeLinejoin='round'
-      className={cn('size-6', className)}
+      aria-hidden='true'
+      className={cn('size-6 shrink-0', className)}
       {...props}
     >
-      <title>Tianshu</title>
-      {/* Open celestial orbit arc */}
-      <path d='M20.34 8.63A9 9 0 1 1 15.37 3.66' />
+      {isBrand && (
+        <defs>
+          <linearGradient
+            id={gradientId}
+            x1='3'
+            y1='21'
+            x2='21'
+            y2='3'
+            gradientUnits='userSpaceOnUse'
+          >
+            <stop offset='0%' stopColor='#93c5fd' />
+            <stop offset='55%' stopColor='#e0e7ff' />
+            <stop offset='100%' stopColor='#67e8f9' />
+          </linearGradient>
+        </defs>
+      )}
+      {/* 270° celestial armillary arc open toward the northeast polar bearing */}
+      <path d='M20.25 12A8.25 8.25 0 1 1 12 3.75' />
+      {/* Central T-pivot representing Tianshu and the core system hub */}
+      <path d='M8.5 9.25H15.5M12 9.25V16.25' />
       {/* Dubhe (天枢) polar beacon */}
-      <circle cx='18.36' cy='5.64' r='1.6' fill='currentColor' stroke='none' />
-      {/* Central compass pivot star */}
-      <path
-        d='M12 6.75L13.25 10.75L17.25 12L13.25 13.25L12 17.25L10.75 13.25L6.75 12L10.75 10.75Z'
-        fill='currentColor'
+      <circle
+        cx='17.85'
+        cy='6.15'
+        r='2.1'
+        fill={isBrand ? '#67e8f9' : 'currentColor'}
         stroke='none'
       />
     </svg>

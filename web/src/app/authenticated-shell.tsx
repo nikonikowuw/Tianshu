@@ -26,6 +26,7 @@ export function AuthenticatedShell() {
   return (
     <AuthenticatedLayout
       appName={t('appName')}
+      appSubtitle={t('appSubtitle')}
       navGroups={navGroups}
       user={{
         name: user?.displayName || user?.username || 'User',

@@ -11,6 +11,7 @@ import { type LayoutUser, type NavGroup } from './types'
 
 type AuthenticatedLayoutProps = {
   appName: string
+  appSubtitle?: string
   navGroups: NavGroup[]
   user: LayoutUser
   onSignOut: () => Promise<void> | void
@@ -19,6 +20,7 @@ type AuthenticatedLayoutProps = {
 
 export function AuthenticatedLayout({
   appName,
+  appSubtitle,
   navGroups,
   user,
   onSignOut,
@@ -33,6 +35,7 @@ export function AuthenticatedLayout({
           <SkipToMain />
           <AppSidebar
             appName={appName}
+            appSubtitle={appSubtitle}
             navGroups={navGroups}
             user={user}
             onSignOut={onSignOut}

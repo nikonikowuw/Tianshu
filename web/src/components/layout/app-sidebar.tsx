@@ -17,6 +17,7 @@ import { type LayoutUser, type NavGroup as NavGroupType } from './types'
 
 type AppSidebarProps = {
   appName: string
+  appSubtitle?: string
   navGroups: NavGroupType[]
   user: LayoutUser
   onSignOut: () => Promise<void> | void
@@ -24,6 +25,7 @@ type AppSidebarProps = {
 
 export function AppSidebar({
   appName,
+  appSubtitle,
   navGroups,
   user,
   onSignOut,
@@ -36,12 +38,19 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size='lg' asChild>
-              <Link to='/'>
-                <div className='flex size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground'>
-                  <Logo className='size-4' />
+              <Link to='/' aria-label={appName}>
+                <div className='flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground'>
+                  <Logo className='size-[18px]' />
                 </div>
-                <div className='grid flex-1 text-start text-sm leading-tight'>
-                  <span className='truncate font-semibold'>{appName}</span>
+                <div className='grid flex-1 gap-0.5 text-start leading-none group-data-[collapsible=icon]:hidden'>
+                  <span className='truncate font-brand text-[15.5px] font-bold tracking-[-0.025em]'>
+                    {appName}
+                  </span>
+                  {appSubtitle && (
+                    <span className='truncate text-[11px] font-medium tracking-[0.02em] text-sidebar-foreground/60'>
+                      {appSubtitle}
+                    </span>
+                  )}
                 </div>
               </Link>
             </SidebarMenuButton>
