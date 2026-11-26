@@ -1,6 +1,20 @@
 # Access module roles, permissions, and errors (en-US)
 ACCESS_ROLE_NOT_FOUND = "Requested role was not found"
 ROLES_IN_USE = "Role is currently assigned to users and cannot be deleted"
+ROLES_SYSTEM_IMMUTABLE = "Built-in system role cannot be modified or deleted"
+ROLES_CODE_CONFLICT = "Role code already exists"
+ACCESS_INVALID_ROLE_CODE = "Role code must be 2-64 lowercase letters, digits, underscores, or hyphens starting with a letter"
+ACCESS_INVALID_ROLE_NAME = "Role name must be between 1 and 100 characters"
+ACCESS_INVALID_ROLE_DESCRIPTION = "Role description must not exceed 500 characters"
+ACCESS_INVALID_PERMISSION_CODE = "Contains an unknown permission code"
+ACCESS_INVALID_NUMBER = "Must be a valid integer"
+ACCESS_INVALID_BOOL = "Must be a valid boolean (true or false)"
+
+ACCESS_MODULE_DASHBOARD = "Dashboard"
+ACCESS_MODULE_IDENTITY = "Users"
+ACCESS_MODULE_ACCESS = "Roles & Permissions"
+ACCESS_MODULE_AUDIT = "Audit Logs"
+ACCESS_MODULE_FILES = "Files"
 
 ACCESS_ROLE_SUPER_ADMIN_NAME = "Super Administrator"
 ACCESS_ROLE_SUPER_ADMIN_DESC = "Built-in system role with full access to all capabilities"

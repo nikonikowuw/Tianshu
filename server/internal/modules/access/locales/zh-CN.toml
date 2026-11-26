@@ -1,6 +1,20 @@
 # Access module roles, permissions, and errors (zh-CN)
 ACCESS_ROLE_NOT_FOUND = "指定的角色不存在"
 ROLES_IN_USE = "该角色仍绑定了用户，无法删除"
+ROLES_SYSTEM_IMMUTABLE = "系统内置角色不可修改或删除"
+ROLES_CODE_CONFLICT = "角色编码已存在"
+ACCESS_INVALID_ROLE_CODE = "角色编码须为 2-64 位小写字母、数字、下划线或连字符，且以小写字母开头"
+ACCESS_INVALID_ROLE_NAME = "角色名称长度须在 1-100 个字符之间"
+ACCESS_INVALID_ROLE_DESCRIPTION = "角色描述长度不能超过 500 个字符"
+ACCESS_INVALID_PERMISSION_CODE = "包含未注册的权限码"
+ACCESS_INVALID_NUMBER = "必须是有效的整数"
+ACCESS_INVALID_BOOL = "必须是有效的布尔值（true 或 false）"
+
+ACCESS_MODULE_DASHBOARD = "仪表盘"
+ACCESS_MODULE_IDENTITY = "用户管理"
+ACCESS_MODULE_ACCESS = "角色与权限"
+ACCESS_MODULE_AUDIT = "审计日志"
+ACCESS_MODULE_FILES = "文件管理"
 
 ACCESS_ROLE_SUPER_ADMIN_NAME = "超级管理员"
 ACCESS_ROLE_SUPER_ADMIN_DESC = "系统内置最高权限角色，拥有全部功能权限"

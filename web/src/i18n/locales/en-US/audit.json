@@ -30,7 +30,10 @@
     "authLogin": "Sign In (auth.login)",
     "authLogout": "Sign Out (auth.logout)",
     "authRefresh": "Token Refresh (auth.refresh)",
-    "authRefreshReplay": "Token Replay Alert (auth.refresh_replay)"
+    "authRefreshReplay": "Token Replay Alert (auth.refresh_replay)",
+    "roleCreate": "Create Role (role.create)",
+    "roleUpdate": "Update Role (role.update)",
+    "roleDelete": "Delete Role (role.delete)"
   },
   "resources": {
     "system": "System (system)",

@@ -30,7 +30,10 @@
     "authLogin": "用户登录 (auth.login)",
     "authLogout": "退出登录 (auth.logout)",
     "authRefresh": "令牌刷新 (auth.refresh)",
-    "authRefreshReplay": "令牌重放告警 (auth.refresh_replay)"
+    "authRefreshReplay": "令牌重放告警 (auth.refresh_replay)",
+    "roleCreate": "创建角色 (role.create)",
+    "roleUpdate": "更新角色 (role.update)",
+    "roleDelete": "删除角色 (role.delete)"
   },
   "resources": {
     "system": "系统 (system)",

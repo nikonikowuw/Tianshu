@@ -1,0 +1,74 @@
+{
+  "title": "角色与权限",
+  "description": "管理系统角色定义与细粒度功能权限矩阵，变更即时生效",
+  "createRole": "新增角色",
+  "searchPlaceholder": "搜索角色名称、编码或描述...",
+  "columns": {
+    "name": "角色名称",
+    "code": "角色编码",
+    "description": "描述",
+    "userCount": "关联用户",
+    "permissionCount": "权限数",
+    "updatedAt": "更新时间"
+  },
+  "badges": {
+    "system": "系统内置",
+    "custom": "自定义"
+  },
+  "filters": {
+    "type": "角色类型",
+    "system": "系统内置",
+    "custom": "自定义角色"
+  },
+  "rowActions": {
+    "openMenu": "打开操作菜单",
+    "view": "查看权限",
+    "edit": "编辑角色",
+    "delete": "删除角色"
+  },
+  "sheet": {
+    "createTitle": "新增角色",
+    "createDesc": "创建自定义角色并按模块勾选细粒度权限码。",
+    "editTitle": "编辑角色",
+    "editDesc": "修改角色信息与权限集合，保存后立即对关联用户生效。",
+    "viewTitle": "角色权限详情",
+    "viewSystemDesc": "系统内置角色受保护，拥有全量系统权限且不可修改或删除。",
+    "viewReadOnlyDesc": "当前账号仅拥有查看权限，如需调整请联系管理员。",
+    "codeLabel": "角色编码",
+    "codePlaceholder": "例如：ops_editor",
+    "codeHint": "2-64 位小写字母、数字、下划线或连字符，创建后不可修改。",
+    "nameLabel": "角色名称",
+    "namePlaceholder": "例如：运营编辑",
+    "descriptionLabel": "角色描述",
+    "descriptionPlaceholder": "简要说明该角色的职责边界（可选）",
+    "permissionsLabel": "权限矩阵",
+    "selectedSummary": "已选 {{selected}} / {{total}} 项",
+    "selectAll": "全选",
+    "clearAll": "清空",
+    "permissionsLoadFailed": "权限目录加载失败",
+    "saveCreate": "创建角色",
+    "saveEdit": "保存更改",
+    "close": "关闭"
+  },
+  "deleteDialog": {
+    "title": "删除角色",
+    "description": "确认删除角色「{{name}}」（{{code}}）吗？此操作不可撤销。",
+    "confirm": "确认删除"
+  },
+  "toast": {
+    "created": "角色创建成功",
+    "updated": "角色更新成功",
+    "deleted": "角色已删除"
+  },
+  "empty": {
+    "noDataTitle": "暂无角色数据",
+    "noDataDesc": "点击右上角「新增角色」创建自定义角色并分配权限。",
+    "noMatchTitle": "没有符合筛选条件的角色",
+    "noMatchDesc": "请尝试调整搜索关键词或清除当前筛选条件。",
+    "clearFilters": "清除筛选",
+    "noDescription": "—"
+  },
+  "error": {
+    "loadFailed": "加载角色列表失败"
+  }
+}

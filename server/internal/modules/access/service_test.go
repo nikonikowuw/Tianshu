@@ -1,10 +1,13 @@
 package access
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -12,16 +15,36 @@ import (
 	"tianshu/internal/platform/database"
 	"tianshu/internal/platform/i18n"
 	"tianshu/internal/platform/logger"
+	"tianshu/internal/shared/apperr"
+	"tianshu/internal/shared/pagination"
 )
 
 type fakeStore struct {
 	perms       map[string]PermissionDef
+	rolesByID   map[uuid.UUID]Role
 	rolesByCode map[string]uuid.UUID
 	rolePerms   map[uuid.UUID]map[string]struct{}
 	userRoles   map[uuid.UUID]map[uuid.UUID]struct{}
 
 	listRolesCalls int
 	listPermsCalls int
+}
+
+type fakeAuditRecorder struct {
+	entries []AuditEntry
+}
+
+func (r *fakeAuditRecorder) Record(_ context.Context, entry AuditEntry) error {
+	r.entries = append(r.entries, entry)
+	return nil
+}
+
+type fakeActorResolver struct {
+	names map[uuid.UUID]string
+}
+
+func (r *fakeActorResolver) GetUsername(_ context.Context, userID uuid.UUID) (string, error) {
+	return r.names[userID], nil
 }
 
 type fakeTxRunner struct{}
@@ -33,6 +56,7 @@ func (fakeTxRunner) WithinTx(ctx context.Context, fn func(ctx context.Context) e
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		perms:       make(map[string]PermissionDef),
+		rolesByID:   make(map[uuid.UUID]Role),
 		rolesByCode: make(map[string]uuid.UUID),
 		rolePerms:   make(map[uuid.UUID]map[string]struct{}),
 		userRoles:   make(map[uuid.UUID]map[uuid.UUID]struct{}),
@@ -45,10 +69,25 @@ func (f *fakeStore) UpsertPermission(_ context.Context, def PermissionDef) error
 }
 
 func (f *fakeStore) EnsureSystemRole(_ context.Context, id uuid.UUID, def SystemRoleDef) (uuid.UUID, error) {
-	if existing, ok := f.rolesByCode[def.Code]; ok {
-		return existing, nil
+	if existingID, ok := f.rolesByCode[def.Code]; ok {
+		r := f.rolesByID[existingID]
+		r.NameKey = def.NameKey
+		r.DescriptionKey = def.DescriptionKey
+		r.IsSystem = true
+		f.rolesByID[existingID] = r
+		return existingID, nil
 	}
+	now := time.Now().UTC()
 	f.rolesByCode[def.Code] = id
+	f.rolesByID[id] = Role{
+		ID:             id,
+		Code:           def.Code,
+		NameKey:        def.NameKey,
+		DescriptionKey: def.DescriptionKey,
+		IsSystem:       true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
 	return id, nil
 }
 
@@ -112,6 +151,170 @@ func (f *fakeStore) ListRoleUserIDs(_ context.Context, roleID uuid.UUID) ([]uuid
 		}
 	}
 	return users, nil
+}
+
+func (f *fakeStore) filterRoles(q listRolesQuery) []Role {
+	needle := strings.ToLower(q.Q)
+	out := make([]Role, 0, len(f.rolesByID))
+	for _, r := range f.rolesByID {
+		if q.IsSystem != nil && r.IsSystem != *q.IsSystem {
+			continue
+		}
+		if needle != "" {
+			matched := strings.Contains(strings.ToLower(r.Code), needle) ||
+				strings.Contains(strings.ToLower(r.Name), needle) ||
+				strings.Contains(strings.ToLower(r.Description), needle) ||
+				slices.Contains(q.MatchedSystemCodes, r.Code)
+			if !matched {
+				continue
+			}
+		}
+		var userCount int64
+		for _, roles := range f.userRoles {
+			if _, ok := roles[r.ID]; ok {
+				userCount++
+			}
+		}
+		r.UserCount = userCount
+		r.PermissionCount = int64(len(f.rolePerms[r.ID]))
+		out = append(out, r)
+	}
+	slices.SortFunc(out, func(a, b Role) int {
+		if q.Sort == "" {
+			if a.IsSystem != b.IsSystem {
+				if a.IsSystem {
+					return -1
+				}
+				return 1
+			}
+		}
+		dir := -1
+		if q.Order == "asc" {
+			dir = 1
+		}
+		var res int
+		switch q.Sort {
+		case "code":
+			res = cmp.Compare(a.Code, b.Code)
+		case "name":
+			res = cmp.Compare(a.Name, b.Name)
+		case "updated_at":
+			res = a.UpdatedAt.Compare(b.UpdatedAt)
+		default:
+			res = a.CreatedAt.Compare(b.CreatedAt)
+		}
+		if res != 0 {
+			return res * dir
+		}
+		return cmp.Compare(b.ID.String(), a.ID.String())
+	})
+	return out
+}
+
+func (f *fakeStore) CountRoles(_ context.Context, q listRolesQuery) (int64, error) {
+	return int64(len(f.filterRoles(q))), nil
+}
+
+func (f *fakeStore) ListRoles(_ context.Context, q listRolesQuery) ([]Role, error) {
+	all := f.filterRoles(q)
+	start := int(q.Offset)
+	if start >= len(all) {
+		return make([]Role, 0), nil
+	}
+	end := min(start+int(q.Limit), len(all))
+	return all[start:end], nil
+}
+
+func (f *fakeStore) GetRoleByID(_ context.Context, id uuid.UUID) (Role, error) {
+	r, ok := f.rolesByID[id]
+	if !ok {
+		return Role{}, errRoleNotFound
+	}
+	var userCount int64
+	for _, roles := range f.userRoles {
+		if _, has := roles[id]; has {
+			userCount++
+		}
+	}
+	r.UserCount = userCount
+	r.PermissionCount = int64(len(f.rolePerms[id]))
+	return r, nil
+}
+
+func (f *fakeStore) GetRoleByIDForUpdate(ctx context.Context, id uuid.UUID) (Role, error) {
+	return f.GetRoleByID(ctx, id)
+}
+
+func (f *fakeStore) ListPermissionCodesByRoleIDs(_ context.Context, roleIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
+	res := make(map[uuid.UUID][]string, len(roleIDs))
+	for _, roleID := range roleIDs {
+		perms := make([]string, 0, len(f.rolePerms[roleID]))
+		for code := range f.rolePerms[roleID] {
+			perms = append(perms, code)
+		}
+		slices.Sort(perms)
+		res[roleID] = perms
+	}
+	return res, nil
+}
+
+func (f *fakeStore) CreateRole(_ context.Context, rec createRoleRecord) (Role, error) {
+	if _, exists := f.rolesByCode[rec.Code]; exists {
+		return Role{}, errRoleCodeConflict
+	}
+	now := time.Now().UTC()
+	r := Role{
+		ID:          rec.ID,
+		Code:        rec.Code,
+		Name:        rec.Name,
+		Description: rec.Description,
+		IsSystem:    false,
+		CreatedBy:   rec.ActorID,
+		UpdatedBy:   rec.ActorID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	f.rolesByID[r.ID] = r
+	f.rolesByCode[r.Code] = r.ID
+	return r, nil
+}
+
+func (f *fakeStore) UpdateRole(_ context.Context, rec updateRoleRecord) (Role, error) {
+	r, ok := f.rolesByID[rec.ID]
+	if !ok {
+		return Role{}, errRoleNotFound
+	}
+	r.Name = rec.Name
+	r.Description = rec.Description
+	r.UpdatedBy = rec.ActorID
+	r.UpdatedAt = time.Now().UTC()
+	f.rolesByID[r.ID] = r
+	return r, nil
+}
+
+func (f *fakeStore) DeleteRolePermissions(_ context.Context, roleID uuid.UUID) error {
+	delete(f.rolePerms, roleID)
+	return nil
+}
+
+func (f *fakeStore) CountRoleUsers(_ context.Context, roleID uuid.UUID) (int64, error) {
+	var count int64
+	for _, roles := range f.userRoles {
+		if _, ok := roles[roleID]; ok {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (f *fakeStore) DeleteRole(_ context.Context, id uuid.UUID) error {
+	r, ok := f.rolesByID[id]
+	if ok {
+		delete(f.rolesByCode, r.Code)
+		delete(f.rolesByID, id)
+		delete(f.rolePerms, id)
+	}
+	return nil
 }
 
 func TestSyncCatalogIdempotentAndGrantsAllToSuperAdmin(t *testing.T) {
@@ -209,6 +412,134 @@ func TestGetUserAccessCachesAndDefersInvalidationUntilCommit(t *testing.T) {
 	}
 }
 
+func TestRoleCRUDInvariantsAndCacheInvalidation(t *testing.T) {
+	s := newFakeStore()
+	mem := cache.NewMemory()
+	defer func() { _ = mem.Close() }()
+
+	bundle, err := i18n.NewBundle()
+	if err != nil {
+		t.Fatalf("NewBundle() error = %v", err)
+	}
+	if err := bundle.RegisterFS("access", LocalesFS, "locales"); err != nil {
+		t.Fatalf("RegisterFS() error = %v", err)
+	}
+
+	actorID := uuid.Must(uuid.NewV7())
+	auditRec := &fakeAuditRecorder{}
+	svc := newServiceWithStore(s, fakeTxRunner{}, mem, logger.New("test", "error", io.Discard), ServiceDeps{
+		I18n:   bundle,
+		Audit:  auditRec,
+		Actors: &fakeActorResolver{names: map[uuid.UUID]string{actorID: "root_admin"}},
+	})
+	if err := svc.SyncCatalog(t.Context()); err != nil {
+		t.Fatalf("SyncCatalog() error = %v", err)
+	}
+
+	// Create role deduplicates permissions and records audit.
+	created, err := svc.CreateRole(t.Context(), CreateRoleInput{
+		Code:        "Ops_Viewer",
+		Name:        "Operations Viewer",
+		Description: "Read-only operations access",
+		Permissions: []string{PermUsersRead, PermUsersRead, PermDashboardRead},
+		ActorID:     &actorID,
+	})
+	if err != nil {
+		t.Fatalf("CreateRole() error = %v", err)
+	}
+	if created.Code != "ops_viewer" {
+		t.Fatalf("code = %q, want ops_viewer", created.Code)
+	}
+	if !slices.Equal(created.Permissions, []string{PermDashboardRead, PermUsersRead}) {
+		t.Fatalf("permissions = %v, want [dashboard:read users:read]", created.Permissions)
+	}
+	if len(auditRec.entries) != 1 || auditRec.entries[0].Action != auditActionCreate || auditRec.entries[0].ActorUsername != "root_admin" {
+		t.Fatalf("unexpected audit entry: %+v", auditRec.entries)
+	}
+
+	// Duplicate role code returns 409 ROLES_CODE_CONFLICT.
+	_, err = svc.CreateRole(t.Context(), CreateRoleInput{
+		Code: "ops_viewer",
+		Name: "Duplicate",
+	})
+	assertAppErrCode(t, err, ErrCodeRoleCodeConflict)
+
+	// Unknown permission code returns 422 VALIDATION_FAILED.
+	_, err = svc.CreateRole(t.Context(), CreateRoleInput{
+		Code:        "bad_perm_role",
+		Name:        "Bad Perm",
+		Permissions: []string{"nonexistent:read"},
+	})
+	assertAppErrCode(t, err, apperr.CodeValidationFailed)
+
+	// Assign custom role to a user and warm permission cache.
+	memberID := uuid.Must(uuid.NewV7())
+	if err := svc.AssignRoleByCode(t.Context(), memberID, "ops_viewer"); err != nil {
+		t.Fatalf("AssignRoleByCode() error = %v", err)
+	}
+	hasUpdate, err := svc.HasPermission(t.Context(), memberID, PermUsersUpdate)
+	if err != nil || hasUpdate {
+		t.Fatalf("before update HasPermission(users:update) = %v, err = %v; want false", hasUpdate, err)
+	}
+
+	// Updating permissions invalidates affected user's cache after commit.
+	nextPerms := []string{PermDashboardRead, PermUsersRead, PermUsersUpdate}
+	nextName := "Operations Editor"
+	updated, err := svc.UpdateRole(t.Context(), UpdateRoleInput{
+		RoleID:      created.ID,
+		Name:        &nextName,
+		Permissions: &nextPerms,
+		ActorID:     &actorID,
+	})
+	if err != nil {
+		t.Fatalf("UpdateRole() error = %v", err)
+	}
+	if updated.Name != nextName || len(updated.Permissions) != 3 {
+		t.Fatalf("unexpected updated role: %+v", updated)
+	}
+	hasUpdate, err = svc.HasPermission(t.Context(), memberID, PermUsersUpdate)
+	if err != nil || !hasUpdate {
+		t.Fatalf("after update HasPermission(users:update) = %v, err = %v; want true", hasUpdate, err)
+	}
+
+	// Role in use cannot be deleted.
+	err = svc.DeleteRole(t.Context(), DeleteRoleInput{RoleID: created.ID, ActorID: &actorID})
+	assertAppErrCode(t, err, ErrCodeRoleInUse)
+
+	// Built-in system role cannot be modified or deleted.
+	superAdminID := s.rolesByCode[RoleCodeSuperAdmin]
+	_, err = svc.UpdateRole(t.Context(), UpdateRoleInput{RoleID: superAdminID, Name: &nextName})
+	assertAppErrCode(t, err, ErrCodeRoleSystemImmutable)
+	err = svc.DeleteRole(t.Context(), DeleteRoleInput{RoleID: superAdminID})
+	assertAppErrCode(t, err, ErrCodeRoleSystemImmutable)
+
+	// Localized search matches super_admin by translated Chinese name.
+	res, err := svc.ListRoles(t.Context(), RoleListFilter{
+		Pagination: pagination.Normalize(1, 20),
+		Q:          "超级管理员",
+	})
+	if err != nil {
+		t.Fatalf("ListRoles() error = %v", err)
+	}
+	if res.Total != 1 || len(res.Items) != 1 || res.Items[0].Code != RoleCodeSuperAdmin {
+		t.Fatalf("expected super_admin match for zh-CN query, got %+v", res)
+	}
+
+	// Unused custom role can be deleted.
+	unused, err := svc.CreateRole(t.Context(), CreateRoleInput{
+		Code: "temp_auditor",
+		Name: "Temp Auditor",
+	})
+	if err != nil {
+		t.Fatalf("CreateRole(temp_auditor) error = %v", err)
+	}
+	if err := svc.DeleteRole(t.Context(), DeleteRoleInput{RoleID: unused.ID, ActorID: &actorID}); err != nil {
+		t.Fatalf("DeleteRole(temp_auditor) error = %v", err)
+	}
+	_, err = svc.GetRole(t.Context(), unused.ID)
+	assertAppErrCode(t, err, ErrCodeRoleNotFound)
+}
+
 func TestAccessLocalesCompleteAndMatchCatalog(t *testing.T) {
 	bundle, err := i18n.NewBundle()
 	if err != nil {
@@ -228,5 +559,27 @@ func TestAccessLocalesCompleteAndMatchCatalog(t *testing.T) {
 		if got := bundle.Translate(i18n.LangEnUS, perm.DescriptionKey, nil); got == perm.DescriptionKey {
 			t.Errorf("missing en-US translation for %s", perm.DescriptionKey)
 		}
+	}
+	for _, group := range PermissionGroups() {
+		if got := bundle.Translate(i18n.LangZhCN, group.LabelKey, nil); got == group.LabelKey {
+			t.Errorf("missing zh-CN module label for %s", group.LabelKey)
+		}
+		if got := bundle.Translate(i18n.LangEnUS, group.LabelKey, nil); got == group.LabelKey {
+			t.Errorf("missing en-US module label for %s", group.LabelKey)
+		}
+	}
+}
+
+func assertAppErrCode(t *testing.T, err error, wantCode string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error %s, got nil", wantCode)
+	}
+	appErr, ok := apperr.As(err)
+	if !ok {
+		t.Fatalf("expected apperr.Error %s, got %T: %v", wantCode, err, err)
+	}
+	if appErr.Code != wantCode {
+		t.Fatalf("error code = %s, want %s", appErr.Code, wantCode)
 	}
 }

@@ -45,6 +45,7 @@ export default defineConfig({
     include: [
       '@hookform/resolvers/zod',
       '@radix-ui/react-avatar',
+      '@radix-ui/react-checkbox',
       '@radix-ui/react-collapsible',
       '@radix-ui/react-dialog',
       '@radix-ui/react-dropdown-menu',

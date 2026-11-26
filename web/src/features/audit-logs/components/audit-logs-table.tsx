@@ -195,6 +195,9 @@ export function AuditLogsTable({
             value: 'auth.refresh_replay',
           },
           { label: t('actions.setupInit'), value: 'setup.init' },
+          { label: t('actions.roleCreate'), value: 'role.create' },
+          { label: t('actions.roleUpdate'), value: 'role.update' },
+          { label: t('actions.roleDelete'), value: 'role.delete' },
         ],
       },
       {
