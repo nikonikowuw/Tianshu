@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { I18nextProvider } from 'react-i18next'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import '@/styles/index.css'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
+import { userEvent } from 'vitest/browser'
 import i18n from '@/i18n/index'
 import { ApiError } from '@/lib/api/error'
 import { buildAuditLogsQueryParams } from './api'
@@ -252,5 +254,179 @@ describe('audit-logs feature', () => {
 
     await expect.element(screen.getByText('alice_admin')).toBeVisible()
     await expect.element(alert).not.toBeInTheDocument()
+  })
+
+  it('aligns first column spacing, removes action divider, matches row hover brightness, and highlights action button distinctly', async () => {
+    const pageData: AuditLogsPage = {
+      items: sampleEntries,
+      total: 2,
+      page: 1,
+      pageSize: 20,
+    }
+    getMock.mockResolvedValue({ data: pageData })
+
+    const screen = await renderAuditLogs()
+    await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+    const dataRow = document.querySelector('tbody tr') as HTMLTableRowElement
+    const firstHeader = document.querySelector(
+      'thead th:first-child'
+    ) as HTMLTableCellElement
+    const firstCell = dataRow.querySelector(
+      'td:first-child'
+    ) as HTMLTableCellElement
+    const actionHeader = document.querySelector(
+      'thead th:last-child'
+    ) as HTMLTableCellElement
+    const actionCell = dataRow.querySelector(
+      'td:last-child'
+    ) as HTMLTableCellElement
+    const actionBtn = actionCell.querySelector('button') as HTMLButtonElement
+
+    // 1. First column has comfortable left padding (16px = ps-4) away from table border.
+    expect(getComputedStyle(firstHeader).paddingInlineStart).toBe('16px')
+    expect(getComputedStyle(firstCell).paddingInlineStart).toBe('16px')
+
+    // 2. No vertical divider border between data columns and sticky action column.
+    expect(getComputedStyle(actionHeader).borderInlineStartWidth).toBe('0px')
+    expect(getComputedStyle(actionCell).borderInlineStartWidth).toBe('0px')
+
+    // 3. Hovering a data row makes sticky action cell opaque and brightness-matched to row hover.
+    await userEvent.hover(firstCell)
+    await expect
+      .poll(() => getComputedStyle(actionCell).backgroundColor)
+      .not.toBe(getComputedStyle(document.body).backgroundColor)
+    const rowHoverBg = getComputedStyle(dataRow).backgroundColor
+    const actionCellHoverBg = getComputedStyle(actionCell).backgroundColor
+    expect(rowHoverBg).not.toBe('rgba(0, 0, 0, 0)')
+    // Action cell background must be fully opaque (no alpha channel) so scrolled text never bleeds through.
+    expect(actionCellHoverBg).not.toMatch(/rgba\(|\/\s*0\./)
+
+    // 4. Action button is compact (28x28 inside 48px cell) and highlights distinctly on hover.
+    const btnRect = actionBtn.getBoundingClientRect()
+    const cellRect = actionCell.getBoundingClientRect()
+    expect(btnRect.width).toBe(28)
+    expect(btnRect.height).toBe(28)
+    expect(cellRect.width - btnRect.width).toBeGreaterThanOrEqual(16)
+
+    await userEvent.hover(actionBtn)
+    await expect
+      .poll(() => getComputedStyle(actionBtn).backgroundColor)
+      .not.toBe('rgba(0, 0, 0, 0)')
+    const actionBtnHoverBg = getComputedStyle(actionBtn).backgroundColor
+    expect(actionBtnHoverBg).not.toBe(actionCellHoverBg)
+  })
+
+  it('keeps pagination page indicator inline with page buttons at desktop width', async () => {
+    const pageData: AuditLogsPage = {
+      items: sampleEntries,
+      total: 2,
+      page: 1,
+      pageSize: 20,
+    }
+    getMock.mockResolvedValue({ data: pageData })
+
+    const screen = await renderAuditLogs()
+    await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+    // Ensure container is desktop width (>= 672px / @2xl/pagination).
+    const container = document.querySelector(
+      '[data-slot="data-table-pagination"]'
+    ) as HTMLElement
+    container.style.width = '900px'
+
+    const pageOfTexts = Array.from(container.querySelectorAll('span')).filter(
+      (el) =>
+        !el.classList.contains('sr-only') &&
+        /第\s*1\s*\/\s*1\s*页|Page 1 of 1/.test(el.textContent ?? '') &&
+        getComputedStyle(el).display !== 'none'
+    )
+    expect(pageOfTexts).toHaveLength(1)
+
+    const pageOneBtn = screen
+      .getByRole('button', { name: /第\s*1\s*\/\s*1\s*页|Page 1 of 1/ })
+      .element()
+    const infoRect = pageOfTexts[0].getBoundingClientRect()
+    const btnRect = pageOneBtn.getBoundingClientRect()
+
+    // Inline on the same row, vertically aligned, and positioned to the left of page buttons.
+    expect(Math.abs(infoRect.top - btnRect.top)).toBeLessThan(10)
+    expect(infoRect.right).toBeLessThan(btnRect.left)
+  })
+
+  it('displays pageSize 100 in SelectTrigger without text clipping', async () => {
+    const pageData: AuditLogsPage = {
+      items: sampleEntries,
+      total: 2,
+      page: 1,
+      pageSize: 100,
+    }
+    getMock.mockResolvedValue({ data: pageData })
+
+    const screen = await renderAuditLogs({ pageSize: 100 })
+    await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+    const trigger = screen
+      .getByRole('combobox', { name: /每页行数|Rows per page/ })
+      .element() as HTMLElement
+    const valueEl = trigger.querySelector(
+      '[data-slot="select-value"]'
+    ) as HTMLElement
+
+    expect(trigger.textContent).toContain('100')
+    expect(valueEl.scrollWidth).toBeLessThanOrEqual(valueEl.clientWidth)
+    expect(trigger.getBoundingClientRect().width).toBeGreaterThanOrEqual(80)
+  })
+
+  it('renders success status with soft semantic success badge styling', async () => {
+    const pageData: AuditLogsPage = {
+      items: sampleEntries,
+      total: 2,
+      page: 1,
+      pageSize: 20,
+    }
+    getMock.mockResolvedValue({ data: pageData })
+
+    const screen = await renderAuditLogs()
+    await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+    const badges = Array.from(
+      document.querySelectorAll('[data-slot="badge"]')
+    ) as HTMLElement[]
+    const successBadge = badges.find((el) =>
+      /成功|Success/.test(el.textContent ?? '')
+    )
+    const failureBadge = badges.find((el) =>
+      /失败|Failure/.test(el.textContent ?? '')
+    )
+    expect(successBadge).toBeDefined()
+    expect(failureBadge).toBeDefined()
+
+    const successStyle = getComputedStyle(successBadge!)
+    const failureStyle = getComputedStyle(failureBadge!)
+    expect(successStyle.backgroundColor).not.toBe(failureStyle.backgroundColor)
+    expect(successStyle.borderTopColor).not.toBe('rgba(0, 0, 0, 0)')
+  })
+
+  it('wraps pagination buttons cleanly on narrow 320px viewports without horizontal overflow', async () => {
+    const pageData: AuditLogsPage = {
+      items: sampleEntries,
+      total: 20000,
+      page: 500,
+      pageSize: 20,
+    }
+    getMock.mockResolvedValue({ data: pageData })
+
+    const screen = await renderAuditLogs({ page: 500, pageSize: 20 })
+    await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+    const container = document.querySelector(
+      '[data-slot="data-table-pagination"]'
+    ) as HTMLElement
+    container.style.width = '320px'
+
+    await expect
+      .poll(() => container.scrollWidth <= container.clientWidth)
+      .toBe(true)
   })
 })

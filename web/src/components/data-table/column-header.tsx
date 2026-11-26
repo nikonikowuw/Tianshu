@@ -40,7 +40,7 @@ export function DataTableColumnHeader<TData, TValue>({
           <Button
             variant='ghost'
             size='sm'
-            className='-ms-3 h-8 data-[state=open]:bg-accent'
+            className='-ms-2.5 h-8 data-[state=open]:bg-accent'
           >
             <span>{title}</span>
             {column.getIsSorted() === 'desc' ? (

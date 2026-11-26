@@ -282,7 +282,7 @@ export function AuditLogsTable({
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
+              <TableRow key={headerGroup.id} className='hover:bg-transparent'>
                 {headerGroup.headers.map((header) => {
                   const sorted = header.column.getIsSorted()
                   const ariaSort = header.column.getCanSort()
@@ -317,7 +317,10 @@ export function AuditLogsTable({
           <TableBody>
             {isLoading ? (
               Array.from({ length: pagination.pageSize }).map((_, rowIdx) => (
-                <TableRow key={`skeleton-${rowIdx}`}>
+                <TableRow
+                  key={`skeleton-${rowIdx}`}
+                  className='hover:bg-transparent'
+                >
                   {table.getVisibleLeafColumns().map((col) => (
                     <TableCell
                       key={col.id}
@@ -362,7 +365,7 @@ export function AuditLogsTable({
                 </TableRow>
               ))
             ) : (
-              <TableRow>
+              <TableRow className='hover:bg-transparent'>
                 <TableCell
                   colSpan={table.getVisibleLeafColumns().length}
                   className='h-36 text-center'

@@ -143,7 +143,7 @@ export function createAuditLogColumns(params: {
         const status = row.original.status
         const isFailure = status === 'failure'
         return (
-          <Badge variant={isFailure ? 'destructive' : 'secondary'}>
+          <Badge variant={isFailure ? 'destructive' : 'success'}>
             {isFailure ? t('statuses.failure') : t('statuses.success')}
           </Badge>
         )
@@ -182,10 +182,9 @@ export function createAuditLogColumns(params: {
       enableSorting: false,
       enableHiding: false,
       meta: {
-        thClassName:
-          'sticky end-0 z-10 w-12 bg-background border-s border-border/60',
+        thClassName: 'sticky end-0 z-10 w-12 bg-background px-2.5 last:pe-2.5',
         tdClassName:
-          'sticky end-0 z-10 w-12 bg-background border-s border-border/60 group-hover/row:bg-muted/50',
+          'sticky end-0 z-10 w-12 bg-background px-2.5 last:pe-2.5 text-center transition-colors group-hover/row:bg-[color-mix(in_srgb,var(--muted)_50%,var(--background))] group-focus-visible/row:bg-[color-mix(in_srgb,var(--muted)_60%,var(--background))] group-data-[state=selected]/row:bg-muted',
       },
       header: () => <span className='sr-only'>{t('rowActions.openMenu')}</span>,
       cell: ({ row }) => (

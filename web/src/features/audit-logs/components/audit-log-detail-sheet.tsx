@@ -60,7 +60,7 @@ export function AuditLogDetailSheet({
               <div className='flex flex-wrap items-center justify-between gap-2'>
                 <Badge
                   variant={
-                    entry.status === 'failure' ? 'destructive' : 'secondary'
+                    entry.status === 'failure' ? 'destructive' : 'success'
                   }
                 >
                   {entry.status === 'failure'

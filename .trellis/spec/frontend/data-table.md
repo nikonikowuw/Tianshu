@@ -109,9 +109,9 @@ const table = useReactTable({
 
 - **列定义**：独立导出 `ColumnDef<T>[]`，不匿名内联；标量字段用 `accessorKey`，操作/派生列用 `id` 且设 `enableSorting: false`、`enableHiding: false`；日期用 `Intl.DateTimeFormat`，状态用语义 `Badge`，长文本用 `LongText`，空值统一显示占位符而非 `undefined`。
 - **操作列（Row Actions）**：
-  - 固定悬浮在表格最右侧（`sticky end-0`），横向滚动时保持可见，并使用不透明语义背景（与行背景/hover 态同步）及左侧细分隔/阴影防透字；
+  - 固定悬浮在表格最右侧（`sticky end-0`），横向滚动时保持可见，并使用不透明语义背景（通过 `color-mix` 与行背景 / `hover` / `focus-visible` 态保持亮度一致，避免半透明叠加偏差或横向滚动透字），不额外绘制显式竖向分界线；
   - 表头**不展示“操作”可见文字**（表头留空或仅放 `sr-only` 标签）；
-  - 单元格内统一渲染 `...`（`MoreHorizontal` / `Ellipsis`）图标按钮，点击展开 `DropdownMenu` 展示更多操作；按钮必须提供 `sr-only` / `aria-label`。
+  - 单元格内统一渲染 `...`（`MoreHorizontal` / `Ellipsis`）图标按钮（紧凑尺寸如 `size-7`，配合独立高亮态与整行高亮明确区分），点击展开 `DropdownMenu` 展示更多操作；按钮必须提供 `sr-only` / `aria-label`。
 - **只读数据行点击查看详情**：
   - 对于只读且具备详情视图的列表，**点击整行直接打开右侧详情抽屉（`Sheet`）**，不再要求必须点击菜单入口；
   - 可点击行必须提供明确视觉与键盘反馈（`cursor-pointer`、hover 高亮，并支持键盘聚焦回车触发）；
