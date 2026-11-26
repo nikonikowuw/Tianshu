@@ -123,6 +123,52 @@ func Catalog() []PermissionDef {
 	return slices.Clone(permissionCatalog)
 }
 
+var moduleLabelKeys = map[string]string{
+	"dashboard": "ACCESS_MODULE_DASHBOARD",
+	"identity":  "ACCESS_MODULE_IDENTITY",
+	"access":    "ACCESS_MODULE_ACCESS",
+	"audit":     "ACCESS_MODULE_AUDIT",
+	"files":     "ACCESS_MODULE_FILES",
+}
+
+var permissionCodeSet = func() map[string]struct{} {
+	set := make(map[string]struct{}, len(permissionCatalog))
+	for _, p := range permissionCatalog {
+		set[p.Code] = struct{}{}
+	}
+	return set
+}()
+
+// IsValidPermissionCode reports whether code exists in the declarative permission catalog.
+func IsValidPermissionCode(code string) bool {
+	_, ok := permissionCodeSet[code]
+	return ok
+}
+
+// PermissionGroups returns the declarative permission catalog grouped by module in declaration order.
+func PermissionGroups() []PermissionGroupDef {
+	indexByModule := make(map[string]int, len(moduleLabelKeys))
+	groups := make([]PermissionGroupDef, 0, len(moduleLabelKeys))
+	for _, p := range permissionCatalog {
+		idx, exists := indexByModule[p.Module]
+		if !exists {
+			labelKey := moduleLabelKeys[p.Module]
+			if labelKey == "" {
+				labelKey = p.Module
+			}
+			indexByModule[p.Module] = len(groups)
+			groups = append(groups, PermissionGroupDef{
+				Module:      p.Module,
+				LabelKey:    labelKey,
+				Permissions: []PermissionDef{p},
+			})
+			continue
+		}
+		groups[idx].Permissions = append(groups[idx].Permissions, p)
+	}
+	return groups
+}
+
 // SystemRoles returns a defensive copy of all built-in system roles.
 func SystemRoles() []SystemRoleDef {
 	return slices.Clone(systemRoleCatalog)

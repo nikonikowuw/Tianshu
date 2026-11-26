@@ -8,5 +8,8 @@
   "usernameMax": "Username must be at most 64 characters",
   "displayNameMax": "Display name must be at most 100 characters",
   "emailMax": "Email must be at most 255 characters",
-  "identifierMax": "Username or email must be at most 255 characters"
+  "identifierMax": "Username or email must be at most 255 characters",
+  "roleCodeFormat": "Role code must be 2-64 lowercase letters, digits, underscores, or hyphens starting with a letter",
+  "roleNameMax": "Role name must be at most 100 characters",
+  "roleDescriptionMax": "Role description must be at most 500 characters"
 }

@@ -12,6 +12,9 @@ const ACTION_LABEL_KEY: Record<string, string> = {
   'auth.logout': 'actions.authLogout',
   'auth.refresh': 'actions.authRefresh',
   'auth.refresh_replay': 'actions.authRefreshReplay',
+  'role.create': 'actions.roleCreate',
+  'role.update': 'actions.roleUpdate',
+  'role.delete': 'actions.roleDelete',
 }
 
 const RESOURCE_LABEL_KEY: Record<string, string> = {

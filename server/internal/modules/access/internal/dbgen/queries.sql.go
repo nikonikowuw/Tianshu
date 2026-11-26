@@ -28,6 +28,134 @@ func (q *Queries) AssignUserRole(ctx context.Context, arg AssignUserRoleParams) 
 	return err
 }
 
+const countRoleUsers = `-- name: CountRoleUsers :one
+SELECT count(*)::bigint
+FROM user_roles
+WHERE role_id = $1
+`
+
+func (q *Queries) CountRoleUsers(ctx context.Context, roleID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countRoleUsers, roleID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countRoles = `-- name: CountRoles :one
+SELECT count(*)::bigint
+FROM roles r
+WHERE ($1::text = '' OR (
+        r.code ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        r.name ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        r.description ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        r.code = ANY($2::text[])
+    ))
+  AND ($3::boolean = false OR r.is_system = $4::boolean)
+`
+
+type CountRolesParams struct {
+	Q                  string
+	MatchedSystemCodes []string
+	HasIsSystem        bool
+	IsSystem           bool
+}
+
+func (q *Queries) CountRoles(ctx context.Context, arg CountRolesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRoles,
+		arg.Q,
+		arg.MatchedSystemCodes,
+		arg.HasIsSystem,
+		arg.IsSystem,
+	)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const createRole = `-- name: CreateRole :one
+INSERT INTO roles (
+    id,
+    code,
+    name,
+    description,
+    name_key,
+    description_key,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+)
+VALUES ($1, $2, $3, $4, NULL, NULL, false, $5, $6, now(), now())
+RETURNING
+    id,
+    code,
+    name,
+    description,
+    name_key,
+    description_key,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+`
+
+type CreateRoleParams struct {
+	ID          uuid.UUID
+	Code        string
+	Name        string
+	Description string
+	CreatedBy   uuid.NullUUID
+	UpdatedBy   uuid.NullUUID
+}
+
+func (q *Queries) CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error) {
+	row := q.db.QueryRow(ctx, createRole,
+		arg.ID,
+		arg.Code,
+		arg.Name,
+		arg.Description,
+		arg.CreatedBy,
+		arg.UpdatedBy,
+	)
+	var i Role
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.Description,
+		&i.NameKey,
+		&i.DescriptionKey,
+		&i.IsSystem,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteRole = `-- name: DeleteRole :exec
+DELETE FROM roles
+WHERE id = $1
+`
+
+func (q *Queries) DeleteRole(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteRole, id)
+	return err
+}
+
+const deleteRolePermissions = `-- name: DeleteRolePermissions :exec
+DELETE FROM role_permissions
+WHERE role_id = $1
+`
+
+func (q *Queries) DeleteRolePermissions(ctx context.Context, roleID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteRolePermissions, roleID)
+	return err
+}
+
 const ensureSystemRole = `-- name: EnsureSystemRole :one
 INSERT INTO roles (id, code, name, description, name_key, description_key, is_system, created_at, updated_at)
 VALUES ($1, $2, '', '', $3, $4, true, now(), now())
@@ -56,6 +184,99 @@ func (q *Queries) EnsureSystemRole(ctx context.Context, arg EnsureSystemRolePara
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const getRoleByID = `-- name: GetRoleByID :one
+SELECT
+    r.id,
+    r.code,
+    r.name,
+    r.description,
+    r.name_key,
+    r.description_key,
+    r.is_system,
+    r.created_by,
+    r.updated_by,
+    r.created_at,
+    r.updated_at,
+    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count,
+    (SELECT count(*)::bigint FROM role_permissions rp WHERE rp.role_id = r.id) AS permission_count
+FROM roles r
+WHERE r.id = $1
+`
+
+type GetRoleByIDRow struct {
+	ID              uuid.UUID
+	Code            string
+	Name            string
+	Description     string
+	NameKey         pgtype.Text
+	DescriptionKey  pgtype.Text
+	IsSystem        bool
+	CreatedBy       uuid.NullUUID
+	UpdatedBy       uuid.NullUUID
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	UserCount       int64
+	PermissionCount int64
+}
+
+func (q *Queries) GetRoleByID(ctx context.Context, id uuid.UUID) (GetRoleByIDRow, error) {
+	row := q.db.QueryRow(ctx, getRoleByID, id)
+	var i GetRoleByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.Description,
+		&i.NameKey,
+		&i.DescriptionKey,
+		&i.IsSystem,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.UserCount,
+		&i.PermissionCount,
+	)
+	return i, err
+}
+
+const getRoleByIDForUpdate = `-- name: GetRoleByIDForUpdate :one
+SELECT
+    id,
+    code,
+    name,
+    description,
+    name_key,
+    description_key,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+FROM roles
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetRoleByIDForUpdate(ctx context.Context, id uuid.UUID) (Role, error) {
+	row := q.db.QueryRow(ctx, getRoleByIDForUpdate, id)
+	var i Role
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.Description,
+		&i.NameKey,
+		&i.DescriptionKey,
+		&i.IsSystem,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getRoleIDByCode = `-- name: GetRoleIDByCode :one
@@ -87,6 +308,33 @@ func (q *Queries) GrantRolePermission(ctx context.Context, arg GrantRolePermissi
 	return err
 }
 
+const listPermissionCodesByRoleIDs = `-- name: ListPermissionCodesByRoleIDs :many
+SELECT role_id, permission_code
+FROM role_permissions
+WHERE role_id = ANY($1::uuid[])
+ORDER BY role_id ASC, permission_code ASC
+`
+
+func (q *Queries) ListPermissionCodesByRoleIDs(ctx context.Context, roleIds []uuid.UUID) ([]RolePermission, error) {
+	rows, err := q.db.Query(ctx, listPermissionCodesByRoleIDs, roleIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RolePermission
+	for rows.Next() {
+		var i RolePermission
+		if err := rows.Scan(&i.RoleID, &i.PermissionCode); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRoleUserIDs = `-- name: ListRoleUserIDs :many
 SELECT user_id
 FROM user_roles
@@ -106,6 +354,115 @@ func (q *Queries) ListRoleUserIDs(ctx context.Context, roleID uuid.UUID) ([]uuid
 			return nil, err
 		}
 		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoles = `-- name: ListRoles :many
+SELECT
+    r.id,
+    r.code,
+    r.name,
+    r.description,
+    r.name_key,
+    r.description_key,
+    r.is_system,
+    r.created_by,
+    r.updated_by,
+    r.created_at,
+    r.updated_at,
+    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count,
+    (SELECT count(*)::bigint FROM role_permissions rp WHERE rp.role_id = r.id) AS permission_count
+FROM roles r
+WHERE ($1::text = '' OR (
+        r.code ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        r.name ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        r.description ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        r.code = ANY($2::text[])
+    ))
+  AND ($3::boolean = false OR r.is_system = $4::boolean)
+ORDER BY
+    CASE WHEN $5::text = 'created_at' AND $6::text = 'asc' THEN r.created_at END ASC,
+    CASE WHEN $5::text = 'created_at' AND $6::text = 'desc' THEN r.created_at END DESC,
+    CASE WHEN $5::text = 'updated_at' AND $6::text = 'asc' THEN r.updated_at END ASC,
+    CASE WHEN $5::text = 'updated_at' AND $6::text = 'desc' THEN r.updated_at END DESC,
+    CASE WHEN $5::text = 'code' AND $6::text = 'asc' THEN r.code END ASC,
+    CASE WHEN $5::text = 'code' AND $6::text = 'desc' THEN r.code END DESC,
+    CASE WHEN $5::text = 'name' AND $6::text = 'asc' THEN r.name END ASC,
+    CASE WHEN $5::text = 'name' AND $6::text = 'desc' THEN r.name END DESC,
+    CASE WHEN $5::text = '' THEN r.is_system END DESC,
+    r.created_at DESC,
+    CASE WHEN $6::text = 'asc' THEN r.id END ASC,
+    r.id DESC
+LIMIT $8 OFFSET $7
+`
+
+type ListRolesParams struct {
+	Q                  string
+	MatchedSystemCodes []string
+	HasIsSystem        bool
+	IsSystem           bool
+	SortBy             string
+	SortOrder          string
+	PageOffset         int32
+	PageLimit          int32
+}
+
+type ListRolesRow struct {
+	ID              uuid.UUID
+	Code            string
+	Name            string
+	Description     string
+	NameKey         pgtype.Text
+	DescriptionKey  pgtype.Text
+	IsSystem        bool
+	CreatedBy       uuid.NullUUID
+	UpdatedBy       uuid.NullUUID
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	UserCount       int64
+	PermissionCount int64
+}
+
+func (q *Queries) ListRoles(ctx context.Context, arg ListRolesParams) ([]ListRolesRow, error) {
+	rows, err := q.db.Query(ctx, listRoles,
+		arg.Q,
+		arg.MatchedSystemCodes,
+		arg.HasIsSystem,
+		arg.IsSystem,
+		arg.SortBy,
+		arg.SortOrder,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRolesRow
+	for rows.Next() {
+		var i ListRolesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.Description,
+			&i.NameKey,
+			&i.DescriptionKey,
+			&i.IsSystem,
+			&i.CreatedBy,
+			&i.UpdatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.UserCount,
+			&i.PermissionCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -167,6 +524,58 @@ func (q *Queries) ListUserRoleCodes(ctx context.Context, userID uuid.UUID) ([]st
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateRole = `-- name: UpdateRole :one
+UPDATE roles
+SET name = $2,
+    description = $3,
+    updated_by = $4,
+    updated_at = now()
+WHERE id = $1
+RETURNING
+    id,
+    code,
+    name,
+    description,
+    name_key,
+    description_key,
+    is_system,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+`
+
+type UpdateRoleParams struct {
+	ID          uuid.UUID
+	Name        string
+	Description string
+	UpdatedBy   uuid.NullUUID
+}
+
+func (q *Queries) UpdateRole(ctx context.Context, arg UpdateRoleParams) (Role, error) {
+	row := q.db.QueryRow(ctx, updateRole,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.UpdatedBy,
+	)
+	var i Role
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.Description,
+		&i.NameKey,
+		&i.DescriptionKey,
+		&i.IsSystem,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertPermission = `-- name: UpsertPermission :exec

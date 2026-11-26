@@ -102,6 +102,7 @@
 | `USERS_USERNAME_CONFLICT`   | 409  | 用户名冲突                     |
 | `USERS_LAST_SUPER_ADMIN`    | 409  | 最后一名活跃超管保护           |
 | `ROLES_SYSTEM_IMMUTABLE`    | 409  | 系统角色不可改/删              |
+| `ROLES_CODE_CONFLICT`       | 409  | 角色编码已存在                 |
 | `ROLES_IN_USE`              | 409  | 角色仍绑定用户                 |
 | `FILES_TYPE_NOT_ALLOWED`    | 400  | MIME/类型不允许                |
 | `FILES_TOO_LARGE`           | 413  | 文件过大                       |

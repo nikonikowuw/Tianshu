@@ -27,6 +27,14 @@
     ".dsh/skills/mini-trellis-session-insight/references/cli-quick-reference.md": "e4b3de19c99ca75847593befd59b49c4689fc0c302f9c47a4f08058303984061",
     ".dsh/skills/mini-trellis-session-insight/references/organize-history.md": "24f2bf9129e921f2e9ca751c4f21267afdacdfc0af519de43a60a2a196338fde",
     ".dsh/skills/mini-trellis-session-insight/references/triggering-patterns.md": "b9a01ec8cd7414516e9b15fe7bca392738e595dcaaf36a6347f495721a91e55f",
-    ".dsh/skills/mini-trellis-session-insight/SKILL.md": "5c4d4780e745a68b394b3e13675b2a07d2dc053b968b00906d86af5245103ac6"
+    ".dsh/skills/mini-trellis-session-insight/SKILL.md": "5c4d4780e745a68b394b3e13675b2a07d2dc053b968b00906d86af5245103ac6",
+    ".agents/skills/mini-trellis-remember/SKILL.md": "1d4517653ec26f42666c7a425c24310b887745f6c6d19fdd2f6997ed13ac7354",
+    ".agents/skills/mini-trellis-update-spec/SKILL.md": "323e076e35554b20329337c825bed4fef53e8f2324c12f615d3b5298539c6501",
+    ".agents/skills/mini-trellis-session-insight/references/cli-quick-reference.md": "e4b3de19c99ca75847593befd59b49c4689fc0c302f9c47a4f08058303984061",
+    ".agents/skills/mini-trellis-session-insight/references/organize-history.md": "24f2bf9129e921f2e9ca751c4f21267afdacdfc0af519de43a60a2a196338fde",
+    ".agents/skills/mini-trellis-session-insight/references/triggering-patterns.md": "b9a01ec8cd7414516e9b15fe7bca392738e595dcaaf36a6347f495721a91e55f",
+    ".agents/skills/mini-trellis-session-insight/SKILL.md": "c4c4c1d6c97d911a28ff15e6d698725781df90f9bff1169adecff9817aeaf812",
+    ".agents/hooks/mini-trellis/session-start.py": "0dd39f241f349cf15b2e0097344ddd0399260fd91737018f5be8ea2cc2439768",
+    ".agents/hooks.json": "3079c734bee8aab12ea91152c71cbd83a820212766197ecbd1d18377b489e771"
   }
 }

@@ -1,0 +1,76 @@
+{
+  "title": "Roles & Permissions",
+  "description": "Manage role definitions and fine-grained permission matrices with immediate enforcement",
+  "createRole": "New Role",
+  "searchPlaceholder": "Search role name, code, or description...",
+  "columns": {
+    "name": "Role Name",
+    "code": "Role Code",
+    "description": "Description",
+    "userCount": "Users",
+    "permissionCount": "Permissions",
+    "updatedAt": "Updated At"
+  },
+  "badges": {
+    "system": "System",
+    "custom": "Custom"
+  },
+  "filters": {
+    "type": "Role Type",
+    "system": "System Role",
+    "custom": "Custom Role"
+  },
+  "rowActions": {
+    "openMenu": "Open actions menu",
+    "view": "View permissions",
+    "edit": "Edit role",
+    "delete": "Delete role",
+    "deleteDisabledInUse": "This role is assigned to users and cannot be deleted"
+  },
+  "sheet": {
+    "createTitle": "Create Role",
+    "createDesc": "Define a custom role and select its fine-grained permission codes by module.",
+    "editTitle": "Edit Role",
+    "editDesc": "Update role metadata and permissions. Changes take effect immediately for assigned users.",
+    "viewTitle": "Role Permissions",
+    "viewSystemDesc": "Built-in system roles are protected, hold full permissions, and cannot be modified or deleted.",
+    "viewCustomDesc": "Viewing role details and permission assignments in read-only mode. Use the actions menu to edit.",
+    "viewReadOnlyDesc": "You have read-only access to roles. Contact an administrator to request changes.",
+    "codeLabel": "Role Code",
+    "codePlaceholder": "e.g. ops_editor",
+    "codeHint": "2-64 lowercase letters, digits, underscores, or hyphens. Immutable after creation.",
+    "nameLabel": "Role Name",
+    "namePlaceholder": "e.g. Operations Editor",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "Briefly describe the responsibilities of this role (optional)",
+    "permissionsLabel": "Permission Matrix",
+    "selectedSummary": "{{selected}} / {{total}} selected",
+    "selectAll": "Select all",
+    "clearAll": "Clear all",
+    "permissionsLoadFailed": "Failed to load permission catalog",
+    "saveCreate": "Create Role",
+    "saveEdit": "Save Changes",
+    "close": "Close"
+  },
+  "deleteDialog": {
+    "title": "Delete Role",
+    "description": "Are you sure you want to delete role \"{{name}}\" ({{code}})? This action cannot be undone.",
+    "confirm": "Delete"
+  },
+  "toast": {
+    "created": "Role created successfully",
+    "updated": "Role updated successfully",
+    "deleted": "Role deleted"
+  },
+  "empty": {
+    "noDataTitle": "No roles found",
+    "noDataDesc": "Create a custom role using the \"New Role\" button to configure fine-grained permissions.",
+    "noMatchTitle": "No matching roles",
+    "noMatchDesc": "Try adjusting your search query or clearing active filters.",
+    "clearFilters": "Clear filters",
+    "noDescription": "—"
+  },
+  "error": {
+    "loadFailed": "Failed to load roles"
+  }
+}

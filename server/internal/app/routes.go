@@ -32,6 +32,14 @@ func (a *App) registerRoutes() {
 		authedV1 := apiV1.Group("")
 		authedV1.Use(auth.RequireAuth(a.jwt))
 		a.authHandler.RegisterRoutes(authedV1)
+		if a.accessHandler != nil && a.access != nil {
+			a.accessHandler.RegisterRoutes(authedV1, access.RoutePermissions{
+				RequireRead:   access.RequirePermission(a.access, access.PermRolesRead),
+				RequireCreate: access.RequirePermission(a.access, access.PermRolesCreate),
+				RequireUpdate: access.RequirePermission(a.access, access.PermRolesUpdate),
+				RequireDelete: access.RequirePermission(a.access, access.PermRolesDelete),
+			})
+		}
 		if a.auditHandler != nil && a.access != nil {
 			a.auditHandler.RegisterRoutes(
 				authedV1,

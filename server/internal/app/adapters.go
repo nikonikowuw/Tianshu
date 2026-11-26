@@ -146,3 +146,39 @@ func (a *authAccessAdapter) GetUserAccess(ctx context.Context, userID uuid.UUID)
 		Permissions: ua.Permissions,
 	}, nil
 }
+
+// accessAuditAdapter bridges audit.Service into access.AuditRecorder.
+type accessAuditAdapter struct {
+	svc *audit.Service
+}
+
+var _ access.AuditRecorder = (*accessAuditAdapter)(nil)
+
+func (a *accessAuditAdapter) Record(ctx context.Context, entry access.AuditEntry) error {
+	return a.svc.Record(ctx, audit.RecordInput{
+		ActorID:       entry.ActorID,
+		ActorUsername: entry.ActorUsername,
+		Action:        entry.Action,
+		Resource:      entry.Resource,
+		ResourceID:    entry.ResourceID,
+		Status:        entry.Status,
+		IPAddress:     entry.IPAddress,
+		UserAgent:     entry.UserAgent,
+		Metadata:      entry.Metadata,
+	})
+}
+
+// accessActorAdapter bridges identity.Service into access.ActorResolver.
+type accessActorAdapter struct {
+	svc *identity.Service
+}
+
+var _ access.ActorResolver = (*accessActorAdapter)(nil)
+
+func (a *accessActorAdapter) GetUsername(ctx context.Context, userID uuid.UUID) (string, error) {
+	user, err := a.svc.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return user.Username, nil
+}
