@@ -97,3 +97,12 @@ type DeleteRoleInput struct {
 	ActorID *uuid.UUID
 	Meta    RequestMeta
 }
+
+// RoleRef is a lightweight role projection used for options and user role summaries.
+type RoleRef struct {
+	ID       uuid.UUID
+	Code     string
+	Name     string
+	NameKey  string
+	IsSystem bool
+}

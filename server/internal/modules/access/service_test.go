@@ -317,6 +317,92 @@ func (f *fakeStore) DeleteRole(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (f *fakeStore) ListRoleOptions(_ context.Context) ([]RoleRef, error) {
+	out := make([]RoleRef, 0, len(f.rolesByID))
+	for _, r := range f.rolesByID {
+		out = append(out, RoleRef{
+			ID:       r.ID,
+			Code:     r.Code,
+			Name:     r.Name,
+			NameKey:  r.NameKey,
+			IsSystem: r.IsSystem,
+		})
+	}
+	slices.SortFunc(out, func(a, b RoleRef) int {
+		if a.IsSystem != b.IsSystem {
+			if a.IsSystem {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(a.Code, b.Code)
+	})
+	return out, nil
+}
+
+func (f *fakeStore) ListRolesByIDs(_ context.Context, ids []uuid.UUID) ([]RoleRef, error) {
+	out := make([]RoleRef, 0, len(ids))
+	for _, id := range ids {
+		if r, ok := f.rolesByID[id]; ok {
+			out = append(out, RoleRef{
+				ID:       r.ID,
+				Code:     r.Code,
+				Name:     r.Name,
+				NameKey:  r.NameKey,
+				IsSystem: r.IsSystem,
+			})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListRolesByUserIDs(_ context.Context, userIDs []uuid.UUID) (map[uuid.UUID][]RoleRef, error) {
+	out := make(map[uuid.UUID][]RoleRef, len(userIDs))
+	for _, uid := range userIDs {
+		for rid := range f.userRoles[uid] {
+			if r, ok := f.rolesByID[rid]; ok {
+				out[uid] = append(out[uid], RoleRef{
+					ID:       r.ID,
+					Code:     r.Code,
+					Name:     r.Name,
+					NameKey:  r.NameKey,
+					IsSystem: r.IsSystem,
+				})
+			}
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) DeleteUserRoles(_ context.Context, userID uuid.UUID) error {
+	delete(f.userRoles, userID)
+	return nil
+}
+
+func (f *fakeStore) ListUserIDsByRoleIDs(_ context.Context, roleIDs []uuid.UUID) ([]uuid.UUID, error) {
+	set := make(map[uuid.UUID]struct{})
+	for _, rid := range roleIDs {
+		for uid, rids := range f.userRoles {
+			if _, has := rids[rid]; has {
+				set[uid] = struct{}{}
+			}
+		}
+	}
+	out := make([]uuid.UUID, 0, len(set))
+	for uid := range set {
+		out = append(out, uid)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListUserIDsByRoleCode(_ context.Context, code string) ([]uuid.UUID, error) {
+	roleID, ok := f.rolesByCode[code]
+	if !ok {
+		return nil, nil
+	}
+	return f.ListRoleUserIDs(context.Background(), roleID)
+}
+
 func TestSyncCatalogIdempotentAndGrantsAllToSuperAdmin(t *testing.T) {
 	s := newFakeStore()
 	mem := cache.NewMemory()

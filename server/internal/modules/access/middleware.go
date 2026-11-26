@@ -42,3 +42,31 @@ func RequirePermission(checker PermissionChecker, permissionCode string) gin.Han
 		c.Next()
 	}
 }
+
+// RequireAnyPermission enforces that the authenticated caller holds at least one of permissionCodes.
+func RequireAnyPermission(checker PermissionChecker, permissionCodes ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		identity, ok := authctx.IdentityFromContext(c.Request.Context())
+		if !ok {
+			_ = c.Error(apperr.Unauthorized(apperr.CodeUnauthorized))
+			c.Abort()
+			return
+		}
+
+		for _, code := range permissionCodes {
+			allowed, err := checker.HasPermission(c.Request.Context(), identity.UserID, code)
+			if err != nil {
+				_ = c.Error(err)
+				c.Abort()
+				return
+			}
+			if allowed {
+				c.Next()
+				return
+			}
+		}
+
+		_ = c.Error(apperr.Forbidden(apperr.CodeForbidden))
+		c.Abort()
+	}
+}
