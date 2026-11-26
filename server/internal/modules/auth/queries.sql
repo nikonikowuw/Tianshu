@@ -42,17 +42,19 @@ SELECT token_hash, session_id, replaced_at, expires_at
 FROM refresh_token_history
 WHERE token_hash = $1;
 
--- name: RevokeSession :exec
+-- name: RevokeSession :one
 UPDATE user_sessions
 SET revoked_at = now()
 WHERE id = $1
-  AND revoked_at IS NULL;
+  AND revoked_at IS NULL
+RETURNING id, user_id;
 
--- name: RevokeSessionByRefreshHash :exec
+-- name: RevokeSessionByRefreshHash :one
 UPDATE user_sessions
 SET revoked_at = now()
 WHERE refresh_token_hash = $1
-  AND revoked_at IS NULL;
+  AND revoked_at IS NULL
+RETURNING id, user_id;
 
 -- name: RevokeAllUserSessions :exec
 UPDATE user_sessions

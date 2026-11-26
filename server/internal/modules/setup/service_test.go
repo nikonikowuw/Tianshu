@@ -65,10 +65,23 @@ func (fakeTx) WithinTx(ctx context.Context, fn func(ctx context.Context) error) 
 	return database.WithSimulatedTx(ctx, fn)
 }
 
+type fakeAudit struct {
+	mu      sync.Mutex
+	entries []setup.AuditEntry
+}
+
+func (f *fakeAudit) Record(_ context.Context, entry setup.AuditEntry) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.entries = append(f.entries, entry)
+	return nil
+}
+
 func TestSetupInitConcurrencyAndIdempotency(t *testing.T) {
 	idStore := &fakeIdentity{}
 	roles := newFakeRoles()
-	svc := setup.NewService(idStore, roles, fakeTx{}, logger.New("test", "error", io.Discard))
+	auditRec := &fakeAudit{}
+	svc := setup.NewService(idStore, roles, fakeTx{}, auditRec, logger.New("test", "error", io.Discard))
 
 	st, err := svc.Status(t.Context())
 	if err != nil {
@@ -126,7 +139,8 @@ func TestSetupInitConcurrencyAndIdempotency(t *testing.T) {
 func TestBootstrapFromEnvIsIdempotent(t *testing.T) {
 	idStore := &fakeIdentity{}
 	roles := newFakeRoles()
-	svc := setup.NewService(idStore, roles, fakeTx{}, logger.New("test", "error", io.Discard))
+	auditRec := &fakeAudit{}
+	svc := setup.NewService(idStore, roles, fakeTx{}, auditRec, logger.New("test", "error", io.Discard))
 
 	cfg := config.BootstrapConfig{
 		AdminUsername: "admin",
@@ -140,13 +154,19 @@ func TestBootstrapFromEnvIsIdempotent(t *testing.T) {
 	if len(idStore.users) != 1 {
 		t.Fatalf("users count = %d, want 1", len(idStore.users))
 	}
+	if len(auditRec.entries) != 1 || auditRec.entries[0].Action != "setup.init" || auditRec.entries[0].Status != "success" {
+		t.Fatalf("unexpected bootstrap audit entries: %+v", auditRec.entries)
+	}
 
-	// Second call on already-initialized DB must be a safe no-op.
+	// Second call on already-initialized DB must be a safe no-op without recording failure audit noise.
 	if err := svc.BootstrapFromEnv(t.Context(), cfg); err != nil {
 		t.Fatalf("second BootstrapFromEnv() error = %v", err)
 	}
 	if len(idStore.users) != 1 {
 		t.Fatalf("users count after second bootstrap = %d, want 1", len(idStore.users))
+	}
+	if len(auditRec.entries) != 1 {
+		t.Fatalf("audit entries count = %d, want 1 after no-op bootstrap", len(auditRec.entries))
 	}
 }
 

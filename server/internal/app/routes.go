@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"tianshu/internal/modules/access"
 	"tianshu/internal/modules/auth"
 	"tianshu/internal/platform/httpserver"
 	"tianshu/internal/shared/apperr"
@@ -31,6 +32,12 @@ func (a *App) registerRoutes() {
 		authedV1 := apiV1.Group("")
 		authedV1.Use(auth.RequireAuth(a.jwt))
 		a.authHandler.RegisterRoutes(authedV1)
+		if a.auditHandler != nil && a.access != nil {
+			a.auditHandler.RegisterRoutes(
+				authedV1,
+				access.RequirePermission(a.access, access.PermAuditRead),
+			)
+		}
 	}
 
 	spaHandler := webui.Handler()

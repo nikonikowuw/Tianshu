@@ -258,10 +258,20 @@ func errorHandlerMiddleware(log *slog.Logger, bundle *i18n.Bundle) gin.HandlerFu
 					"error", appErr.Cause,
 				)
 			}
+			var translatedFields []apperr.FieldError
+			if len(appErr.Fields) > 0 {
+				translatedFields = make([]apperr.FieldError, len(appErr.Fields))
+				for i, f := range appErr.Fields {
+					translatedFields[i] = apperr.FieldError{
+						Field:   f.Field,
+						Message: translate(bundle, lang, f.Message, nil),
+					}
+				}
+			}
 			c.JSON(appErr.Status, errorResponse{
 				Code:    appErr.Code,
 				Message: translate(bundle, lang, appErr.Code, appErr.Params),
-				Errors:  appErr.Fields,
+				Errors:  translatedFields,
 			})
 			return
 		}

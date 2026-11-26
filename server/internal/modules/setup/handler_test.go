@@ -32,7 +32,7 @@ func TestSetupHTTPRoutesContract(t *testing.T) {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 
-	svc := setup.NewService(&fakeIdentity{}, newFakeRoles(), fakeTx{}, logger.New("test", "error", io.Discard))
+	svc := setup.NewService(&fakeIdentity{}, newFakeRoles(), fakeTx{}, &fakeAudit{}, logger.New("test", "error", io.Discard))
 	apiV1 := engine.Group("/api/v1")
 	setup.NewHandler(svc).RegisterPublicRoutes(apiV1)
 

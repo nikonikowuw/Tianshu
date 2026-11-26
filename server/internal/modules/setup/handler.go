@@ -32,7 +32,15 @@ func (h *Handler) init(c *gin.Context) {
 		return
 	}
 
-	admin, err := h.service.Init(c.Request.Context(), InitInput(req))
+	admin, err := h.service.Init(c.Request.Context(), InitInput{
+		Username:    req.Username,
+		Email:       req.Email,
+		DisplayName: req.DisplayName,
+		Password:    req.Password,
+		ClientIP:    c.ClientIP(),
+		UserAgent:   c.GetHeader("User-Agent"),
+		Method:      "wizard",
+	})
 	if err != nil {
 		_ = c.Error(err)
 		return

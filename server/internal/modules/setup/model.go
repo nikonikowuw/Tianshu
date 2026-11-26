@@ -15,10 +15,13 @@ type CreatedAdmin struct {
 	DisplayName string
 }
 
-// InitInput carries validated user input for initial administrator creation.
+// InitInput carries validated user input and request context for initial administrator creation.
 type InitInput struct {
 	Username    string
 	Email       string
 	DisplayName string
 	Password    string
+	ClientIP    string
+	UserAgent   string
+	Method      string
 }

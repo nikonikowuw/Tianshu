@@ -42,3 +42,21 @@ type PasswordVerifier interface {
 type TxRunner interface {
 	WithinTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
+
+// AuditEntry describes the minimal audit event emitted by auth.
+type AuditEntry struct {
+	ActorID       *uuid.UUID
+	ActorUsername string
+	Action        string
+	Resource      string
+	ResourceID    string
+	Status        string
+	IPAddress     string
+	UserAgent     string
+	Metadata      map[string]any
+}
+
+// AuditRecorder appends audit events without coupling auth to the audit module.
+type AuditRecorder interface {
+	Record(ctx context.Context, entry AuditEntry) error
+}
