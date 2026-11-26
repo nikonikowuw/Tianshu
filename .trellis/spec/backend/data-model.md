@@ -31,7 +31,7 @@
 | 模块        | 拥有表                                                   | 说明                                       |
 | ----------- | -------------------------------------------------------- | ------------------------------------------ |
 | `identity`  | `users`                                                  | 合并原 `user` + `profile`；用户资料、状态、头像引用 |
-| `access`    | `roles`、`permissions`、`user_roles`、`role_permissions` | 合并原 `rbac` + `role`；角色/权限/关联     |
+| `access`    | `roles`、`permissions`、`user_roles`、`role_permissions`、`menus` | 合并原 `rbac` + `role`；角色/权限/关联/动态菜单树 |
 | `auth`      | `user_sessions`、`refresh_token_history`                 | 登录会话、Refresh Token 与轮换历史（重放检测） |
 | `audit`     | `audit_logs`                                             | 只写/只读审计                              |
 | `files`     | `files`                                                  | 文件元数据与存储对象                       |
@@ -85,6 +85,12 @@
 - `PK(role_id, permission_code)`；均 `ON DELETE CASCADE`。
 - 额外索引 `idx_role_permissions_permission_code`。
 - 修改角色权限后失效该角色下所有用户的权限缓存；缓存失效必须在事务提交后执行。
+
+### menus
+
+- 列：`id`、`parent_id`（`uuid null references menus(id) on delete restrict`）、`type`（`directory` / `menu` / `button`）、`code`（唯一）、`title`、`title_key`、`path`、`icon`、`permission_code`（`text null references permissions(code) on delete set null`）、`sort_order`、`visible`、`status`（`active` / `disabled`）、`is_system`、审计四字段。
+- 索引：`idx_menus_parent_id_sort`、`idx_menus_permission_code`。
+- 系统内置菜单由启动同步幂等写入 `title_key` 与 `is_system`，保留管理员自定义的层级、排序、图标与显隐配置；系统菜单禁止删除与修改 `code`/`type`，存在子节点的菜单禁止删除（`409 MENUS_HAS_CHILDREN`）。
 
 ### user_sessions
 
@@ -140,6 +146,7 @@
 
 - `users`：`lower(username)`、`lower(email)` 部分唯一索引（`WHERE deleted_at IS NULL`）；`status`；`created_at`。
 - `roles`：`code` 唯一；`is_system`。
+- `menus`：`code` 唯一；`(parent_id, sort_order, created_at)`；`permission_code`。
 - `user_roles`：`role_id`。
 - `role_permissions`：`permission_code`。
 - `user_sessions`：`user_id`、`expires_at`、`revoked_at`。

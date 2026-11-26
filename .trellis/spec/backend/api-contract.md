@@ -109,6 +109,12 @@
 | `ROLES_SYSTEM_IMMUTABLE`         | 409  | 系统角色不可改/删              |
 | `ROLES_CODE_CONFLICT`       | 409  | 角色编码已存在                 |
 | `ROLES_IN_USE`              | 409  | 角色仍绑定用户                 |
+| `MENUS_NOT_FOUND`           | 404  | 菜单节点不存在                 |
+| `MENUS_CODE_CONFLICT`       | 409  | 菜单编码已存在                 |
+| `MENUS_SYSTEM_IMMUTABLE`    | 409  | 系统菜单不可删除或修改编码/类型 |
+| `MENUS_HAS_CHILDREN`        | 409  | 菜单仍包含子节点               |
+| `MENUS_CYCLE_DETECTED`      | 409  | 菜单父级不能指向自身或子孙节点 |
+| `MENUS_INVALID_PARENT`      | 422  | 父级菜单不存在或类型不兼容     |
 | `FILES_TYPE_NOT_ALLOWED`    | 400  | MIME/类型不允许                |
 | `FILES_TOO_LARGE`           | 413  | 文件过大                       |
 | `RATE_LIMITED`              | 429  | 限流                           |
@@ -210,7 +216,16 @@
 - 响应 `204`（无响应体）。软删除用户，同事务内清空 `user_roles` 并吊销全部活跃会话。
 - 约束：禁止删除自身（`409 USERS_SELF_OPERATION_FORBIDDEN`）；禁止非超管删除超管（`403 USERS_SUPER_ADMIN_PROTECTED`）；禁止删除最后一名活跃超管（`409 USERS_LAST_SUPER_ADMIN`）。
 
-## 12. 暂不纳入 v1
+## 12. Menus 端点契约
+
+- `GET /api/v1/menus/tree`（`menus:read`）：返回完整菜单树 `{ "items": [MenuTreeNode...] }`（按 `sortOrder ASC, createdAt ASC` 排序）。
+- `GET /api/v1/menus/user`（已登录即可）：返回当前用户有权限且 `visible=true`、`status='active'` 的导航菜单树 `{ "items": [MenuTreeNode...] }`（自动裁剪无可见子项的空目录）。
+- `POST /api/v1/menus`（`menus:create`）：新增目录/菜单/按钮节点，返回 `201 MenuNodeDTO`。
+- `PATCH /api/v1/menus/:id`（`menus:update`）：编辑节点、调整 `parentId` 与 `sortOrder`，返回 `200 MenuNodeDTO`。
+- `PUT /api/v1/menus/reorder`（`menus:update`）：批量调整菜单节点父级与排序 `{ "items": [{ "id", "parentId", "sortOrder" }] }`，返回 `200 { "items": [MenuTreeNode...] }`。
+- `DELETE /api/v1/menus/:id`（`menus:delete`）：删除自定义叶子菜单节点，返回 `204`。
+
+## 13. 暂不纳入 v1
 
 - 通用 `Idempotency-Key` 重放表：Setup 用数据库咨询锁/唯一约束保证幂等；文件上传用 SHA-256 去重作为后续增强。
 - GraphQL、gRPC 对外接口、批量导入接口。
