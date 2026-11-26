@@ -69,3 +69,15 @@ export function getDisplayNameInitials(displayName: string): string {
   const last = parts[parts.length - 1]?.[0] ?? ''
   return (first + last).toUpperCase()
 }
+
+/**
+ * Count Unicode code points instead of UTF-16 code units.
+ *
+ * The Go validator counts runes (`utf8.RuneCountInString`), while JS
+ * `String.length` counts surrogate pairs twice. Zod length checks must use this
+ * helper so emoji/CJK input is not rejected by the client before the server
+ * ever sees it.
+ */
+export function runeLength(value: string): number {
+  return Array.from(value).length
+}

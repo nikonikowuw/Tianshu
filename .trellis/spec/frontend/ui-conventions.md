@@ -10,7 +10,7 @@
 | ------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 原语层 | `src/components/ui/**`         | shadcn 生成组件；零业务逻辑；仅允许样式/可访问性/上游定制                                                                                             |
 | 共享层 | `src/components/shared/**`     | 跨 feature 复用组件（`ConfirmDialog`、`PasswordInput`、`LongText`、`PermissionGuard` 等）；不 import `features/*`                                     |
-| 布局层 | `src/components/layout/**`     | App Shell（`Header`、`Main`、`AppSidebar`、`NavUser`、`CommandMenu`）；通过 props/slot 接收导航与用户信息，不直接 import `auth-store` 或 `features/*` |
+| 布局层 | `src/components/layout/**`     | App Shell（`Header`、`Main`、`AppSidebar`、`NavUser`、`CommandMenu`、`AuthShell`）；通过 props/slot 接收导航与用户信息，不直接 import `auth-store` 或 `features/*` |
 | 表格层 | `src/components/data-table/**` | 泛型服务端表格原语（见 [data-table.md](./data-table.md)）；不绑定业务 DTO                                                                             |
 | 业务层 | `src/features/<domain>/**`     | 页面、列定义、弹窗、feature API；禁止横向 import 其他 feature                                                                                         |
 
@@ -36,7 +36,8 @@
 
 - 受保护页面统一复用 `AuthenticatedLayout`（`SidebarProvider` + `AppSidebar` + `SidebarInset`），页面内部保持 `Header` + `Main` 结构；`Main` 支持 `fixed`（设置类窄页）与 `fluid`（宽表格页）。
 - 侧边栏与 `Cmd/Ctrl+K` 命令面板共享同一份强类型导航配置，并由装配层按当前用户权限与 i18n 翻译后传入。
-- 可访问性底线：保留 `SkipToMain`；纯图标按钮必须带 `aria-label` 或 `sr-only`；弹窗关闭后焦点返回触发元素；页面保留 401/403/404/500 错误页。
+- 可访问性底线：受保护布局保留 `SkipToMain`（未登录页为单一 landmark 表单，可豁免）；纯图标按钮必须带 `aria-label` 或 `sr-only`；弹窗关闭后焦点返回触发元素；页面保留 401/403/404/500 错误页。
+- **未登录页统一复用 `AuthShell`**（登录、初始化及后续找回密码等）：极简居中磨砂玻璃卡片 + 全屏自适应 Three.js 流体丝绸极光着色器背景（`auth-three-backdrop.tsx`），顶栏保留语言与主题切换。Three.js 场景必须懒加载、实时同步明暗主题色板、监听 `prefers-reduced-motion` 与 `visibilitychange` 并在卸载时完整释放 GPU 资源；WebGL 不可用时优雅降级为纯 CSS 渐变背景。
 
 ## 4. 表单与弹窗
 
@@ -44,8 +45,13 @@
 
 - 统一 `react-hook-form` + `zodResolver` + shadcn `Form`（`FormField` / `FormItem` / `FormLabel` / `FormControl` / `FormMessage`），不手写零散 label/error。
 - Zod schema 放在组件旁或 feature 的 `schema.ts`；校验错误文案通过工厂函数或 `useMemo` 绑定当前 `t`（取自 `validation` namespace），禁止模块顶层硬编码语言文本。
-- 密码输入统一用 `PasswordInput`，正确标注 `autoComplete`（登录 `current-password`，新建/改密 `new-password`）。
-- 提交期间按钮禁用并显示加载状态，防止重复提交；服务端 `422` 映射回 `form.setError`，无字段错误时在表单顶部展示错误提示。
+- 校验长度必须与服务端 `binding` 对齐（如用户名 `3–64`、显示名 `≤100`、邮箱 `≤255`、密码 `8–128`），避免前端放行后在服务端被 `422` 打回。
+- `FormControl` 直接包裹 `Input`、`PasswordInput` 等表单控件，由 Radix `Slot` 自动注入 `id` / `aria-describedby` / `aria-invalid`，确保 `<FormLabel htmlFor>` 命中真实 `<input>`；禁止在 `components/ui/form.tsx` 中引入非标准补丁。
+- 密码输入统一用 `PasswordInput`，正确标注 `autoComplete`（登录 `current-password`，新建/改密 `new-password`）；明文切换按钮用 `aria-label` + `aria-pressed` 并走 i18n（`common:password.show` / `password.hide`）。
+- 提交期间按钮禁用并显示加载状态，防止重复提交；服务端 `422` 映射回 `form.setError`。
+- **失败反馈分层**：字段级错误走 `FormMessage`；与字段无关的失败（`401` 凭证错误、`403` 账号禁用、`429` 限流）必须在表单内渲染常驻 `role="alert"` 横幅，禁止只用会自动消失的 toast。
+- **`429` 必须带退避**：从 `ApiError.retryAfter`（源自响应头 `Retry-After`）读取秒数，用 `useRetryCountdown()` 保持横幅可见并在倒计时期间禁用提交按钮；每秒变化的倒计时文本需对辅助技术静默（`aria-live="off"`），由横幅在插入时播报一次，禁止每秒重读整条告警。
+- 用户编辑任一字段时应清除上一轮的横幅错误，避免过期失败提示残留。
 
 弹窗、侧边抽屉与提示约定：
 

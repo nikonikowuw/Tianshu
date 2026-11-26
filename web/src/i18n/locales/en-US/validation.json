@@ -3,5 +3,10 @@
   "usernameMin": "Username must be at least 3 characters",
   "invalidEmail": "Please enter a valid email address",
   "passwordMin": "Password must be at least 8 characters",
-  "passwordMismatch": "Passwords do not match"
+  "passwordMismatch": "Passwords do not match",
+  "passwordMax": "Password must be at most 128 characters",
+  "usernameMax": "Username must be at most 64 characters",
+  "displayNameMax": "Display name must be at most 100 characters",
+  "emailMax": "Email must be at most 255 characters",
+  "identifierMax": "Username or email must be at most 255 characters"
 }

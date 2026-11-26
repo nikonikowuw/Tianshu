@@ -19,5 +19,10 @@
   "internal": {
     "title": "系统发生异常",
     "description": "服务器遇到未预期错误，请稍后重试。"
-  }
+  },
+  "rateLimited": "请求过于频繁，请稍后重试",
+  "rateLimitedTitle": "尝试次数过多",
+  "rateLimitWait": "为保护账号安全，请在 {{seconds}} 秒后重试",
+  "loginFailedTitle": "登录失败",
+  "setupFailedTitle": "初始化失败"
 }

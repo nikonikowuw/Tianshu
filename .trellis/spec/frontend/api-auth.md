@@ -25,16 +25,19 @@ export class ApiError extends Error {
   readonly code: string;
   readonly requestId: string;
   readonly fieldErrors: Record<string, string>;
+  readonly retryAfter: number;
 }
 ```
 
 规则：
 
 - `requestId` 从 `X-Request-Id` 响应头读取（唯一来源），缺失时置空字符串并记开发日志，不伪造。
+- `retryAfter` 从 `429` 响应的 `Retry-After` 头读取（秒数向上取整，无效或缺失时为 `0`）；跨域场景需由服务端 `Access-Control-Expose-Headers` 暴露。
 - `message` 后端已按 `Accept-Language` 翻译，前端优先直接展示，仅在网络异常或缺失时按 `code` 回退本地文案。
 - `422` 的 `errors[]` 映射为 `fieldErrors`，表单提交统一通过 `form.setError` 回填到字段，不只弹全局 toast。
 - `5xx` 展示通用本地化错误文案 + `requestId`，禁止暴露堆栈或原始响应体。
 - 查询错误在全局 `QueryCache.onError` 兜底（列表/区块内联错误态可标记跳过全局 toast）；mutation 错误在各自 `onError` 处理，严禁同一错误重复弹两次 toast。
+- `403` 全局副作用（清会话、跳登录）只对受保护端点生效；公开认证端点（`/auth/login`、`/auth/refresh`、`/auth/logout`、`/setup/*`）的 `401`/`403` 交由页面内联提示，避免同一次失败同时出现 toast、路由跳转与表单横幅。
 
 ## 3. TanStack Query 约定
 
@@ -50,7 +53,7 @@ export class ApiError extends Error {
 状态机固定为 `unknown | authenticated | unauthenticated`，仅存内存：
 
 1. **启动恢复（`ensureSession`）**：调用 `POST /auth/refresh` 获取 Access Token → 调用 `GET /auth/me` 加载用户、角色与权限码；失败置为 `unauthenticated`。
-2. **登录 / Setup 初始化**：提交凭据后写入 Access Token → 拉取 `/auth/me` → invalidate Setup 状态 → 跳转合法 `redirect` 或 `/`。Setup 页依据 `GET /setup/status` 返回的模式决定是否渲染 `setupToken` 输入框（默认 `token` 模式显示，`local`/`open` 不显示）。
+2. **登录 / Setup 初始化**：提交凭据后写入 Access Token → 拉取 `/auth/me` → invalidate Setup 状态 → 跳转合法 `redirect` 或 `/`。Setup 页为免令牌极简向导，不再渲染 `setupToken` 输入框；是否可用仅由 `GET /setup/status` 的 `initialized` 判定。
 3. **单飞刷新（Single-Flight Refresh）**：
    - `ensureSession()` 与 `401` 拦截刷新共用同一把单飞锁：并发触发时只发一次 `POST /auth/refresh`，其余请求复用同一个 Promise；
    - 刷新成功后重放原请求一次；刷新请求本身及其重放失败不再触发二次刷新，防止死循环；

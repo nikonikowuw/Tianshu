@@ -219,7 +219,7 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 				c.Header("Access-Control-Allow-Origin", origin)
 				c.Header("Vary", "Origin")
 				c.Header("Access-Control-Allow-Credentials", "true")
-				c.Header("Access-Control-Expose-Headers", headerRequestID)
+				c.Header("Access-Control-Expose-Headers", headerRequestID+", Retry-After")
 				c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept-Language, X-Request-Id")
 				c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			}

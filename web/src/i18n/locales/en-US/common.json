@@ -29,5 +29,9 @@
     "description": "Tianshu base scaffold is ready. Business modules will be added in vertical slices.",
     "readyCardTitle": "Platform Ready",
     "readyCardDesc": "Single-binary Go embed, bilingual i18n, RouterContext guards, and unified API client are wired."
+  },
+  "password": {
+    "show": "Show password",
+    "hide": "Hide password"
   }
 }
