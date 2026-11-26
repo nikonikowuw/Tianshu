@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-11-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~210 | Active |
+| `journal-1.md` | ~227 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -30,6 +30,7 @@
 
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-11-26 | 确立 AI 评审强制独立 Subagent 上下文（写审分离）规范 | - | `feat/users-management` |
 | 12 | 2026-11-26 | 调整配置加载顺序、极简 Setup + 环境变量初始化与 8 位密码基线 | - | `fix/dev-ergonomics` |
 | 11 | 2026-11-26 | RBAC 权限码采用标准动作细粒度拆分 | - | `feat/access-core` |
 | 10 | 2026-11-26 | 确立最多 3 轮的循环 Review-Fix 机制 | - | `dev` |

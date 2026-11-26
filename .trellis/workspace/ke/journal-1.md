@@ -208,3 +208,20 @@ Topics: [.trellis/spec/backend/security.md](../../spec/backend/security.md), [do
 ### Git Commits
 
 (No associated commits)
+
+
+## Session 13: 确立 AI 评审强制独立 Subagent 上下文（写审分离）规范
+<!-- trellis-session: v=3 fp=75f47c200cf5726a -->
+
+**Date**: 2026-11-26
+**Task**: 确立 AI 评审强制独立 Subagent 上下文（写审分离）规范
+**Branch**: `feat/users-management`
+
+### Summary
+
+确认 AI 代码评审强制采用写审分离：主 Agent 负责自动化前置门禁与修复编排，实质双轴评审委托给独立上下文的只读 Reviewer Subagent，第 2/3 轮定向复检复用该独立评审会话；同步更新 tianshu-review skill。
+Topics: [.trellis/spec/workflow/review.md](../../spec/workflow/review.md)
+
+### Git Commits
+
+(No associated commits)
