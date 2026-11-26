@@ -26,15 +26,16 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:8080',
-        changeOrigin: true,
+        // Preserve the browser Host header so backend RequireSameOrigin matches Origin/Referer on refresh/logout.
+        changeOrigin: false,
       },
       '/healthz': {
         target: 'http://localhost:8080',
-        changeOrigin: true,
+        changeOrigin: false,
       },
       '/readyz': {
         target: 'http://localhost:8080',
-        changeOrigin: true,
+        changeOrigin: false,
       },
     },
   },
