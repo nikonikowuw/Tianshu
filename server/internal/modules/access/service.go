@@ -450,6 +450,81 @@ func (s *Service) AssignRoleByCode(ctx context.Context, userID uuid.UUID, roleCo
 	})
 }
 
+// ListRoleOptions returns all roles in lightweight form for dropdowns and filters.
+func (s *Service) ListRoleOptions(ctx context.Context) ([]RoleRef, error) {
+	refs, err := s.store.ListRoleOptions(ctx)
+	if err != nil {
+		return nil, apperr.Internal(fmt.Errorf("list role options: %w", err))
+	}
+	return refs, nil
+}
+
+// ResolveRoles returns matching RoleRefs for the provided role IDs (missing IDs are omitted).
+func (s *Service) ResolveRoles(ctx context.Context, ids []uuid.UUID) ([]RoleRef, error) {
+	if len(ids) == 0 {
+		return make([]RoleRef, 0), nil
+	}
+	refs, err := s.store.ListRolesByIDs(ctx, ids)
+	if err != nil {
+		return nil, apperr.Internal(fmt.Errorf("resolve roles: %w", err))
+	}
+	return refs, nil
+}
+
+// ListRolesByUserIDs returns role summaries grouped by user ID.
+func (s *Service) ListRolesByUserIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID][]RoleRef, error) {
+	if len(userIDs) == 0 {
+		return make(map[uuid.UUID][]RoleRef), nil
+	}
+	m, err := s.store.ListRolesByUserIDs(ctx, userIDs)
+	if err != nil {
+		return nil, apperr.Internal(fmt.Errorf("list roles by user ids: %w", err))
+	}
+	return m, nil
+}
+
+// ListUserIDsByRoleIDs returns distinct user IDs holding any of the given role IDs.
+func (s *Service) ListUserIDsByRoleIDs(ctx context.Context, roleIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if len(roleIDs) == 0 {
+		return make([]uuid.UUID, 0), nil
+	}
+	ids, err := s.store.ListUserIDsByRoleIDs(ctx, roleIDs)
+	if err != nil {
+		return nil, apperr.Internal(fmt.Errorf("list user ids by role ids: %w", err))
+	}
+	return ids, nil
+}
+
+// ListUserIDsByRoleCode returns user IDs holding the specified role code.
+func (s *Service) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error) {
+	ids, err := s.store.ListUserIDsByRoleCode(ctx, code)
+	if err != nil {
+		return nil, apperr.Internal(fmt.Errorf("list user ids by role code %s: %w", code, err))
+	}
+	return ids, nil
+}
+
+// ReplaceUserRoles replaces all role assignments for userID and invalidates the user's permission cache after commit.
+func (s *Service) ReplaceUserRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
+	return s.withinTx(ctx, func(txCtx context.Context) error {
+		if err := s.store.DeleteUserRoles(txCtx, userID); err != nil {
+			return apperr.Internal(fmt.Errorf("clear roles for user %s: %w", userID, err))
+		}
+		for _, roleID := range roleIDs {
+			if err := s.store.AssignUserRole(txCtx, userID, roleID); err != nil {
+				if errors.Is(err, errRoleNotFound) {
+					return roleNotFoundError()
+				}
+				return apperr.Internal(fmt.Errorf("assign role %s to user %s: %w", roleID, userID, err))
+			}
+		}
+		database.AfterCommit(txCtx, func() {
+			s.InvalidateUserCache(context.WithoutCancel(txCtx), userID)
+		})
+		return nil
+	})
+}
+
 // GetUserAccess returns the current roles and permissions for userID using read-through caching.
 func (s *Service) GetUserAccess(ctx context.Context, userID uuid.UUID) (UserAccess, error) {
 	key := userCacheKey(userID)

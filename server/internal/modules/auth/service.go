@@ -595,6 +595,14 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (MeResult, error) {
 	}, nil
 }
 
+// RevokeAllUserSessions revokes every active session of userID and participates in the caller's tx via ctx.
+func (s *Service) RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) error {
+	if err := s.store.RevokeAllUserSessions(ctx, userID); err != nil {
+		return apperr.Internal(fmt.Errorf("revoke all user sessions for %s: %w", userID, err))
+	}
+	return nil
+}
+
 func (s *Service) checkLoginCooldown(ctx context.Context, ip, identifier string) int {
 	if s.cache == nil {
 		return 0

@@ -156,6 +156,16 @@ func (q *Queries) DeleteRolePermissions(ctx context.Context, roleID uuid.UUID) e
 	return err
 }
 
+const deleteUserRoles = `-- name: DeleteUserRoles :exec
+DELETE FROM user_roles
+WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserRoles(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUserRoles, userID)
+	return err
+}
+
 const ensureSystemRole = `-- name: EnsureSystemRole :one
 INSERT INTO roles (id, code, name, description, name_key, description_key, is_system, created_at, updated_at)
 VALUES ($1, $2, '', '', $3, $4, true, now(), now())
@@ -335,6 +345,46 @@ func (q *Queries) ListPermissionCodesByRoleIDs(ctx context.Context, roleIds []uu
 	return items, nil
 }
 
+const listRoleOptions = `-- name: ListRoleOptions :many
+SELECT id, code, name, name_key, is_system
+FROM roles
+ORDER BY is_system DESC, code ASC
+`
+
+type ListRoleOptionsRow struct {
+	ID       uuid.UUID
+	Code     string
+	Name     string
+	NameKey  pgtype.Text
+	IsSystem bool
+}
+
+func (q *Queries) ListRoleOptions(ctx context.Context) ([]ListRoleOptionsRow, error) {
+	rows, err := q.db.Query(ctx, listRoleOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRoleOptionsRow
+	for rows.Next() {
+		var i ListRoleOptionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.NameKey,
+			&i.IsSystem,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRoleUserIDs = `-- name: ListRoleUserIDs :many
 SELECT user_id
 FROM user_roles
@@ -463,6 +513,143 @@ func (q *Queries) ListRoles(ctx context.Context, arg ListRolesParams) ([]ListRol
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRolesByIDs = `-- name: ListRolesByIDs :many
+SELECT id, code, name, name_key, is_system
+FROM roles
+WHERE id = ANY($1::uuid[])
+`
+
+type ListRolesByIDsRow struct {
+	ID       uuid.UUID
+	Code     string
+	Name     string
+	NameKey  pgtype.Text
+	IsSystem bool
+}
+
+func (q *Queries) ListRolesByIDs(ctx context.Context, ids []uuid.UUID) ([]ListRolesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listRolesByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRolesByIDsRow
+	for rows.Next() {
+		var i ListRolesByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.NameKey,
+			&i.IsSystem,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRolesByUserIDs = `-- name: ListRolesByUserIDs :many
+SELECT ur.user_id, r.id, r.code, r.name, r.name_key, r.is_system
+FROM user_roles ur
+INNER JOIN roles r ON r.id = ur.role_id
+WHERE ur.user_id = ANY($1::uuid[])
+ORDER BY ur.user_id ASC, r.is_system DESC, r.code ASC
+`
+
+type ListRolesByUserIDsRow struct {
+	UserID   uuid.UUID
+	ID       uuid.UUID
+	Code     string
+	Name     string
+	NameKey  pgtype.Text
+	IsSystem bool
+}
+
+func (q *Queries) ListRolesByUserIDs(ctx context.Context, userIds []uuid.UUID) ([]ListRolesByUserIDsRow, error) {
+	rows, err := q.db.Query(ctx, listRolesByUserIDs, userIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRolesByUserIDsRow
+	for rows.Next() {
+		var i ListRolesByUserIDsRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.NameKey,
+			&i.IsSystem,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserIDsByRoleCode = `-- name: ListUserIDsByRoleCode :many
+SELECT ur.user_id
+FROM user_roles ur
+INNER JOIN roles r ON r.id = ur.role_id
+WHERE r.code = $1
+`
+
+func (q *Queries) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listUserIDsByRoleCode, code)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserIDsByRoleIDs = `-- name: ListUserIDsByRoleIDs :many
+SELECT DISTINCT user_id
+FROM user_roles
+WHERE role_id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListUserIDsByRoleIDs(ctx context.Context, roleIds []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listUserIDsByRoleIDs, roleIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

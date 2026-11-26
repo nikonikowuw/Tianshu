@@ -12,6 +12,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countActiveUsersByIDs = `-- name: CountActiveUsersByIDs :one
+SELECT count(*)::bigint
+FROM users
+WHERE deleted_at IS NULL
+  AND status = 'active'
+  AND id = ANY($1::uuid[])
+`
+
+func (q *Queries) CountActiveUsersByIDs(ctx context.Context, ids []uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveUsersByIDs, ids)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countUsers = `-- name: CountUsers :one
 SELECT count(*)::bigint
 FROM users
@@ -20,6 +35,38 @@ WHERE deleted_at IS NULL
 
 func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countUsers)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countUsersFiltered = `-- name: CountUsersFiltered :one
+SELECT count(*)::bigint
+FROM users u
+WHERE u.deleted_at IS NULL
+  AND ($1::text = '' OR (
+        u.username ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        u.email ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        u.display_name ILIKE '%' || $1::text || '%' ESCAPE '\'
+    ))
+  AND (cardinality($2::text[]) = 0 OR u.status = ANY($2::text[]))
+  AND (NOT $3::boolean OR u.id = ANY($4::uuid[]))
+`
+
+type CountUsersFilteredParams struct {
+	Q         string
+	Statuses  []string
+	FilterIds bool
+	Ids       []uuid.UUID
+}
+
+func (q *Queries) CountUsersFiltered(ctx context.Context, arg CountUsersFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUsersFiltered,
+		arg.Q,
+		arg.Statuses,
+		arg.FilterIds,
+		arg.Ids,
+	)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -119,6 +166,111 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow
 	return i, err
 }
 
+const getUserByIDForUpdate = `-- name: GetUserByIDForUpdate :one
+SELECT
+    id,
+    username,
+    email,
+    display_name,
+    status,
+    last_login_at,
+    created_by,
+    updated_by,
+    created_at,
+    updated_at
+FROM users
+WHERE id = $1
+  AND deleted_at IS NULL
+FOR UPDATE
+`
+
+type GetUserByIDForUpdateRow struct {
+	ID          uuid.UUID
+	Username    string
+	Email       string
+	DisplayName string
+	Status      string
+	LastLoginAt pgtype.Timestamptz
+	CreatedBy   uuid.NullUUID
+	UpdatedBy   uuid.NullUUID
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+func (q *Queries) GetUserByIDForUpdate(ctx context.Context, id uuid.UUID) (GetUserByIDForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getUserByIDForUpdate, id)
+	var i GetUserByIDForUpdateRow
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.DisplayName,
+		&i.Status,
+		&i.LastLoginAt,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserDetailByID = `-- name: GetUserDetailByID :one
+SELECT
+    u.id,
+    u.username,
+    u.email,
+    u.display_name,
+    u.status,
+    u.last_login_at,
+    u.created_by,
+    cb.username AS created_by_username,
+    u.updated_by,
+    ub.username AS updated_by_username,
+    u.created_at,
+    u.updated_at
+FROM users u
+LEFT JOIN users cb ON cb.id = u.created_by
+LEFT JOIN users ub ON ub.id = u.updated_by
+WHERE u.id = $1
+  AND u.deleted_at IS NULL
+`
+
+type GetUserDetailByIDRow struct {
+	ID                uuid.UUID
+	Username          string
+	Email             string
+	DisplayName       string
+	Status            string
+	LastLoginAt       pgtype.Timestamptz
+	CreatedBy         uuid.NullUUID
+	CreatedByUsername pgtype.Text
+	UpdatedBy         uuid.NullUUID
+	UpdatedByUsername pgtype.Text
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) GetUserDetailByID(ctx context.Context, id uuid.UUID) (GetUserDetailByIDRow, error) {
+	row := q.db.QueryRow(ctx, getUserDetailByID, id)
+	var i GetUserDetailByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.DisplayName,
+		&i.Status,
+		&i.LastLoginAt,
+		&i.CreatedBy,
+		&i.CreatedByUsername,
+		&i.UpdatedBy,
+		&i.UpdatedByUsername,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getUserForAuthByIdentifier = `-- name: GetUserForAuthByIdentifier :one
 SELECT id, username, email, password_hash, display_name, status
 FROM users
@@ -150,6 +302,133 @@ func (q *Queries) GetUserForAuthByIdentifier(ctx context.Context, username strin
 	return i, err
 }
 
+const listUsers = `-- name: ListUsers :many
+SELECT
+    u.id,
+    u.username,
+    u.email,
+    u.display_name,
+    u.status,
+    u.last_login_at,
+    u.created_by,
+    cb.username AS created_by_username,
+    u.updated_by,
+    ub.username AS updated_by_username,
+    u.created_at,
+    u.updated_at
+FROM users u
+LEFT JOIN users cb ON cb.id = u.created_by
+LEFT JOIN users ub ON ub.id = u.updated_by
+WHERE u.deleted_at IS NULL
+  AND ($1::text = '' OR (
+        u.username ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        u.email ILIKE '%' || $1::text || '%' ESCAPE '\' OR
+        u.display_name ILIKE '%' || $1::text || '%' ESCAPE '\'
+    ))
+  AND (cardinality($2::text[]) = 0 OR u.status = ANY($2::text[]))
+  AND (NOT $3::boolean OR u.id = ANY($4::uuid[]))
+ORDER BY
+    CASE WHEN $5::text = 'created_at' AND $6::text = 'asc' THEN u.created_at END ASC,
+    CASE WHEN $5::text = 'created_at' AND $6::text = 'desc' THEN u.created_at END DESC,
+    CASE WHEN $5::text = 'updated_at' AND $6::text = 'asc' THEN u.updated_at END ASC,
+    CASE WHEN $5::text = 'updated_at' AND $6::text = 'desc' THEN u.updated_at END DESC,
+    CASE WHEN $5::text = 'username' AND $6::text = 'asc' THEN u.username END ASC,
+    CASE WHEN $5::text = 'username' AND $6::text = 'desc' THEN u.username END DESC,
+    CASE WHEN $5::text = 'last_login_at' AND $6::text = 'asc' THEN u.last_login_at END ASC NULLS LAST,
+    CASE WHEN $5::text = 'last_login_at' AND $6::text = 'desc' THEN u.last_login_at END DESC NULLS LAST,
+    u.created_at DESC,
+    CASE WHEN $6::text = 'asc' THEN u.id END ASC,
+    u.id DESC
+LIMIT $8 OFFSET $7
+`
+
+type ListUsersParams struct {
+	Q          string
+	Statuses   []string
+	FilterIds  bool
+	Ids        []uuid.UUID
+	SortBy     string
+	SortOrder  string
+	PageOffset int32
+	PageLimit  int32
+}
+
+type ListUsersRow struct {
+	ID                uuid.UUID
+	Username          string
+	Email             string
+	DisplayName       string
+	Status            string
+	LastLoginAt       pgtype.Timestamptz
+	CreatedBy         uuid.NullUUID
+	CreatedByUsername pgtype.Text
+	UpdatedBy         uuid.NullUUID
+	UpdatedByUsername pgtype.Text
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error) {
+	rows, err := q.db.Query(ctx, listUsers,
+		arg.Q,
+		arg.Statuses,
+		arg.FilterIds,
+		arg.Ids,
+		arg.SortBy,
+		arg.SortOrder,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsersRow
+	for rows.Next() {
+		var i ListUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Email,
+			&i.DisplayName,
+			&i.Status,
+			&i.LastLoginAt,
+			&i.CreatedBy,
+			&i.CreatedByUsername,
+			&i.UpdatedBy,
+			&i.UpdatedByUsername,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const softDeleteUser = `-- name: SoftDeleteUser :exec
+UPDATE users
+SET deleted_at = now(),
+    updated_by = $2,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+type SoftDeleteUserParams struct {
+	ID        uuid.UUID
+	UpdatedBy uuid.NullUUID
+}
+
+func (q *Queries) SoftDeleteUser(ctx context.Context, arg SoftDeleteUserParams) error {
+	_, err := q.db.Exec(ctx, softDeleteUser, arg.ID, arg.UpdatedBy)
+	return err
+}
+
 const updateUserLastLogin = `-- name: UpdateUserLastLogin :exec
 UPDATE users
 SET last_login_at = now(),
@@ -160,6 +439,26 @@ WHERE id = $1
 
 func (q *Queries) UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, updateUserLastLogin, id)
+	return err
+}
+
+const updateUserPasswordByAdmin = `-- name: UpdateUserPasswordByAdmin :exec
+UPDATE users
+SET password_hash = $2,
+    updated_by = $3,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+type UpdateUserPasswordByAdminParams struct {
+	ID           uuid.UUID
+	PasswordHash string
+	UpdatedBy    uuid.NullUUID
+}
+
+func (q *Queries) UpdateUserPasswordByAdmin(ctx context.Context, arg UpdateUserPasswordByAdminParams) error {
+	_, err := q.db.Exec(ctx, updateUserPasswordByAdmin, arg.ID, arg.PasswordHash, arg.UpdatedBy)
 	return err
 }
 
@@ -179,4 +478,37 @@ type UpdateUserPasswordHashParams struct {
 func (q *Queries) UpdateUserPasswordHash(ctx context.Context, arg UpdateUserPasswordHashParams) error {
 	_, err := q.db.Exec(ctx, updateUserPasswordHash, arg.ID, arg.PasswordHash)
 	return err
+}
+
+const updateUserProfile = `-- name: UpdateUserProfile :one
+UPDATE users
+SET email = $2,
+    display_name = $3,
+    status = $4,
+    updated_by = $5,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id
+`
+
+type UpdateUserProfileParams struct {
+	ID          uuid.UUID
+	Email       string
+	DisplayName string
+	Status      string
+	UpdatedBy   uuid.NullUUID
+}
+
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, updateUserProfile,
+		arg.ID,
+		arg.Email,
+		arg.DisplayName,
+		arg.Status,
+		arg.UpdatedBy,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }

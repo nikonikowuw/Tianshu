@@ -28,6 +28,17 @@ func (h *Handler) listPermissions(c *gin.Context) {
 	c.JSON(http.StatusOK, toListPermissionsResponse(groups, locale, h.i18n))
 }
 
+func (h *Handler) listRoleOptions(c *gin.Context) {
+	refs, err := h.service.ListRoleOptions(c.Request.Context())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	locale := i18n.LocaleFromContext(c.Request.Context())
+	c.JSON(http.StatusOK, toListRoleOptionsResponse(refs, locale, h.i18n))
+}
+
 func (h *Handler) listRoles(c *gin.Context) {
 	filter, err := bindListRolesRequest(c)
 	if err != nil {

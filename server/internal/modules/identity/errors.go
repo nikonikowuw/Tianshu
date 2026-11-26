@@ -8,10 +8,18 @@ import (
 
 // Domain error codes owned by the identity module.
 const (
-	ErrCodeUsernameExists  = "IDENTITY_USERNAME_EXISTS"
-	ErrCodeEmailExists     = "IDENTITY_EMAIL_EXISTS"
-	ErrCodeInvalidPassword = "IDENTITY_INVALID_PASSWORD"
-	ErrCodeUserNotFound    = "IDENTITY_USER_NOT_FOUND"
+	ErrCodeUsernameConflict  = "USERS_USERNAME_CONFLICT"
+	ErrCodeEmailConflict     = "USERS_EMAIL_CONFLICT"
+	ErrCodeInvalidPassword   = "USERS_INVALID_PASSWORD"
+	ErrCodeUserNotFound      = "USERS_NOT_FOUND"
+	ErrCodeLastSuperAdmin    = "USERS_LAST_SUPER_ADMIN"
+	ErrCodeSelfOperation     = "USERS_SELF_OPERATION_FORBIDDEN"
+	ErrCodeSuperAdminProtect = "USERS_SUPER_ADMIN_PROTECTED"
+	ErrCodeInvalidRole       = "USERS_INVALID_ROLE"
+	ErrCodeInvalidUsername   = "USERS_INVALID_USERNAME"
+	ErrCodeInvalidEmail      = "USERS_INVALID_EMAIL"
+	ErrCodeInvalidDisplay    = "USERS_INVALID_DISPLAY_NAME"
+	ErrCodeInvalidStatus     = "USERS_INVALID_STATUS"
 )
 
 var (
@@ -21,11 +29,11 @@ var (
 )
 
 func usernameExistsError() *apperr.Error {
-	return apperr.Conflict(ErrCodeUsernameExists)
+	return apperr.Conflict(ErrCodeUsernameConflict)
 }
 
 func emailExistsError() *apperr.Error {
-	return apperr.Conflict(ErrCodeEmailExists)
+	return apperr.Conflict(ErrCodeEmailConflict)
 }
 
 func invalidPasswordError() *apperr.Error {
@@ -34,4 +42,16 @@ func invalidPasswordError() *apperr.Error {
 
 func userNotFoundError() *apperr.Error {
 	return apperr.NotFound(ErrCodeUserNotFound)
+}
+
+func lastSuperAdminError() *apperr.Error {
+	return apperr.Conflict(ErrCodeLastSuperAdmin)
+}
+
+func selfOperationError() *apperr.Error {
+	return apperr.Conflict(ErrCodeSelfOperation)
+}
+
+func superAdminProtectedError() *apperr.Error {
+	return apperr.Forbidden(ErrCodeSuperAdminProtect)
 }

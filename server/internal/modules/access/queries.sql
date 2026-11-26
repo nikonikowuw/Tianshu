@@ -201,3 +201,35 @@ WHERE role_id = $1;
 -- name: DeleteRole :exec
 DELETE FROM roles
 WHERE id = $1;
+
+-- name: ListRoleOptions :many
+SELECT id, code, name, name_key, is_system
+FROM roles
+ORDER BY is_system DESC, code ASC;
+
+-- name: ListRolesByIDs :many
+SELECT id, code, name, name_key, is_system
+FROM roles
+WHERE id = ANY(@ids::uuid[]);
+
+-- name: ListRolesByUserIDs :many
+SELECT ur.user_id, r.id, r.code, r.name, r.name_key, r.is_system
+FROM user_roles ur
+INNER JOIN roles r ON r.id = ur.role_id
+WHERE ur.user_id = ANY(@user_ids::uuid[])
+ORDER BY ur.user_id ASC, r.is_system DESC, r.code ASC;
+
+-- name: DeleteUserRoles :exec
+DELETE FROM user_roles
+WHERE user_id = $1;
+
+-- name: ListUserIDsByRoleIDs :many
+SELECT DISTINCT user_id
+FROM user_roles
+WHERE role_id = ANY(@role_ids::uuid[]);
+
+-- name: ListUserIDsByRoleCode :many
+SELECT ur.user_id
+FROM user_roles ur
+INNER JOIN roles r ON r.id = ur.role_id
+WHERE r.code = $1;

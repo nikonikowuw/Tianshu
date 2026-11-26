@@ -26,6 +26,17 @@ type listPermissionsResponse struct {
 	Groups []permissionGroupResponse `json:"groups"`
 }
 
+type roleOptionResponse struct {
+	ID       string `json:"id"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	IsSystem bool   `json:"isSystem"`
+}
+
+type listRoleOptionsResponse struct {
+	Items []roleOptionResponse `json:"items"`
+}
+
 type roleResponse struct {
 	ID              string   `json:"id"`
 	Code            string   `json:"code"`
@@ -104,6 +115,23 @@ func toListRolesResponse(res pagination.Result[Role], locale string, bundle *i18
 		Page:     res.Page,
 		PageSize: res.PageSize,
 	})
+}
+
+func toListRoleOptionsResponse(refs []RoleRef, locale string, bundle *i18n.Bundle) listRoleOptionsResponse {
+	items := make([]roleOptionResponse, 0, len(refs))
+	for _, r := range refs {
+		name := r.Name
+		if r.IsSystem && r.NameKey != "" {
+			name = translateKey(bundle, locale, r.NameKey, r.Code)
+		}
+		items = append(items, roleOptionResponse{
+			ID:       r.ID.String(),
+			Code:     r.Code,
+			Name:     name,
+			IsSystem: r.IsSystem,
+		})
+	}
+	return listRoleOptionsResponse{Items: items}
 }
 
 func translateKey(bundle *i18n.Bundle, locale, key, fallback string) string {

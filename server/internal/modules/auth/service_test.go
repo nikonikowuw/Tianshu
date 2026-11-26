@@ -143,13 +143,13 @@ func (f *fakeIdentityProvider) GetAuthCredentials(_ context.Context, identifier 
 			return u, nil
 		}
 	}
-	return UserCredentials{}, apperr.NotFound("IDENTITY_USER_NOT_FOUND")
+	return UserCredentials{}, apperr.NotFound("USERS_NOT_FOUND")
 }
 
 func (f *fakeIdentityProvider) GetByID(_ context.Context, userID uuid.UUID) (User, error) {
 	u, ok := f.users[userID]
 	if !ok {
-		return User{}, apperr.NotFound("IDENTITY_USER_NOT_FOUND")
+		return User{}, apperr.NotFound("USERS_NOT_FOUND")
 	}
 	return u.User, nil
 }

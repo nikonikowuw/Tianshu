@@ -30,24 +30,25 @@ import (
 
 // App is the single composition root wiring platform infrastructure, modules, and HTTP server.
 type App struct {
-	cfg           config.Config
-	log           *slog.Logger
-	i18n          *i18n.Bundle
-	hasher        *security.PasswordHasher
-	jwt           *security.JWTManager
-	db            *pgxpool.Pool
-	tx            *database.TxManager
-	cache         cache.Cache
-	storage       storage.Storage
-	access        *access.Service
-	accessHandler *access.Handler
-	identity      *identity.Service
-	audit         *audit.Service
-	auditHandler  *audit.Handler
-	authHandler   *auth.Handler
-	setupHandler  *setup.Handler
-	engine        *gin.Engine
-	server        *http.Server
+	cfg             config.Config
+	log             *slog.Logger
+	i18n            *i18n.Bundle
+	hasher          *security.PasswordHasher
+	jwt             *security.JWTManager
+	db              *pgxpool.Pool
+	tx              *database.TxManager
+	cache           cache.Cache
+	storage         storage.Storage
+	access          *access.Service
+	accessHandler   *access.Handler
+	identity        *identity.Service
+	identityHandler *identity.Handler
+	audit           *audit.Service
+	auditHandler    *audit.Handler
+	authHandler     *auth.Handler
+	setupHandler    *setup.Handler
+	engine          *gin.Engine
+	server          *http.Server
 }
 
 // Options customizes App assembly (primarily for tests).
@@ -112,30 +113,43 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	memCache := cache.NewMemory()
 
 	var (
-		accessSvc     *access.Service
-		accessHandler *access.Handler
-		identitySvc   *identity.Service
-		auditSvc      *audit.Service
-		auditHandler  *audit.Handler
-		authHandler   *auth.Handler
-		setupHandler  *setup.Handler
+		accessSvc       *access.Service
+		accessHandler   *access.Handler
+		identitySvc     *identity.Service
+		identityHandler *identity.Handler
+		auditSvc        *audit.Service
+		auditHandler    *audit.Handler
+		authHandler     *auth.Handler
+		setupHandler    *setup.Handler
 	)
 	if pool != nil {
 		auditSvc = audit.NewService(pool, log)
 		auditHandler = audit.NewHandler(auditSvc)
-		identitySvc = identity.NewService(pool, hasher)
+
+		identitySessionRevoker := &identitySessionAdapter{}
+		identityAccess := &identityAccessAdapter{}
+		identitySvc = identity.NewService(pool, hasher, identity.ServiceDeps{
+			Tx:       tx,
+			Roles:    identityAccess,
+			Sessions: identitySessionRevoker,
+			Audit:    &identityAuditAdapter{svc: auditSvc},
+			I18n:     bundle,
+			Log:      log,
+		})
 
 		accessSvc = access.NewService(pool, tx, memCache, log, access.ServiceDeps{
 			I18n:   bundle,
 			Audit:  &accessAuditAdapter{svc: auditSvc},
 			Actors: &accessActorAdapter{svc: identitySvc},
 		})
+		identityAccess.svc = accessSvc
 		if err := accessSvc.SyncCatalog(ctx); err != nil {
 			pool.Close()
 			_ = memCache.Close()
 			return nil, fmt.Errorf("sync access catalog: %w", err)
 		}
 		accessHandler = access.NewHandler(accessSvc, bundle)
+		identityHandler = identity.NewHandler(identitySvc, bundle)
 
 		setupSvc := setup.NewService(
 			&setupIdentityAdapter{svc: identitySvc},
@@ -163,6 +177,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			&authAuditAdapter{svc: auditSvc},
 			log,
 		)
+		identitySessionRevoker.svc = authSvc
 		authHandler = auth.NewHandler(authSvc, cfg.CORS.AllowedOrigins)
 	}
 
@@ -191,23 +206,24 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 
 	application := &App{
-		cfg:           cfg,
-		log:           log,
-		i18n:          bundle,
-		hasher:        hasher,
-		jwt:           jwtMgr,
-		db:            pool,
-		tx:            tx,
-		cache:         memCache,
-		storage:       store,
-		access:        accessSvc,
-		accessHandler: accessHandler,
-		identity:      identitySvc,
-		audit:         auditSvc,
-		auditHandler:  auditHandler,
-		authHandler:   authHandler,
-		setupHandler:  setupHandler,
-		engine:        engine,
+		cfg:             cfg,
+		log:             log,
+		i18n:            bundle,
+		hasher:          hasher,
+		jwt:             jwtMgr,
+		db:              pool,
+		tx:              tx,
+		cache:           memCache,
+		storage:         store,
+		access:          accessSvc,
+		accessHandler:   accessHandler,
+		identity:        identitySvc,
+		identityHandler: identityHandler,
+		audit:           auditSvc,
+		auditHandler:    auditHandler,
+		authHandler:     authHandler,
+		setupHandler:    setupHandler,
+		engine:          engine,
 	}
 	application.registerRoutes()
 

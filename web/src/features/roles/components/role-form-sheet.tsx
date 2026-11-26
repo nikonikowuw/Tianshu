@@ -291,49 +291,47 @@ export function RoleFormSheet({
                   </Alert>
                 )}
 
-                <div className='grid gap-4 sm:grid-cols-2'>
-                  <FormField
-                    control={form.control}
-                    name='code'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('sheet.codeLabel')}</FormLabel>
-                        <FormControl>
-                          <Input
-                            {...field}
-                            placeholder={t('sheet.codePlaceholder')}
-                            disabled={mode !== 'create' || isSubmitting}
-                            className='font-mono text-sm'
-                          />
-                        </FormControl>
-                        {mode === 'create' && (
-                          <FormDescription className='text-xs'>
-                            {t('sheet.codeHint')}
-                          </FormDescription>
-                        )}
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                <FormField
+                  control={form.control}
+                  name='code'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('sheet.codeLabel')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          placeholder={t('sheet.codePlaceholder')}
+                          disabled={mode !== 'create' || isSubmitting}
+                          className='font-mono text-sm'
+                        />
+                      </FormControl>
+                      {mode === 'create' && (
+                        <FormDescription className='text-xs'>
+                          {t('sheet.codeHint')}
+                        </FormDescription>
+                      )}
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-                  <FormField
-                    control={form.control}
-                    name='name'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('sheet.nameLabel')}</FormLabel>
-                        <FormControl>
-                          <Input
-                            {...field}
-                            placeholder={t('sheet.namePlaceholder')}
-                            disabled={isReadOnly || isSubmitting}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
+                <FormField
+                  control={form.control}
+                  name='name'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('sheet.nameLabel')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          placeholder={t('sheet.namePlaceholder')}
+                          disabled={isReadOnly || isSubmitting}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
                 <FormField
                   control={form.control}

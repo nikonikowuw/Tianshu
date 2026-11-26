@@ -66,6 +66,13 @@ type store interface {
 	DeleteRolePermissions(ctx context.Context, roleID uuid.UUID) error
 	CountRoleUsers(ctx context.Context, roleID uuid.UUID) (int64, error)
 	DeleteRole(ctx context.Context, id uuid.UUID) error
+
+	ListRoleOptions(ctx context.Context) ([]RoleRef, error)
+	ListRolesByIDs(ctx context.Context, ids []uuid.UUID) ([]RoleRef, error)
+	ListRolesByUserIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID][]RoleRef, error)
+	DeleteUserRoles(ctx context.Context, userID uuid.UUID) error
+	ListUserIDsByRoleIDs(ctx context.Context, roleIDs []uuid.UUID) ([]uuid.UUID, error)
+	ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error)
 }
 
 // TxRunner executes fn inside a database transaction propagated via ctx.
@@ -286,6 +293,81 @@ func (s *pgStore) CountRoleUsers(ctx context.Context, roleID uuid.UUID) (int64, 
 
 func (s *pgStore) DeleteRole(ctx context.Context, id uuid.UUID) error {
 	return s.queries(ctx).DeleteRole(ctx, id)
+}
+
+func (s *pgStore) ListRoleOptions(ctx context.Context) ([]RoleRef, error) {
+	rows, err := s.queries(ctx).ListRoleOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RoleRef, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, RoleRef{
+			ID:       r.ID,
+			Code:     r.Code,
+			Name:     r.Name,
+			NameKey:  r.NameKey.String,
+			IsSystem: r.IsSystem,
+		})
+	}
+	return out, nil
+}
+
+func (s *pgStore) ListRolesByIDs(ctx context.Context, ids []uuid.UUID) ([]RoleRef, error) {
+	if len(ids) == 0 {
+		return make([]RoleRef, 0), nil
+	}
+	rows, err := s.queries(ctx).ListRolesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RoleRef, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, RoleRef{
+			ID:       r.ID,
+			Code:     r.Code,
+			Name:     r.Name,
+			NameKey:  r.NameKey.String,
+			IsSystem: r.IsSystem,
+		})
+	}
+	return out, nil
+}
+
+func (s *pgStore) ListRolesByUserIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID][]RoleRef, error) {
+	result := make(map[uuid.UUID][]RoleRef, len(userIDs))
+	if len(userIDs) == 0 {
+		return result, nil
+	}
+	rows, err := s.queries(ctx).ListRolesByUserIDs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		result[r.UserID] = append(result[r.UserID], RoleRef{
+			ID:       r.ID,
+			Code:     r.Code,
+			Name:     r.Name,
+			NameKey:  r.NameKey.String,
+			IsSystem: r.IsSystem,
+		})
+	}
+	return result, nil
+}
+
+func (s *pgStore) DeleteUserRoles(ctx context.Context, userID uuid.UUID) error {
+	return s.queries(ctx).DeleteUserRoles(ctx, userID)
+}
+
+func (s *pgStore) ListUserIDsByRoleIDs(ctx context.Context, roleIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if len(roleIDs) == 0 {
+		return make([]uuid.UUID, 0), nil
+	}
+	return s.queries(ctx).ListUserIDsByRoleIDs(ctx, roleIDs)
+}
+
+func (s *pgStore) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error) {
+	return s.queries(ctx).ListUserIDsByRoleCode(ctx, code)
 }
 
 func mapDBRole(row dbgen.Role) Role {
