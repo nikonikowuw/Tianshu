@@ -1,3 +1,7 @@
+# Copy this template to configs/config.toml (or configs/config.local.toml) for local customization.
+# Explicit path: tianshu -config /path/to/config.toml or TIANSHU_CONFIG=/path/to/config.toml.
+# Environment overrides use TIANSHU_ prefix with double underscores (e.g. TIANSHU_AUTH__JWT_SECRET).
+
 [app]
 env = "development" # development | production
 name = "tianshu"
@@ -40,10 +44,13 @@ access_token_ttl = "15m"
 refresh_token_ttl = "168h"
 cookie_secure = false
 
-[setup]
-mode = "token" # token | local | open
-token = ""     # Optional preset token; if empty in token mode, a random one-time token is printed at startup.
-allow_open = false
+[bootstrap]
+# Optional unattended initial super-admin bootstrap (recommended for automated/public deployments).
+# Can also be provided via TIANSHU_ADMIN_USERNAME, TIANSHU_ADMIN_EMAIL, TIANSHU_ADMIN_PASSWORD.
+admin_username = ""
+admin_email = ""
+admin_display_name = ""
+admin_password = ""
 
 [audit]
 retention_days = 180

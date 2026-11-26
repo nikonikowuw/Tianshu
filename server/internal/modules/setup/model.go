@@ -2,18 +2,9 @@ package setup
 
 import "github.com/google/uuid"
 
-// Protection mode constants matching config.SetupConfig.Mode.
-const (
-	ModeToken = "token"
-	ModeLocal = "local"
-	ModeOpen  = "open"
-)
-
 // Status describes whether Tianshu has completed initial administrator setup.
 type Status struct {
-	Initialized   bool
-	Mode          string
-	RequiresToken bool
+	Initialized bool
 }
 
 // CreatedAdmin represents the newly created initial super administrator.
@@ -24,12 +15,10 @@ type CreatedAdmin struct {
 	DisplayName string
 }
 
-// InitInput carries validated user input and client context for setup initialization.
+// InitInput carries validated user input for initial administrator creation.
 type InitInput struct {
-	SetupToken  string
 	Username    string
 	Email       string
 	DisplayName string
 	Password    string
-	ClientIP    string
 }

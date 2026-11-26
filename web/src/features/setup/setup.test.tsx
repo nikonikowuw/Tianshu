@@ -14,33 +14,34 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   }
 })
 
-function renderWizard(props?: { requireSetupTokenOverride?: boolean }) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <I18nextProvider i18n={i18n}>
-        <ThemeProvider>
-          <SetupWizard {...props} />
-        </ThemeProvider>
-      </I18nextProvider>
-    </QueryClientProvider>
-  )
-}
-
 describe('SetupWizard', () => {
-  it('shows setup token field when token protection mode is active', async () => {
-    const screen = await renderWizard({ requireSetupTokenOverride: true })
-    await expect
-      .element(screen.getByLabelText(/Setup Token|初始化令牌/))
-      .toBeVisible()
-  })
+  it('validates minimum 8-character password without requiring a setup token', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
 
-  it('hides setup token field when token is not required', async () => {
-    const screen = await renderWizard({ requireSetupTokenOverride: false })
+    const screen = await render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <ThemeProvider>
+            <SetupWizard />
+          </ThemeProvider>
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
     await expect
       .element(screen.getByLabelText(/Setup Token|初始化令牌/))
       .not.toBeInTheDocument()
+
+    await screen
+      .getByRole('button', { name: /Complete Setup|完成初始化/ })
+      .click()
+
+    await expect
+      .element(
+        screen.getByText(/at least 8 characters|密码长度至少为 8 个字符/)
+      )
+      .toBeVisible()
   })
 })

@@ -1,4 +1,2 @@
 # Setup module messages (en-US)
 SETUP_ALREADY_INITIALIZED = "System is already initialized"
-SETUP_TOKEN_INVALID = "Setup token is invalid or expired"
-SETUP_LOCAL_ONLY = "System initialization is restricted to local or private network addresses"

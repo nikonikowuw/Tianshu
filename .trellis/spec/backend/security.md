@@ -7,7 +7,7 @@
 - 使用 `argon2id`，禁止 MD5/SHA1/bcrypt 新用法。
 - 基线参数：`memory=64 MiB`、`iterations=3`、`parallelism=2`、`salt=16 bytes`、`key=32 bytes`；写入 PHC 字符串（`$argon2id$v=19$m=65536,t=3,p=2$...`）。
 - 参数可配置，但低于基线必须评审；登录成功时若参数已升级，用新参数 rehash 并更新。
-- 密码长度 12–128 字符；允许空格与所有 Unicode；不强制大小写/符号组合。
+- 密码长度 8–128 字符（遵循 NIST SP 800-63B 最低基线）；允许空格与所有 Unicode；不强制大小写/符号组合。
 - 可选：接入 breached-password 列表；MVP 不做强制。
 - 禁止日志、审计 metadata、错误信息中出现明文密码或哈希。
 - 不存在的用户也要执行一次 dummy Argon2 校验，降低用户名枚举的时序差异。
@@ -42,7 +42,7 @@
 - 禁用账号返回 `403 AUTH_ACCOUNT_DISABLED`；该提示会暴露账号状态，是后台系统的明确取舍。
 - 登录成功更新 `last_login_at`，写成功/失败审计（失败时 `actor_id` 可空，记录尝试的用户名，不记录密码）。
 - Setup 仅未初始化时可用；并发提交必须由数据库咨询锁 + `users == 0` 检查保证只有一次成功。
-- **Setup 接管防护**：默认 `setup.mode=token`，未初始化时启动生成一次性高熵 Token 输出至 stdout 日志（支持环境变量 `TIANSHU_SETUP_TOKEN` 预设），由向导提交校验；可选 `setup.mode=local`（仅放行 loopback/私网 CIDR）；`setup.mode=open` 必须双保险显式开启（同时配置 `setup.allow_open=true`）并输出 `WARN` 日志；所有模式均受限流与审计约束。
+- **Setup 初始化方式**：Web `/setup` 向导免令牌极简填表（仅接收管理员账号信息，受咨询锁 + `users == 0` 事务校验 + 限流保护，初始化完成后永久拒绝）；公网/容器自动化部署支持通过环境变量（`TIANSHU_ADMIN_USERNAME`、`TIANSHU_ADMIN_EMAIL`、`TIANSHU_ADMIN_PASSWORD`、可选 `TIANSHU_ADMIN_DISPLAY_NAME`）在启动期无人值守自动创建首个超级管理员，直接消除公网首启暴露窗口。
 - Setup 成功后 `/setup/init` 永久拒绝；前端 `/setup` 重定向。
 - 登出即使后端调用失败，前端也必须清本地会话；后端失败只记日志/提示，不阻止用户离开。
 - 不提供注册、社交登录、OTP、忘记密码，除非 PRD 明确加入。

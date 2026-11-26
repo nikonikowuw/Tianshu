@@ -148,8 +148,8 @@ flowchart TD
 ### M1：首次初始化向导（Setup）
 
 - **核心功能**：
-  - `GET /api/v1/setup/status`：公开只读接口，返回 `{ initialized: boolean, mode?: "token" | "local" | "open" }`（未初始化时用于前端判断是否展示 `setupToken` 输入框）。
-  - `POST /api/v1/setup/init`：仅在未初始化状态可用，默认 `token` 防护模式（启动生成一次性随机 Token 打印至日志，支持 `TIANSHU_SETUP_TOKEN` 预设；可选 `local` 限私网/loopback；`open` 需双保险显式开启并告警），接收 `username`、`email`、`displayName`、`password`（及 `token` 模式下的 `setupToken`），创建首个活跃用户并绑定 `super_admin` 角色，直接建立会话签发 Access Token + Refresh Cookie。
+  - `GET /api/v1/setup/status`：公开只读接口，返回 `{ initialized: boolean }`。
+  - `POST /api/v1/setup/init`：仅在未初始化状态可用，免令牌极简向导，接收 `username`、`email`、`displayName`、`password`（8–128 字符），经数据库咨询锁串行化创建首个活跃用户并绑定 `super_admin` 角色；同时支持通过环境变量 `TIANSHU_ADMIN_USERNAME` / `TIANSHU_ADMIN_EMAIL` / `TIANSHU_ADMIN_PASSWORD`（可选 `TIANSHU_ADMIN_DISPLAY_NAME`）在启动期无人值守自动初始化，适合容器与公网部署场景。
   - 前端 `/setup` 页面：当 `initialized === false` 时拦截登录及其他页面并自动引导至此；表单包含中英文切换、密码强度校验与提交后直达仪表盘。
 - **验收标准**：
   - 全新空库启动后端后访问前端，自动跳转 `/setup`；
@@ -279,7 +279,7 @@ flowchart TD
 
 ### 6.1 配置、日志与文档
 
-- **配置文件**：采用 **TOML**（`server/configs/config.example.toml` + gitignored `config.local.toml`），使用 `koanf` 加载并支持 `TIANSHU_*` 环境变量覆盖，启动时校验必填项（如生产环境禁止默认 JWT Secret）。
+- **配置文件**：采用 **TOML**（`server/configs/config.example.toml` 仅作模板；运行时支持 `-config` / `TIANSHU_CONFIG` 显式指定，未指定时按 `configs/config.toml` → `config.toml` → `configs/config.local.toml` → `config.local.toml` 叠加加载），使用 `koanf` 加载并支持 `TIANSHU_*` 环境变量覆盖，启动时校验必填项（如生产环境禁止默认 JWT Secret）。
 - **结构化日志**：基于 Go 标准库 `log/slog`，开发环境输出彩色可读文本，生产环境输出 JSON，所有请求日志自动携带 `request_id`、耗时、状态码、路径与客户端 IP。
 - **接口文档**：通过 `swag` 注释生成 OpenAPI/Swagger JSON，开发环境暴露 `/swagger` 或 `/docs`（Scalar/Swagger UI）供本地调试，生产环境默认关闭。
 - **优雅停机**：监听 `SIGINT` / `SIGTERM`，在超时窗口内平滑关闭 HTTP Server、PostgreSQL 连接池与缓存连接。

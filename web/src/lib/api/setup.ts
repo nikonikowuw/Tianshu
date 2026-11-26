@@ -3,8 +3,6 @@ import { apiClient } from './client'
 
 export type SetupStatus = {
   initialized: boolean
-  mode: 'token' | 'local' | 'open' | string
-  requiresToken: boolean
 }
 
 export const setupQueryKeys = {

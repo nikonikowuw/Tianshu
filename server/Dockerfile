@@ -20,6 +20,5 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /out/tianshu
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=server-builder /out/tianshu /app/tianshu
-COPY --from=server-builder /src/server/configs/config.example.toml /app/configs/config.example.toml
 EXPOSE 8080
 ENTRYPOINT ["/app/tianshu"]

@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	// MinPasswordLength is the minimum allowed password length in Unicode runes.
-	MinPasswordLength = 12
+	// MinPasswordLength is the minimum allowed password length in Unicode runes (NIST SP 800-63B).
+	MinPasswordLength = 8
 	// MaxPasswordLength is the maximum allowed password length in Unicode runes.
 	MaxPasswordLength = 128
 
@@ -32,7 +32,7 @@ const (
 )
 
 var (
-	// ErrInvalidPasswordLength indicates a password outside the 12-128 rune bounds.
+	// ErrInvalidPasswordLength indicates a password outside the 8-128 rune bounds.
 	ErrInvalidPasswordLength = errors.New("password length out of allowed range")
 	// ErrInvalidHashFormat indicates a malformed or unsupported PHC argon2id hash string.
 	ErrInvalidHashFormat = errors.New("invalid password hash format")
@@ -93,7 +93,7 @@ func NewPasswordHasher(params Argon2Params) (*PasswordHasher, error) {
 	return h, nil
 }
 
-// ValidatePasswordLength checks that password length is within 12-128 Unicode runes.
+// ValidatePasswordLength checks that password length is within 8-128 Unicode runes.
 func ValidatePasswordLength(password string) error {
 	n := utf8.RuneCountInString(password)
 	if n < MinPasswordLength || n > MaxPasswordLength {

@@ -54,10 +54,6 @@ type Options struct {
 func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	log := logger.New(cfg.App.Env, cfg.Log.Level, nil)
 
-	if cfg.Setup.Mode == "open" {
-		log.Warn("setup.mode=open is explicitly enabled; disable or complete setup immediately")
-	}
-
 	bundle, err := i18n.NewBundle()
 	if err != nil {
 		return nil, fmt.Errorf("init i18n bundle: %w", err)
@@ -122,18 +118,16 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		}
 
 		identitySvc = identity.NewService(pool, hasher)
-		setupSvc, err := setup.NewService(
-			ctx,
-			cfg.Setup,
+		setupSvc := setup.NewService(
 			&setupIdentityAdapter{svc: identitySvc},
 			accessSvc,
 			tx,
 			log,
 		)
-		if err != nil {
+		if err := setupSvc.BootstrapFromEnv(ctx, cfg.Bootstrap); err != nil {
 			pool.Close()
 			_ = memCache.Close()
-			return nil, fmt.Errorf("init setup service: %w", err)
+			return nil, fmt.Errorf("bootstrap initial admin: %w", err)
 		}
 		setupHandler = setup.NewHandler(setupSvc)
 

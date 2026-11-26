@@ -1,7 +1,6 @@
 package setup_test
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -66,45 +65,19 @@ func (fakeTx) WithinTx(ctx context.Context, fn func(ctx context.Context) error) 
 	return database.WithSimulatedTx(ctx, fn)
 }
 
-func TestSetupTokenModeAndConcurrency(t *testing.T) {
+func TestSetupInitConcurrencyAndIdempotency(t *testing.T) {
 	idStore := &fakeIdentity{}
 	roles := newFakeRoles()
-
-	var logBuf bytes.Buffer
-	svc, err := setup.NewService(
-		t.Context(),
-		config.SetupConfig{Mode: setup.ModeToken, Token: "preset-secret-token-123"},
-		idStore,
-		roles,
-		fakeTx{},
-		logger.New("test", "info", &logBuf),
-	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
+	svc := setup.NewService(idStore, roles, fakeTx{}, logger.New("test", "error", io.Discard))
 
 	st, err := svc.Status(t.Context())
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if st.Initialized || !st.RequiresToken || st.Mode != setup.ModeToken {
-		t.Fatalf("unexpected initial status: %+v", st)
+	if st.Initialized {
+		t.Fatal("expected initialized=false initially")
 	}
 
-	// Wrong token must return 403 SETUP_TOKEN_INVALID.
-	_, err = svc.Init(t.Context(), setup.InitInput{
-		SetupToken:  "wrong-token",
-		Username:    "admin",
-		Email:       "admin@example.com",
-		DisplayName: "Admin",
-		Password:    "strong-password-123",
-	})
-	appErr, ok := apperr.As(err)
-	if !ok || appErr.Status != http.StatusForbidden || appErr.Code != setup.ErrCodeTokenInvalid {
-		t.Fatalf("wrong token err = %v, want 403 %s", err, setup.ErrCodeTokenInvalid)
-	}
-
-	// Concurrent submissions must allow exactly one creation and reject all others with 409.
 	const workers = 12
 	var (
 		wg        sync.WaitGroup
@@ -116,11 +89,10 @@ func TestSetupTokenModeAndConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			admin, initErr := svc.Init(t.Context(), setup.InitInput{
-				SetupToken:  "preset-secret-token-123",
 				Username:    "admin",
 				Email:       "admin@example.com",
 				DisplayName: "Super Admin",
-				Password:    "strong-password-123",
+				Password:    "pass1234",
 			})
 			if initErr == nil {
 				succeeded.Add(1)
@@ -146,89 +118,35 @@ func TestSetupTokenModeAndConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() after init error = %v", err)
 	}
-	if !after.Initialized || after.RequiresToken {
-		t.Fatalf("unexpected status after init: %+v", after)
+	if !after.Initialized {
+		t.Fatal("expected initialized=true after init")
 	}
 }
 
-func TestSetupLocalAndOpenModes(t *testing.T) {
-	t.Run("local mode rejects public IP and accepts loopback/private IP", func(t *testing.T) {
-		idStore := &fakeIdentity{}
-		roles := newFakeRoles()
-		svc, err := setup.NewService(
-			t.Context(),
-			config.SetupConfig{Mode: setup.ModeLocal},
-			idStore,
-			roles,
-			fakeTx{},
-			logger.New("test", "error", io.Discard),
-		)
-		if err != nil {
-			t.Fatalf("NewService() error = %v", err)
-		}
+func TestBootstrapFromEnvIsIdempotent(t *testing.T) {
+	idStore := &fakeIdentity{}
+	roles := newFakeRoles()
+	svc := setup.NewService(idStore, roles, fakeTx{}, logger.New("test", "error", io.Discard))
 
-		_, err = svc.Init(t.Context(), setup.InitInput{
-			Username:    "admin",
-			Email:       "admin@example.com",
-			DisplayName: "Admin",
-			Password:    "strong-password-123",
-			ClientIP:    "8.8.8.8",
-		})
-		appErr, ok := apperr.As(err)
-		if !ok || appErr.Status != http.StatusForbidden || appErr.Code != setup.ErrCodeLocalOnly {
-			t.Fatalf("public IP err = %v, want 403 %s", err, setup.ErrCodeLocalOnly)
-		}
-
-		if _, err := svc.Init(t.Context(), setup.InitInput{
-			Username:    "admin",
-			Email:       "admin@example.com",
-			DisplayName: "Admin",
-			Password:    "strong-password-123",
-			ClientIP:    "127.0.0.1",
-		}); err != nil {
-			t.Fatalf("loopback IP Init() error = %v", err)
-		}
-	})
-
-	t.Run("open mode requires explicit allow_open", func(t *testing.T) {
-		svc, err := setup.NewService(
-			t.Context(),
-			config.SetupConfig{Mode: setup.ModeOpen, AllowOpen: false},
-			&fakeIdentity{},
-			newFakeRoles(),
-			fakeTx{},
-			logger.New("test", "error", io.Discard),
-		)
-		if err != nil {
-			t.Fatalf("NewService() error = %v", err)
-		}
-		if _, err := svc.Init(t.Context(), setup.InitInput{
-			Username:    "admin",
-			Email:       "admin@example.com",
-			DisplayName: "Admin",
-			Password:    "strong-password-123",
-			ClientIP:    "8.8.8.8",
-		}); err == nil {
-			t.Fatal("expected rejection when allow_open is false")
-		}
-	})
-}
-
-func TestSetupAutoGeneratesTokenAndLogsIt(t *testing.T) {
-	var logBuf bytes.Buffer
-	_, err := setup.NewService(
-		t.Context(),
-		config.SetupConfig{Mode: setup.ModeToken},
-		&fakeIdentity{},
-		newFakeRoles(),
-		fakeTx{},
-		logger.New("test", "info", &logBuf),
-	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
+	cfg := config.BootstrapConfig{
+		AdminUsername: "admin",
+		AdminEmail:    "admin@example.com",
+		AdminPassword: "pass1234",
 	}
-	if !strings.Contains(logBuf.String(), "setup_token=") {
-		t.Fatalf("expected generated setup_token in startup log, got: %s", logBuf.String())
+
+	if err := svc.BootstrapFromEnv(t.Context(), cfg); err != nil {
+		t.Fatalf("first BootstrapFromEnv() error = %v", err)
+	}
+	if len(idStore.users) != 1 {
+		t.Fatalf("users count = %d, want 1", len(idStore.users))
+	}
+
+	// Second call on already-initialized DB must be a safe no-op.
+	if err := svc.BootstrapFromEnv(t.Context(), cfg); err != nil {
+		t.Fatalf("second BootstrapFromEnv() error = %v", err)
+	}
+	if len(idStore.users) != 1 {
+		t.Fatalf("users count after second bootstrap = %d, want 1", len(idStore.users))
 	}
 }
 

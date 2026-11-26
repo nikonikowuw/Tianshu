@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"tianshu/internal/modules/setup"
-	"tianshu/internal/platform/config"
 	"tianshu/internal/platform/httpserver"
 	"tianshu/internal/platform/i18n"
 	"tianshu/internal/platform/logger"
@@ -33,18 +32,7 @@ func TestSetupHTTPRoutesContract(t *testing.T) {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 
-	svc, err := setup.NewService(
-		t.Context(),
-		config.SetupConfig{Mode: setup.ModeToken, Token: "valid-setup-token"},
-		&fakeIdentity{},
-		newFakeRoles(),
-		fakeTx{},
-		logger.New("test", "error", io.Discard),
-	)
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
-
+	svc := setup.NewService(&fakeIdentity{}, newFakeRoles(), fakeTx{}, logger.New("test", "error", io.Discard))
 	apiV1 := engine.Group("/api/v1")
 	setup.NewHandler(svc).RegisterPublicRoutes(apiV1)
 
@@ -56,24 +44,21 @@ func TestSetupHTTPRoutesContract(t *testing.T) {
 		t.Fatalf("GET status = %d, want 200", recStatus.Code)
 	}
 	var st struct {
-		Initialized   bool   `json:"initialized"`
-		Mode          string `json:"mode"`
-		RequiresToken bool   `json:"requiresToken"`
+		Initialized bool `json:"initialized"`
 	}
 	if err := json.Unmarshal(recStatus.Body.Bytes(), &st); err != nil {
 		t.Fatalf("unmarshal status error = %v", err)
 	}
-	if st.Initialized || !st.RequiresToken || st.Mode != "token" {
-		t.Fatalf("unexpected status payload: %+v", st)
+	if st.Initialized {
+		t.Fatal("expected initialized=false")
 	}
 
-	// 2. Short password returns 422 validation error with JSON field names.
+	// 2. 7-char password returns 422 validation error.
 	reqInvalid := httptest.NewRequest(http.MethodPost, "/api/v1/setup/init", strings.NewReader(`{
-		"setupToken": "valid-setup-token",
 		"username": "admin",
 		"email": "admin@example.com",
 		"displayName": "Admin",
-		"password": "short"
+		"password": "1234567"
 	}`))
 	reqInvalid.Header.Set("Content-Type", "application/json")
 	reqInvalid.RemoteAddr = "127.0.0.1:10001"
@@ -83,13 +68,12 @@ func TestSetupHTTPRoutesContract(t *testing.T) {
 		t.Fatalf("short password status = %d, want 422 (body=%s)", recInvalid.Code, recInvalid.Body.String())
 	}
 
-	// 3. Valid request creates initial super admin (201) without envelope.
+	// 3. Valid 8-char password creates initial super admin (201) without envelope.
 	reqCreate := httptest.NewRequest(http.MethodPost, "/api/v1/setup/init", strings.NewReader(`{
-		"setupToken": "valid-setup-token",
 		"username": "admin",
 		"email": "admin@example.com",
 		"displayName": "Super Admin",
-		"password": "strong-password-1234"
+		"password": "pass1234"
 	}`))
 	reqCreate.Header.Set("Content-Type", "application/json")
 	reqCreate.RemoteAddr = "127.0.0.1:10002"
@@ -104,11 +88,10 @@ func TestSetupHTTPRoutesContract(t *testing.T) {
 
 	// 4. Subsequent attempt returns 409 SETUP_ALREADY_INITIALIZED.
 	reqSecond := httptest.NewRequest(http.MethodPost, "/api/v1/setup/init", strings.NewReader(`{
-		"setupToken": "valid-setup-token",
 		"username": "admin2",
 		"email": "admin2@example.com",
 		"displayName": "Admin Two",
-		"password": "strong-password-1234"
+		"password": "pass1234"
 	}`))
 	reqSecond.Header.Set("Content-Type", "application/json")
 	reqSecond.RemoteAddr = "127.0.0.1:10003"

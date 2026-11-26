@@ -74,14 +74,14 @@ func TestPasswordValidationAndInvalidHash(t *testing.T) {
 		t.Fatalf("NewPasswordHasher() error = %v", err)
 	}
 
-	if _, err := hasher.Hash("short"); !errors.Is(err, security.ErrInvalidPasswordLength) {
+	if _, err := hasher.Hash("1234567"); !errors.Is(err, security.ErrInvalidPasswordLength) {
 		t.Fatalf("short password error = %v, want ErrInvalidPasswordLength", err)
 	}
 	if _, err := hasher.Hash(strings.Repeat("a", 129)); !errors.Is(err, security.ErrInvalidPasswordLength) {
 		t.Fatalf("overlong password error = %v, want ErrInvalidPasswordLength", err)
 	}
-	if _, err := hasher.Hash("十二个汉字组成的密码测试"); err != nil {
-		t.Fatalf("12-rune unicode password rejected: %v", err)
+	if _, err := hasher.Hash("八个汉字密码测试"); err != nil {
+		t.Fatalf("8-rune unicode password rejected: %v", err)
 	}
 
 	for _, bad := range []string{

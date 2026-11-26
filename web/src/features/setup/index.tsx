@@ -3,12 +3,10 @@ import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { Logo } from '@/assets/logo'
 import { normalizeApiError } from '@/lib/api/error'
-import { setupStatusQueryOptions } from '@/lib/api/setup'
 import { handleServerError } from '@/lib/handle-server-error'
 import { Button } from '@/components/ui/button'
 import {
@@ -33,51 +31,36 @@ import { ThemeSwitch } from '@/components/shared/theme-switch'
 import { useInitSetupMutation } from './api'
 
 type SetupWizardProps = {
-  requireSetupTokenOverride?: boolean
   onSuccess?: () => void
 }
 
 const SERVER_FORM_FIELDS = new Set([
-  'setupToken',
   'username',
   'email',
   'displayName',
   'password',
 ])
 
-export function SetupWizard({
-  requireSetupTokenOverride,
-  onSuccess,
-}: SetupWizardProps) {
+export function SetupWizard({ onSuccess }: SetupWizardProps) {
   const { t } = useTranslation(['auth', 'common', 'validation'])
   const navigate = useNavigate()
-  const statusQuery = useQuery({
-    ...setupStatusQueryOptions,
-    enabled: requireSetupTokenOverride === undefined,
-  })
   const initMutation = useInitSetupMutation()
-
-  const requireSetupToken =
-    requireSetupTokenOverride ?? statusQuery.data?.requiresToken ?? true
 
   const schema = useMemo(
     () =>
       z
         .object({
-          setupToken: requireSetupToken
-            ? z.string().trim().min(1, t('validation:required'))
-            : z.string().optional(),
           username: z.string().trim().min(3, t('validation:usernameMin')),
           email: z.string().trim().email(t('validation:invalidEmail')),
           displayName: z.string().trim().min(1, t('validation:required')),
-          password: z.string().min(12, t('validation:passwordMin')),
+          password: z.string().min(8, t('validation:passwordMin')),
           confirmPassword: z.string().min(1, t('validation:required')),
         })
         .refine((v) => v.password === v.confirmPassword, {
           path: ['confirmPassword'],
           message: t('validation:passwordMismatch'),
         }),
-    [requireSetupToken, t]
+    [t]
   )
 
   type SetupFormValues = z.infer<typeof schema>
@@ -85,7 +68,6 @@ export function SetupWizard({
   const form = useForm<SetupFormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      setupToken: '',
       username: '',
       email: '',
       displayName: '',
@@ -97,7 +79,6 @@ export function SetupWizard({
   const onSubmit = async (values: SetupFormValues) => {
     try {
       await initMutation.mutateAsync({
-        setupToken: requireSetupToken ? values.setupToken?.trim() : undefined,
         username: values.username.trim(),
         email: values.email.trim(),
         displayName: values.displayName.trim(),
@@ -146,35 +127,12 @@ export function SetupWizard({
             <CardDescription>{t('auth:setup.description')}</CardDescription>
           </CardHeader>
           <CardContent>
-            {!requireSetupToken && (
-              <p className='mb-4 text-sm text-muted-foreground'>
-                {t('auth:setup.localModeHint')}
-              </p>
-            )}
             <Form {...form}>
               <form
                 onSubmit={form.handleSubmit(onSubmit)}
                 className='grid gap-4'
                 noValidate
               >
-                {requireSetupToken && (
-                  <FormField
-                    control={form.control}
-                    name='setupToken'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('auth:setup.setupToken')}</FormLabel>
-                        <FormControl>
-                          <Input
-                            placeholder={t('auth:setup.setupTokenPlaceholder')}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                )}
                 <FormField
                   control={form.control}
                   name='username'
@@ -243,11 +201,7 @@ export function SetupWizard({
                 <Button
                   type='submit'
                   className='mt-2 w-full'
-                  disabled={
-                    initMutation.isPending ||
-                    (requireSetupTokenOverride === undefined &&
-                      statusQuery.isLoading)
-                  }
+                  disabled={initMutation.isPending}
                 >
                   {initMutation.isPending
                     ? t('auth:setup.submitting')

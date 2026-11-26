@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-11-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~193 | Active |
+| `journal-1.md` | ~210 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -30,6 +30,7 @@
 
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-11-26 | 调整配置加载顺序、极简 Setup + 环境变量初始化与 8 位密码基线 | - | `fix/dev-ergonomics` |
 | 11 | 2026-11-26 | RBAC 权限码采用标准动作细粒度拆分 | - | `feat/access-core` |
 | 10 | 2026-11-26 | 确立最多 3 轮的循环 Review-Fix 机制 | - | `dev` |
 | 9 | 2026-11-26 | 修正 PR 规模边界：取消 400 行上限，改按单一逻辑单元与导读控制 | - | `dev` |

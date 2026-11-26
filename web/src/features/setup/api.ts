@@ -3,7 +3,6 @@ import { apiClient } from '@/lib/api/client'
 import { setupQueryKeys, type SetupStatus } from '@/lib/api/setup'
 
 export type InitSetupPayload = {
-  setupToken?: string
   username: string
   email: string
   displayName: string
@@ -31,11 +30,9 @@ export function useInitSetupMutation() {
       return res.data
     },
     onSuccess: () => {
-      queryClient.setQueryData<SetupStatus>(setupQueryKeys.status, (prev) => ({
+      queryClient.setQueryData<SetupStatus>(setupQueryKeys.status, {
         initialized: true,
-        mode: prev?.mode ?? 'token',
-        requiresToken: false,
-      }))
+      })
       void queryClient.invalidateQueries({ queryKey: setupQueryKeys.status })
     },
   })

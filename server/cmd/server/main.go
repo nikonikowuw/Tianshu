@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -19,13 +20,16 @@ func main() {
 }
 
 func run() error {
-	cfgPath := os.Getenv("TIANSHU_CONFIG")
-	paths := []string{"configs/config.example.toml", "configs/config.local.toml"}
-	if cfgPath != "" {
-		paths = append(paths, cfgPath)
+	var configFlag string
+	flag.StringVar(&configFlag, "config", "", "path to TOML config file (overrides default config.toml search)")
+	flag.Parse()
+
+	explicitPath := configFlag
+	if explicitPath == "" {
+		explicitPath = os.Getenv("TIANSHU_CONFIG")
 	}
 
-	cfg, err := config.Load(paths...)
+	cfg, err := config.LoadWithExplicit(explicitPath, config.DefaultPaths)
 	if err != nil {
 		return err
 	}

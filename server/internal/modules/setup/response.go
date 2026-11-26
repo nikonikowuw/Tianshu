@@ -1,9 +1,7 @@
 package setup
 
 type statusResponse struct {
-	Initialized   bool   `json:"initialized"`
-	Mode          string `json:"mode"`
-	RequiresToken bool   `json:"requiresToken"`
+	Initialized bool `json:"initialized"`
 }
 
 type adminUserResponse struct {

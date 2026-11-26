@@ -18,18 +18,26 @@ const (
 	minJWTSecretLength  = 32
 )
 
+// DefaultPaths lists candidate TOML config files loaded in ascending precedence when no explicit path is provided.
+var DefaultPaths = []string{
+	"configs/config.toml",
+	"config.toml",
+	"configs/config.local.toml",
+	"config.local.toml",
+}
+
 // Config holds all runtime configuration loaded from TOML and TIANSHU_* environment variables.
 type Config struct {
-	App      AppConfig      `koanf:"app"`
-	Server   ServerConfig   `koanf:"server"`
-	CORS     CORSConfig     `koanf:"cors"`
-	Database DatabaseConfig `koanf:"database"`
-	Cache    CacheConfig    `koanf:"cache"`
-	Storage  StorageConfig  `koanf:"storage"`
-	Auth     AuthConfig     `koanf:"auth"`
-	Setup    SetupConfig    `koanf:"setup"`
-	Audit    AuditConfig    `koanf:"audit"`
-	Log      LogConfig      `koanf:"log"`
+	App       AppConfig       `koanf:"app"`
+	Server    ServerConfig    `koanf:"server"`
+	CORS      CORSConfig      `koanf:"cors"`
+	Database  DatabaseConfig  `koanf:"database"`
+	Cache     CacheConfig     `koanf:"cache"`
+	Storage   StorageConfig   `koanf:"storage"`
+	Auth      AuthConfig      `koanf:"auth"`
+	Bootstrap BootstrapConfig `koanf:"bootstrap"`
+	Audit     AuditConfig     `koanf:"audit"`
+	Log       LogConfig       `koanf:"log"`
 }
 
 // AppConfig defines application environment metadata.
@@ -87,11 +95,21 @@ type AuthConfig struct {
 	CookieSecure    bool          `koanf:"cookie_secure"`
 }
 
-// SetupConfig controls initial super-admin setup wizard protection.
-type SetupConfig struct {
-	Mode      string `koanf:"mode"`
-	Token     string `koanf:"token"`
-	AllowOpen bool   `koanf:"allow_open"`
+// BootstrapConfig configures optional unattended initial super-admin creation via environment variables.
+// When Username, Email, and Password are all set on an uninitialized database, the server seeds the
+// initial super administrator automatically on startup and bypasses the web /setup wizard.
+type BootstrapConfig struct {
+	AdminUsername    string `koanf:"admin_username"`
+	AdminEmail       string `koanf:"admin_email"`
+	AdminDisplayName string `koanf:"admin_display_name"`
+	AdminPassword    string `koanf:"admin_password"`
+}
+
+// Enabled reports whether unattended initial administrator bootstrap credentials are fully configured.
+func (b BootstrapConfig) Enabled() bool {
+	return strings.TrimSpace(b.AdminUsername) != "" &&
+		strings.TrimSpace(b.AdminEmail) != "" &&
+		b.AdminPassword != ""
 }
 
 // AuditConfig defines audit log retention policy.
@@ -119,6 +137,7 @@ func Default() Config {
 			ShutdownTimeout: 10 * time.Second,
 		},
 		Database: DatabaseConfig{
+			DSN:             "postgres://tianshu:tianshu@localhost:5432/tianshu?sslmode=disable",
 			AutoMigrate:     true,
 			MaxConns:        25,
 			MinConns:        2,
@@ -139,9 +158,6 @@ func Default() Config {
 			RefreshTokenTTL: 7 * 24 * time.Hour,
 			CookieSecure:    false,
 		},
-		Setup: SetupConfig{
-			Mode: "token",
-		},
 		Audit: AuditConfig{
 			RetentionDays: 180,
 		},
@@ -151,22 +167,36 @@ func Default() Config {
 	}
 }
 
-// Load reads configuration from optional TOML files and overrides with TIANSHU_* environment variables.
-// Double underscores map nested sections (for example TIANSHU_AUTH__JWT_SECRET -> auth.jwt_secret).
+// Load reads configuration from optional candidate paths and overrides with TIANSHU_* environment variables.
 func Load(paths ...string) (Config, error) {
+	return LoadWithExplicit("", paths)
+}
+
+// LoadWithExplicit loads explicitPath strictly when non-empty (failing if missing);
+// otherwise it loads any existing files from fallbackPaths in order, then applies TIANSHU_* overrides.
+func LoadWithExplicit(explicitPath string, fallbackPaths []string) (Config, error) {
 	k := koanf.New(".")
 
-	for _, p := range paths {
-		if p == "" {
-			continue
+	if explicitPath != "" {
+		if _, err := os.Stat(explicitPath); err != nil {
+			return Config{}, fmt.Errorf("stat explicit config %s: %w", explicitPath, err)
 		}
-		if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
-			continue
-		} else if err != nil {
-			return Config{}, fmt.Errorf("stat config %s: %w", p, err)
+		if err := k.Load(file.Provider(explicitPath), toml.Parser()); err != nil {
+			return Config{}, fmt.Errorf("load config %s: %w", explicitPath, err)
 		}
-		if err := k.Load(file.Provider(p), toml.Parser()); err != nil {
-			return Config{}, fmt.Errorf("load config %s: %w", p, err)
+	} else {
+		for _, p := range fallbackPaths {
+			if p == "" {
+				continue
+			}
+			if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				return Config{}, fmt.Errorf("stat config %s: %w", p, err)
+			}
+			if err := k.Load(file.Provider(p), toml.Parser()); err != nil {
+				return Config{}, fmt.Errorf("load config %s: %w", p, err)
+			}
 		}
 	}
 
@@ -185,15 +215,26 @@ func Load(paths ...string) (Config, error) {
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return Config{}, fmt.Errorf("unmarshal config: %w", err)
 	}
-	// Support documented flat alias TIANSHU_SETUP_TOKEN in addition to TIANSHU_SETUP__TOKEN.
-	if alias := strings.TrimSpace(os.Getenv("TIANSHU_SETUP_TOKEN")); alias != "" && cfg.Setup.Token == "" {
-		cfg.Setup.Token = alias
-	}
+
+	// Support concise flat env aliases for unattended initial administrator bootstrap.
+	applyEnvFallback(&cfg.Bootstrap.AdminUsername, "TIANSHU_ADMIN_USERNAME")
+	applyEnvFallback(&cfg.Bootstrap.AdminEmail, "TIANSHU_ADMIN_EMAIL")
+	applyEnvFallback(&cfg.Bootstrap.AdminDisplayName, "TIANSHU_ADMIN_DISPLAY_NAME")
+	applyEnvFallback(&cfg.Bootstrap.AdminPassword, "TIANSHU_ADMIN_PASSWORD")
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func applyEnvFallback(dst *string, envKey string) {
+	if *dst != "" {
+		return
+	}
+	if v := os.Getenv(envKey); v != "" {
+		*dst = v
+	}
 }
 
 // IsProduction reports whether the service runs in production mode.
@@ -220,14 +261,11 @@ func (c Config) Validate() error {
 		return errors.New("auth.jwt_secret must not use the default development secret in production")
 	}
 
-	switch c.Setup.Mode {
-	case "token", "local":
-	case "open":
-		if !c.Setup.AllowOpen {
-			return errors.New("setup.mode=open requires setup.allow_open=true")
-		}
-	default:
-		return fmt.Errorf("invalid setup.mode %q", c.Setup.Mode)
+	hasAnyBootstrap := strings.TrimSpace(c.Bootstrap.AdminUsername) != "" ||
+		strings.TrimSpace(c.Bootstrap.AdminEmail) != "" ||
+		c.Bootstrap.AdminPassword != ""
+	if hasAnyBootstrap && !c.Bootstrap.Enabled() {
+		return errors.New("bootstrap admin requires admin_username, admin_email, and admin_password together")
 	}
 
 	if c.CORS.Enabled {

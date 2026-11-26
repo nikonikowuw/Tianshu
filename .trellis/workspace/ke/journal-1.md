@@ -191,3 +191,20 @@ Topics: [.trellis/spec/backend/data-model.md](../../spec/backend/data-model.md),
 ### Git Commits
 
 (No associated commits)
+
+
+## Session 12: 调整配置加载顺序、极简 Setup + 环境变量初始化与 8 位密码基线
+<!-- trellis-session: v=3 fp=876f255870b36bb5 -->
+
+**Date**: 2026-11-26
+**Task**: 调整配置加载顺序、极简 Setup + 环境变量初始化与 8 位密码基线
+**Branch**: `fix/dev-ergonomics`
+
+### Summary
+
+用户确认三项开发体验优化：1) 配置加载支持 -config / TIANSHU_CONFIG 严格加载，默认按 configs/config.toml -> config.toml -> configs/config.local.toml -> config.local.toml 叠加，config.example.toml 仅作模板；2) 取消繁琐的 Setup Token 机制，/setup 极简填表并新增 TIANSHU_ADMIN_* 环境变量启动期无人值守自动建超管；3) 密码最小长度由 12 位调整为 8 位（8-128 字符，遵循 NIST SP 800-63B）。
+Topics: [.trellis/spec/backend/security.md](../../spec/backend/security.md), [docs/prd/prd.md](../../../docs/prd/prd.md)
+
+### Git Commits
+
+(No associated commits)

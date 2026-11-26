@@ -11,6 +11,9 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+config.toml
+server/configs/config.toml
+server/config.toml
 config.local.toml
 server/configs/config.local.toml
 *.local.toml
