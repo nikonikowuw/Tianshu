@@ -185,6 +185,10 @@ func Load(paths ...string) (Config, error) {
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return Config{}, fmt.Errorf("unmarshal config: %w", err)
 	}
+	// Support documented flat alias TIANSHU_SETUP_TOKEN in addition to TIANSHU_SETUP__TOKEN.
+	if alias := strings.TrimSpace(os.Getenv("TIANSHU_SETUP_TOKEN")); alias != "" && cfg.Setup.Token == "" {
+		cfg.Setup.Token = alias
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

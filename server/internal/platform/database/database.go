@@ -155,6 +155,20 @@ func txStateFromContext(ctx context.Context) (*txState, bool) {
 	return state, ok && state != nil
 }
 
+// AcquireAdvisoryXactLock acquires a PostgreSQL transaction-scoped advisory lock.
+// When called inside a real pgx transaction it executes pg_advisory_xact_lock(key);
+// outside a real pgx transaction (e.g. unit tests using WithSimulatedTx) it is a no-op.
+func AcquireAdvisoryXactLock(ctx context.Context, key int64) error {
+	tx, ok := TxFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", key); err != nil {
+		return fmt.Errorf("acquire advisory lock %d: %w", key, err)
+	}
+	return nil
+}
+
 // TxFromContext returns the active pgx.Tx carried in ctx, if any.
 func TxFromContext(ctx context.Context) (pgx.Tx, bool) {
 	state, ok := txStateFromContext(ctx)

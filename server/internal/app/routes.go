@@ -20,8 +20,10 @@ func (a *App) registerRoutes() {
 	}
 	httpserver.RegisterHealthRoutes(a.engine, checks)
 
-	// Business modules will be mounted under apiV1 in vertical-slice PRs.
-	_ = a.engine.Group("/api/v1")
+	apiV1 := a.engine.Group("/api/v1")
+	if a.setupHandler != nil {
+		a.setupHandler.RegisterPublicRoutes(apiV1)
+	}
 
 	spaHandler := webui.Handler()
 	a.engine.NoRoute(func(c *gin.Context) {

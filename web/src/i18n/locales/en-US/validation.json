@@ -1,5 +1,6 @@
 {
   "required": "This field is required",
+  "usernameMin": "Username must be at least 3 characters",
   "invalidEmail": "Please enter a valid email address",
   "passwordMin": "Password must be at least 12 characters",
   "passwordMismatch": "Passwords do not match"

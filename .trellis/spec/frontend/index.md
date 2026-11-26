@@ -2,7 +2,7 @@
 
 适用范围：`web/`（Vite + React 19 + TypeScript + TanStack Router/Query/Table + Tailwind CSS v4 + shadcn/ui + Zustand）。
 
-当前已完成 `web/` 基础框架底座（基于 `shadcn-admin` v2.2.1 裁剪，含 `app/` 装配层、`lib/api/`、`lib/auth/`、`stores/auth-store.ts`、`i18n/`、解耦 `components/layout/` 与占位路由）；业务功能页将随对应后端垂直切片逐步接入。具体页面字段与业务功能归属 [docs/prd/prd.md](../../../docs/prd/prd.md)；后端 HTTP、安全与单二进制 embed 契约见 [backend/index.md](../backend/index.md)。
+当前已完成 `web/` 基础框架底座及 `/setup` 首次初始化向导（含路由引导守卫、双语校验与服务端 422 字段回填）；其余业务页面将随对应后端垂直切片逐步接入。具体页面字段与业务功能归属 [docs/prd/prd.md](../../../docs/prd/prd.md)；后端 HTTP、安全与单二进制 embed 契约见 [backend/index.md](../backend/index.md)。
 
 | 文档                                     | 内容                                                                       | 何时读                              |
 | ---------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------- |

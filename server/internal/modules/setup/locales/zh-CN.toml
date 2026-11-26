@@ -1,0 +1,4 @@
+# Setup module messages (zh-CN)
+SETUP_ALREADY_INITIALIZED = "系统已完成初始化，禁止重复执行"
+SETUP_TOKEN_INVALID = "初始化令牌无效或已过期"
+SETUP_LOCAL_ONLY = "当前仅允许本机或内网地址执行系统初始化"

@@ -41,6 +41,18 @@ export default defineConfig({
   build: {
     outDir: 'dist',
   },
+  optimizeDeps: {
+    include: [
+      '@tanstack/react-query',
+      '@tanstack/react-router',
+      '@hookform/resolvers/zod',
+      'i18next',
+      'react-hook-form',
+      'react-i18next',
+      'sonner',
+      'zod',
+    ],
+  },
   test: {
     silent: 'passed-only',
     unstubEnvs: true,

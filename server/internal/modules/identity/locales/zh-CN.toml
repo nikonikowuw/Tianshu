@@ -1,0 +1,5 @@
+# Identity module messages (zh-CN)
+IDENTITY_USERNAME_EXISTS = "用户名已被使用"
+IDENTITY_EMAIL_EXISTS = "邮箱地址已被使用"
+IDENTITY_INVALID_PASSWORD = "密码长度必须在 12 到 128 个字符之间"
+IDENTITY_USER_NOT_FOUND = "用户不存在"

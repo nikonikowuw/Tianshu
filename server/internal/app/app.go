@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"tianshu/internal/modules/access"
+	"tianshu/internal/modules/identity"
+	"tianshu/internal/modules/setup"
 	"tianshu/internal/platform/cache"
 	"tianshu/internal/platform/config"
 	"tianshu/internal/platform/database"
@@ -25,17 +27,19 @@ import (
 
 // App is the single composition root wiring platform infrastructure, modules, and HTTP server.
 type App struct {
-	cfg     config.Config
-	log     *slog.Logger
-	i18n    *i18n.Bundle
-	hasher  *security.PasswordHasher
-	db      *pgxpool.Pool
-	tx      *database.TxManager
-	cache   cache.Cache
-	storage storage.Storage
-	access  *access.Service
-	engine  *gin.Engine
-	server  *http.Server
+	cfg          config.Config
+	log          *slog.Logger
+	i18n         *i18n.Bundle
+	hasher       *security.PasswordHasher
+	db           *pgxpool.Pool
+	tx           *database.TxManager
+	cache        cache.Cache
+	storage      storage.Storage
+	access       *access.Service
+	identity     *identity.Service
+	setupHandler *setup.Handler
+	engine       *gin.Engine
+	server       *http.Server
 }
 
 // Options customizes App assembly (primarily for tests).
@@ -57,6 +61,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 	if err := bundle.RegisterFS("access", access.LocalesFS, "locales"); err != nil {
 		return nil, fmt.Errorf("register access locales: %w", err)
+	}
+	if err := bundle.RegisterFS("identity", identity.LocalesFS, "locales"); err != nil {
+		return nil, fmt.Errorf("register identity locales: %w", err)
+	}
+	if err := bundle.RegisterFS("setup", setup.LocalesFS, "locales"); err != nil {
+		return nil, fmt.Errorf("register setup locales: %w", err)
 	}
 	if err := bundle.Validate(); err != nil {
 		return nil, fmt.Errorf("validate i18n bundle: %w", err)
@@ -87,7 +97,11 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 
 	memCache := cache.NewMemory()
 
-	var accessSvc *access.Service
+	var (
+		accessSvc    *access.Service
+		identitySvc  *identity.Service
+		setupHandler *setup.Handler
+	)
 	if pool != nil {
 		accessSvc = access.NewService(pool, tx, memCache, log)
 		if err := accessSvc.SyncCatalog(ctx); err != nil {
@@ -95,6 +109,22 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			_ = memCache.Close()
 			return nil, fmt.Errorf("sync access catalog: %w", err)
 		}
+
+		identitySvc = identity.NewService(pool, hasher)
+		setupSvc, err := setup.NewService(
+			ctx,
+			cfg.Setup,
+			&setupIdentityAdapter{svc: identitySvc},
+			accessSvc,
+			tx,
+			log,
+		)
+		if err != nil {
+			pool.Close()
+			_ = memCache.Close()
+			return nil, fmt.Errorf("init setup service: %w", err)
+		}
+		setupHandler = setup.NewHandler(setupSvc)
 	}
 
 	store, err := initStorage(cfg.Storage)
@@ -122,16 +152,18 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 
 	application := &App{
-		cfg:     cfg,
-		log:     log,
-		i18n:    bundle,
-		hasher:  hasher,
-		db:      pool,
-		tx:      tx,
-		cache:   memCache,
-		storage: store,
-		access:  accessSvc,
-		engine:  engine,
+		cfg:          cfg,
+		log:          log,
+		i18n:         bundle,
+		hasher:       hasher,
+		db:           pool,
+		tx:           tx,
+		cache:        memCache,
+		storage:      store,
+		access:       accessSvc,
+		identity:     identitySvc,
+		setupHandler: setupHandler,
+		engine:       engine,
 	}
 	application.registerRoutes()
 
