@@ -51,7 +51,7 @@
 
 - Refresh/Logout 使用 Cookie，必须校验 `Origin`（或 `Referer`）在白名单内；SameSite=Lax 不能替代 Origin 校验。
 - CORS 使用精确 origin 白名单 + `Access-Control-Allow-Credentials: true`；禁止 `*` 与 credentials 组合。
-- 暴露 `X-Request-Id`；允许 `Authorization`、`Content-Type`、`Accept-Language`、`X-Request-Id` 请求头。
+- 暴露 `X-Request-Id` 与 `Retry-After`（后者供前端读取 429 退避窗口）；允许 `Authorization`、`Content-Type`、`Accept-Language`、`X-Request-Id` 请求头。
 - 生产前后端同源（Go embed），通常不需要 CORS；开发环境通过 Vite proxy 也可避开跨域。CORS 只作为显式配置能力保留。
 - Cookie 不使用 `__Host-` 前缀时，Path 必须固定 `/api/v1/auth`；不要给 Cookie 设置过宽的 Domain。
 - 禁止把 Refresh Token 放在响应体、URL 或前端可读存储。

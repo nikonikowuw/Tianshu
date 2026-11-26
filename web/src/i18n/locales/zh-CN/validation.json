@@ -3,5 +3,10 @@
   "usernameMin": "用户名至少需要 3 个字符",
   "invalidEmail": "请输入有效的邮箱地址",
   "passwordMin": "密码长度至少为 8 个字符",
-  "passwordMismatch": "两次输入的密码不一致"
+  "passwordMismatch": "两次输入的密码不一致",
+  "passwordMax": "密码长度不能超过 128 个字符",
+  "usernameMax": "用户名长度不能超过 64 个字符",
+  "displayNameMax": "显示名称长度不能超过 100 个字符",
+  "emailMax": "邮箱长度不能超过 255 个字符",
+  "identifierMax": "用户名或邮箱长度不能超过 255 个字符"
 }

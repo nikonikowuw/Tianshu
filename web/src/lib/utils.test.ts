@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { getPageNumbers } from './utils'
+import { getPageNumbers, runeLength } from './utils'
+
+describe('runeLength', () => {
+  it('counts code points rather than UTF-16 code units', () => {
+    expect(runeLength('admin')).toBe(5)
+    expect(runeLength('管理员')).toBe(3)
+    expect(runeLength('🐟🐟')).toBe(2)
+    expect('🐟🐟'.length).toBe(4)
+  })
+})
 
 describe('getPageNumbers', () => {
   it('returns all pages when total is at most 5', () => {

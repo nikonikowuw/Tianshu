@@ -19,5 +19,10 @@
   "internal": {
     "title": "Something went wrong",
     "description": "An unexpected error occurred on the server. Please try again later."
-  }
+  },
+  "rateLimited": "Too many requests, please try again later",
+  "rateLimitedTitle": "Too many attempts",
+  "rateLimitWait": "For your account security, try again in {{seconds}}s",
+  "loginFailedTitle": "Sign-in failed",
+  "setupFailedTitle": "Setup failed"
 }

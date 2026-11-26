@@ -161,7 +161,7 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 		}
 	})
 
-	t.Run("CORS exposes X-Request-Id for allowed origin", func(t *testing.T) {
+	t.Run("CORS exposes X-Request-Id and Retry-After for allowed origin", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/conflict", nil)
 		req.Header.Set("Origin", "https://admin.example.com")
 		rec := httptest.NewRecorder()
@@ -170,8 +170,9 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 		if rec.Code != http.StatusConflict {
 			t.Fatalf("status = %d, want 409", rec.Code)
 		}
-		if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "X-Request-Id" {
-			t.Fatalf("Access-Control-Expose-Headers = %q, want X-Request-Id", got)
+		wantExpose := "X-Request-Id, Retry-After"
+		if got := rec.Header().Get("Access-Control-Expose-Headers"); got != wantExpose {
+			t.Fatalf("Access-Control-Expose-Headers = %q, want %q", got, wantExpose)
 		}
 	})
 }

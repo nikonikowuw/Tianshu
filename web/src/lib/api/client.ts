@@ -79,7 +79,9 @@ apiClient.interceptors.response.use(
         }
       }
 
-      if (normalized.status === 403) {
+      // Public auth endpoints own their 401/403 feedback inline: a global
+      // logout/redirect here would race the form banner and duplicate the toast.
+      if (normalized.status === 403 && !isPublicEndpoint(original.url)) {
         if (normalized.code === 'AUTH_ACCOUNT_DISABLED') {
           hooks.onAccountDisabled()
         } else if (

@@ -1,20 +1,16 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate } from '@tanstack/react-router'
+import { Loader2 } from 'lucide-react'
 import { normalizeApiError } from '@/lib/api/error'
 import { sanitizeRedirect } from '@/lib/auth/gateway'
 import { handleServerError } from '@/lib/handle-server-error'
+import { runeLength } from '@/lib/utils'
+import { useRetryCountdown } from '@/hooks/use-retry-countdown'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
 import {
   Form,
   FormControl,
@@ -24,10 +20,9 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { LanguageSwitch } from '@/components/shared/language-switch'
+import { AuthShell } from '@/components/layout/auth-shell'
+import { AuthAlert, RateLimitAlert } from '@/components/shared/auth-alert'
 import { PasswordInput } from '@/components/shared/password-input'
-import { ThemeSwitch } from '@/components/shared/theme-switch'
-import { AuthLayout } from '../auth-layout'
 import { useLoginMutation } from './api'
 
 type SignInProps = {
@@ -37,16 +32,39 @@ type SignInProps = {
 
 const SERVER_FORM_FIELDS = new Set(['identifier', 'password'])
 
+/** Localized inline failure that is not tied to a single form field. */
+type FormError = {
+  titleKey: 'errors:loginFailedTitle'
+  description?: string
+}
+
 export function SignIn({ redirectTo, onSuccess }: SignInProps) {
-  const { t } = useTranslation(['auth', 'validation'])
+  const { t } = useTranslation(['auth', 'validation', 'errors'])
   const navigate = useNavigate()
   const loginMutation = useLoginMutation()
+  const cooldown = useRetryCountdown()
+  const [formError, setFormError] = useState<FormError | null>(null)
 
   const schema = useMemo(
     () =>
       z.object({
-        identifier: z.string().trim().min(1, t('validation:required')),
-        password: z.string().min(1, t('validation:required')),
+        identifier: z
+          .string()
+          .trim()
+          .refine((v) => runeLength(v) >= 1, {
+            message: t('validation:required'),
+          })
+          .refine((v) => runeLength(v) <= 255, {
+            message: t('validation:identifierMax'),
+          }),
+        password: z
+          .string()
+          .refine((v) => runeLength(v) >= 1, {
+            message: t('validation:required'),
+          })
+          .refine((v) => runeLength(v) <= 128, {
+            message: t('validation:passwordMax'),
+          }),
       }),
     [t]
   )
@@ -61,7 +79,16 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
     },
   })
 
+  // Editing any field invalidates a stale failure banner (set once at mount).
+  useEffect(() => {
+    return form.subscribe({
+      formState: { values: true },
+      callback: () => setFormError(null),
+    })
+  }, [form])
+
   const onSubmit = async (values: SignInFormValues) => {
+    setFormError(null)
     try {
       await loginMutation.mutateAsync({
         identifier: values.identifier.trim(),
@@ -75,6 +102,13 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
       await navigate({ to: target, replace: true })
     } catch (error) {
       const apiErr = normalizeApiError(error)
+
+      // 429: keep the failure visible and lock the button for the retry window.
+      if (apiErr.status === 429) {
+        cooldown.start(apiErr.retryAfter)
+        return
+      }
+
       if (apiErr.status === 422) {
         let mapped = false
         for (const [field, message] of Object.entries(apiErr.fieldErrors)) {
@@ -85,76 +119,105 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
         }
         if (mapped) return
       }
+
+      if (apiErr.status === 401 || apiErr.status === 403) {
+        setFormError({
+          titleKey: 'errors:loginFailedTitle',
+          description: apiErr.message,
+        })
+        return
+      }
+
       handleServerError(apiErr)
     }
   }
 
+  const isSubmitting = loginMutation.isPending
+  const isLocked = isSubmitting || cooldown.isCoolingDown
+
   return (
-    <AuthLayout>
-      <div className='mb-3 flex justify-end gap-1'>
-        <LanguageSwitch />
-        <ThemeSwitch />
-      </div>
-      <Card className='gap-4'>
-        <CardHeader>
-          <CardTitle className='text-lg tracking-tight'>
-            {t('auth:signIn.title')}
-          </CardTitle>
-          <CardDescription>{t('auth:signIn.description')}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Form {...form}>
-            <form
-              onSubmit={form.handleSubmit(onSubmit)}
-              className='grid gap-4'
-              noValidate
-            >
-              <FormField
-                control={form.control}
-                name='identifier'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('auth:signIn.identifier')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        autoComplete='username'
-                        placeholder={t('auth:signIn.identifierPlaceholder')}
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='password'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('auth:signIn.password')}</FormLabel>
-                    <FormControl>
-                      <PasswordInput
-                        autoComplete='current-password'
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <Button
-                type='submit'
-                className='mt-2 w-full'
-                disabled={loginMutation.isPending}
-              >
-                {loginMutation.isPending
-                  ? t('auth:signIn.submitting')
-                  : t('auth:signIn.submit')}
-              </Button>
-            </form>
-          </Form>
-        </CardContent>
-      </Card>
-    </AuthLayout>
+    <AuthShell
+      title={t('auth:signIn.title')}
+      description={t('auth:signIn.description')}
+      headerAlign='center'
+      maxWidthClass='max-w-[400px]'
+      belowCard={<p>{t('auth:signIn.footerHint')}</p>}
+    >
+      <Form {...form}>
+        <form
+          onSubmit={form.handleSubmit(onSubmit)}
+          className='grid gap-4'
+          noValidate
+        >
+          {cooldown.isCoolingDown && (
+            <RateLimitAlert seconds={cooldown.remaining} />
+          )}
+          {!cooldown.isCoolingDown && formError && (
+            <AuthAlert
+              tone='destructive'
+              title={t(formError.titleKey)}
+              description={formError.description}
+            />
+          )}
+
+          <FormField
+            control={form.control}
+            name='identifier'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('auth:signIn.identifier')}</FormLabel>
+                <FormControl>
+                  <Input
+                    className='h-10'
+                    autoComplete='username'
+                    autoCapitalize='none'
+                    spellCheck={false}
+                    placeholder={t('auth:signIn.identifierPlaceholder')}
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='password'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('auth:signIn.password')}</FormLabel>
+                <FormControl>
+                  <PasswordInput
+                    inputClassName='h-10'
+                    autoComplete='current-password'
+                    placeholder={t('auth:signIn.passwordPlaceholder')}
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <Button
+            type='submit'
+            size='lg'
+            className='mt-2 h-10 w-full font-medium'
+            disabled={isLocked}
+            aria-busy={isSubmitting}
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className='size-4 animate-spin' />
+                {t('auth:signIn.submitting')}
+              </>
+            ) : (
+              t('auth:signIn.submit')
+            )}
+          </Button>
+        </form>
+      </Form>
+    </AuthShell>
   )
 }

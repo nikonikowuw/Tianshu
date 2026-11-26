@@ -2,11 +2,15 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 
 	"tianshu/internal/platform/httpserver"
 	"tianshu/internal/platform/i18n"
@@ -138,5 +142,70 @@ func TestAuthHTTPRoutesContract(t *testing.T) {
 	engine.ServeHTTP(recLogout, reqLogout)
 	if recLogout.Code != http.StatusNoContent {
 		t.Fatalf("logout status = %d, want 204", recLogout.Code)
+	}
+}
+
+// newLoginOnlyTestEngine mounts the login handler without the per-route IP
+// limiter, so header-level contracts of the service-level soft cooldown (such as
+// Retry-After) can be asserted in isolation.
+func newLoginOnlyTestEngine(t *testing.T, svc *Service) *gin.Engine {
+	t.Helper()
+
+	bundle, err := i18n.NewBundle()
+	if err != nil {
+		t.Fatalf("NewBundle() error = %v", err)
+	}
+	if err := bundle.RegisterFS("auth", LocalesFS, "locales"); err != nil {
+		t.Fatalf("RegisterFS() error = %v", err)
+	}
+
+	engine, err := httpserver.NewEngine(httpserver.Options{
+		Env:    "test",
+		Logger: logger.New("test", "error", io.Discard),
+		I18n:   bundle,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	h := NewHandler(svc, nil)
+	engine.POST("/api/v1/auth/login", h.login)
+	return engine
+}
+
+// TestAuthLoginSoftCooldownSetsRetryAfterHeader guards the header contract the
+// web client relies on to drive its 429 countdown; losing the header would
+// silently degrade the client to a one-second lock while the server still cools
+// down for minutes.
+func TestAuthLoginSoftCooldownSetsRetryAfterHeader(t *testing.T) {
+	svc, _, _, _ := newTestAuthHarness(t)
+	engine := newLoginOnlyTestEngine(t, svc)
+
+	const clientAddr = "198.51.100.77:41000"
+	postLogin := func(password string) *httptest.ResponseRecorder {
+		body := fmt.Sprintf(`{"identifier":"admin","password":%q}`, password)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = clientAddr
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for i := range maxLoginFailures {
+		if rec := postLogin("wrong-password-123"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d status = %d, want 401 (body=%s)", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := postLogin("correct-password-123")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("cooldown status = %d, want 429 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	raw := rec.Header().Get("Retry-After")
+	retryAfter, err := strconv.Atoi(raw)
+	if err != nil || retryAfter <= 0 {
+		t.Fatalf("Retry-After = %q, want positive integer seconds", raw)
 	}
 }
