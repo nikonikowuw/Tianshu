@@ -1,0 +1,77 @@
+{
+  "title": "Audit Logs",
+  "description": "Inspect immutable sign-in, setup, and critical security event trails",
+  "searchPlaceholder": "Search actor, action, resource, or request ID...",
+  "columns": {
+    "createdAt": "Time",
+    "actor": "Actor",
+    "action": "Action",
+    "resource": "Resource",
+    "status": "Status",
+    "ipAddress": "IP Address",
+    "requestId": "Request ID"
+  },
+  "statuses": {
+    "success": "Success",
+    "failure": "Failure"
+  },
+  "filters": {
+    "status": "Status",
+    "action": "Action",
+    "resource": "Resource",
+    "timeRange": "Date range",
+    "clearDates": "Clear dates",
+    "today": "Today",
+    "last7Days": "Last 7 days",
+    "last30Days": "Last 30 days"
+  },
+  "actions": {
+    "setupInit": "System Setup (setup.init)",
+    "authLogin": "Sign In (auth.login)",
+    "authLogout": "Sign Out (auth.logout)",
+    "authRefresh": "Token Refresh (auth.refresh)",
+    "authRefreshReplay": "Token Replay Alert (auth.refresh_replay)"
+  },
+  "resources": {
+    "system": "System (system)",
+    "session": "Session (session)",
+    "user": "User (user)",
+    "role": "Role (role)",
+    "file": "File (file)"
+  },
+  "rowActions": {
+    "openMenu": "Open actions menu",
+    "viewDetails": "View details",
+    "copyRequestId": "Copy request ID"
+  },
+  "copied": "Copied to clipboard",
+  "detail": {
+    "title": "Audit Log Details",
+    "description": "Immutable event record and redacted structured metadata snapshot",
+    "eventId": "Event ID",
+    "actorId": "Actor ID",
+    "actorUsername": "Actor Username",
+    "action": "Action",
+    "resource": "Resource",
+    "resourceId": "Resource ID",
+    "status": "Status",
+    "ipAddress": "IP Address",
+    "requestId": "Request ID",
+    "createdAt": "Timestamp",
+    "userAgent": "User-Agent",
+    "metadata": "Metadata",
+    "copyJson": "Copy JSON",
+    "anonymous": "Anonymous / System",
+    "emptyValue": "—"
+  },
+  "empty": {
+    "noDataTitle": "No audit logs yet",
+    "noDataDesc": "Sign-in attempts, setup events, and critical actions will appear here automatically.",
+    "noMatchTitle": "No matching audit logs",
+    "noMatchDesc": "Try adjusting your search query or clearing active filters.",
+    "clearFilters": "Clear filters"
+  },
+  "error": {
+    "loadFailed": "Failed to load audit logs"
+  }
+}

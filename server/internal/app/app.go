@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"tianshu/internal/modules/access"
+	"tianshu/internal/modules/audit"
 	"tianshu/internal/modules/auth"
 	"tianshu/internal/modules/identity"
 	"tianshu/internal/modules/setup"
@@ -39,6 +41,8 @@ type App struct {
 	storage      storage.Storage
 	access       *access.Service
 	identity     *identity.Service
+	audit        *audit.Service
+	auditHandler *audit.Handler
 	authHandler  *auth.Handler
 	setupHandler *setup.Handler
 	engine       *gin.Engine
@@ -69,6 +73,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 	if err := bundle.RegisterFS("auth", auth.LocalesFS, "locales"); err != nil {
 		return nil, fmt.Errorf("register auth locales: %w", err)
+	}
+	if err := bundle.RegisterFS("audit", audit.LocalesFS, "locales"); err != nil {
+		return nil, fmt.Errorf("register audit locales: %w", err)
 	}
 	if err := bundle.Validate(); err != nil {
 		return nil, fmt.Errorf("validate i18n bundle: %w", err)
@@ -106,6 +113,8 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	var (
 		accessSvc    *access.Service
 		identitySvc  *identity.Service
+		auditSvc     *audit.Service
+		auditHandler *audit.Handler
 		authHandler  *auth.Handler
 		setupHandler *setup.Handler
 	)
@@ -117,11 +126,15 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			return nil, fmt.Errorf("sync access catalog: %w", err)
 		}
 
+		auditSvc = audit.NewService(pool, log)
+		auditHandler = audit.NewHandler(auditSvc)
+
 		identitySvc = identity.NewService(pool, hasher)
 		setupSvc := setup.NewService(
 			&setupIdentityAdapter{svc: identitySvc},
 			accessSvc,
 			tx,
+			&setupAuditAdapter{svc: auditSvc},
 			log,
 		)
 		if err := setupSvc.BootstrapFromEnv(ctx, cfg.Bootstrap); err != nil {
@@ -140,6 +153,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			jwtMgr,
 			tx,
 			memCache,
+			&authAuditAdapter{svc: auditSvc},
 			log,
 		)
 		authHandler = auth.NewHandler(authSvc, cfg.CORS.AllowedOrigins)
@@ -181,6 +195,8 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		storage:      store,
 		access:       accessSvc,
 		identity:     identitySvc,
+		audit:        auditSvc,
+		auditHandler: auditHandler,
 		authHandler:  authHandler,
 		setupHandler: setupHandler,
 		engine:       engine,
@@ -205,6 +221,16 @@ func (a *App) Engine() *gin.Engine {
 
 // Run starts the HTTP server and blocks until ctx is canceled or a fatal serve error occurs.
 func (a *App) Run(ctx context.Context) error {
+	janitorCtx, janitorCancel := context.WithCancel(ctx)
+	var janitorWG sync.WaitGroup
+	if a.audit != nil && a.cfg.Audit.RetentionDays > 0 {
+		janitorWG.Add(1)
+		go func() {
+			defer janitorWG.Done()
+			a.runAuditRetentionJanitor(janitorCtx)
+		}()
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		a.log.Info("http server listening", "addr", a.cfg.Server.Addr, "env", a.cfg.App.Env)
@@ -214,18 +240,45 @@ func (a *App) Run(ctx context.Context) error {
 		close(errCh)
 	}()
 
+	var runErr error
 	select {
 	case err := <-errCh:
+		janitorCancel()
 		_ = a.Close(context.Background())
-		return err
+		runErr = err
 	case <-ctx.Done():
+		janitorCancel()
 		shutdownTimeout := a.cfg.Server.ShutdownTimeout
 		if shutdownTimeout <= 0 {
 			shutdownTimeout = 10 * time.Second
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		return a.Close(shutdownCtx)
+		runErr = a.Close(shutdownCtx)
+	}
+	janitorWG.Wait()
+	return runErr
+}
+
+func (a *App) runAuditRetentionJanitor(ctx context.Context) {
+	const janitorInterval = 24 * time.Hour
+	ticker := time.NewTicker(janitorInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			purgeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			deleted, err := a.audit.PurgeExpired(purgeCtx, a.cfg.Audit.RetentionDays)
+			cancel()
+			if err != nil && !errors.Is(err, context.Canceled) {
+				a.log.Warn("audit retention cleanup failed", "error", err)
+			} else if deleted > 0 {
+				a.log.Info("audit retention cleanup completed", "deleted", deleted, "retention_days", a.cfg.Audit.RetentionDays)
+			}
+		}
 	}
 }
 

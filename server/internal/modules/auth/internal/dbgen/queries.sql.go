@@ -142,28 +142,44 @@ func (q *Queries) RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) e
 	return err
 }
 
-const revokeSession = `-- name: RevokeSession :exec
+const revokeSession = `-- name: RevokeSession :one
 UPDATE user_sessions
 SET revoked_at = now()
 WHERE id = $1
   AND revoked_at IS NULL
+RETURNING id, user_id
 `
 
-func (q *Queries) RevokeSession(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, revokeSession, id)
-	return err
+type RevokeSessionRow struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
 }
 
-const revokeSessionByRefreshHash = `-- name: RevokeSessionByRefreshHash :exec
+func (q *Queries) RevokeSession(ctx context.Context, id uuid.UUID) (RevokeSessionRow, error) {
+	row := q.db.QueryRow(ctx, revokeSession, id)
+	var i RevokeSessionRow
+	err := row.Scan(&i.ID, &i.UserID)
+	return i, err
+}
+
+const revokeSessionByRefreshHash = `-- name: RevokeSessionByRefreshHash :one
 UPDATE user_sessions
 SET revoked_at = now()
 WHERE refresh_token_hash = $1
   AND revoked_at IS NULL
+RETURNING id, user_id
 `
 
-func (q *Queries) RevokeSessionByRefreshHash(ctx context.Context, refreshTokenHash string) error {
-	_, err := q.db.Exec(ctx, revokeSessionByRefreshHash, refreshTokenHash)
-	return err
+type RevokeSessionByRefreshHashRow struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+func (q *Queries) RevokeSessionByRefreshHash(ctx context.Context, refreshTokenHash string) (RevokeSessionByRefreshHashRow, error) {
+	row := q.db.QueryRow(ctx, revokeSessionByRefreshHash, refreshTokenHash)
+	var i RevokeSessionByRefreshHashRow
+	err := row.Scan(&i.ID, &i.UserID)
+	return i, err
 }
 
 const rotateSessionRefreshToken = `-- name: RotateSessionRefreshToken :exec

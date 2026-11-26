@@ -1,0 +1,7 @@
+# Audit module messages (en-US)
+AUDIT_INVALID_STATUS = "Invalid audit status; allowed values are success or failure"
+AUDIT_INVALID_ACTION = "Invalid action filter value"
+AUDIT_INVALID_RESOURCE = "Invalid resource filter value"
+AUDIT_INVALID_TIME_FORMAT = "Invalid timestamp format, expected RFC3339"
+AUDIT_INVALID_TIME_RANGE = "Start time must not be after end time"
+AUDIT_INVALID_NUMBER = "Please enter a valid integer"

@@ -44,6 +44,7 @@ type Service struct {
 	jwt      *security.JWTManager
 	tx       TxRunner
 	cache    cache.Cache
+	audit    AuditRecorder
 	log      *slog.Logger
 	now      func() time.Time
 	failMu   sync.Mutex
@@ -59,9 +60,10 @@ func NewService(
 	jwtMgr *security.JWTManager,
 	tx TxRunner,
 	c cache.Cache,
+	audit AuditRecorder,
 	log *slog.Logger,
 ) *Service {
-	return newServiceWithStore(cfg, newStore(pool), identity, access, hasher, jwtMgr, tx, c, log)
+	return newServiceWithStore(cfg, newStore(pool), identity, access, hasher, jwtMgr, tx, c, audit, log)
 }
 
 func newServiceWithStore(
@@ -73,6 +75,7 @@ func newServiceWithStore(
 	jwtMgr *security.JWTManager,
 	tx TxRunner,
 	c cache.Cache,
+	audit AuditRecorder,
 	log *slog.Logger,
 ) *Service {
 	if log == nil {
@@ -90,6 +93,7 @@ func newServiceWithStore(
 		jwt:      jwtMgr,
 		tx:       tx,
 		cache:    c,
+		audit:    audit,
 		log:      log,
 		now:      time.Now,
 	}
@@ -118,6 +122,18 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (LoginResult, err
 	}
 
 	if retryAfter := s.checkLoginCooldown(ctx, input.ClientIP, identifier); retryAfter > 0 {
+		s.recordAuditBestEffort(ctx, AuditEntry{
+			ActorUsername: identifier,
+			Action:        "auth.login",
+			Resource:      "session",
+			Status:        "failure",
+			IPAddress:     input.ClientIP,
+			UserAgent:     input.UserAgent,
+			Metadata: map[string]any{
+				"reason":     "rate_limited",
+				"retryAfter": retryAfter,
+			},
+		})
 		return LoginResult{}, apperr.RateLimited().WithParams(map[string]any{"retry_after": retryAfter})
 	}
 
@@ -126,6 +142,15 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (LoginResult, err
 		if appErr, ok := apperr.As(err); ok && appErr.Status == 404 {
 			s.hasher.VerifyDummy(input.Password)
 			s.recordLoginFailure(ctx, input.ClientIP, identifier)
+			s.recordAuditBestEffort(ctx, AuditEntry{
+				ActorUsername: identifier,
+				Action:        "auth.login",
+				Resource:      "session",
+				Status:        "failure",
+				IPAddress:     input.ClientIP,
+				UserAgent:     input.UserAgent,
+				Metadata:      map[string]any{"reason": "invalid_credentials"},
+			})
 			return LoginResult{}, invalidCredentialsError()
 		}
 		return LoginResult{}, err
@@ -134,14 +159,44 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (LoginResult, err
 	matched, needsRehash, err := s.hasher.Verify(input.Password, creds.PasswordHash)
 	if err != nil {
 		s.log.Error("stored password hash invalid", "user_id", creds.User.ID, "error", err)
+		s.recordAuditBestEffort(ctx, AuditEntry{
+			ActorID:       &creds.User.ID,
+			ActorUsername: creds.User.Username,
+			Action:        "auth.login",
+			Resource:      "session",
+			Status:        "failure",
+			IPAddress:     input.ClientIP,
+			UserAgent:     input.UserAgent,
+			Metadata:      map[string]any{"reason": "invalid_credentials"},
+		})
 		return LoginResult{}, invalidCredentialsError()
 	}
 	if !matched {
 		s.recordLoginFailure(ctx, input.ClientIP, identifier)
+		s.recordAuditBestEffort(ctx, AuditEntry{
+			ActorID:       &creds.User.ID,
+			ActorUsername: creds.User.Username,
+			Action:        "auth.login",
+			Resource:      "session",
+			Status:        "failure",
+			IPAddress:     input.ClientIP,
+			UserAgent:     input.UserAgent,
+			Metadata:      map[string]any{"reason": "invalid_credentials"},
+		})
 		return LoginResult{}, invalidCredentialsError()
 	}
 
 	if creds.User.Status == userStatusDisabled {
+		s.recordAuditBestEffort(ctx, AuditEntry{
+			ActorID:       &creds.User.ID,
+			ActorUsername: creds.User.Username,
+			Action:        "auth.login",
+			Resource:      "session",
+			Status:        "failure",
+			IPAddress:     input.ClientIP,
+			UserAgent:     input.UserAgent,
+			Metadata:      map[string]any{"reason": "account_disabled"},
+		})
 		return LoginResult{}, accountDisabledError()
 	}
 
@@ -177,7 +232,26 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (LoginResult, err
 		}); createErr != nil {
 			return apperr.Internal(fmt.Errorf("create session: %w", createErr))
 		}
-		return s.identity.RecordLogin(txCtx, creds.User.ID)
+		if recErr := s.identity.RecordLogin(txCtx, creds.User.ID); recErr != nil {
+			return recErr
+		}
+		if s.audit != nil {
+			userID := creds.User.ID
+			if auditErr := s.audit.Record(txCtx, AuditEntry{
+				ActorID:       &userID,
+				ActorUsername: creds.User.Username,
+				Action:        "auth.login",
+				Resource:      "session",
+				ResourceID:    sessionID.String(),
+				Status:        "success",
+				IPAddress:     input.ClientIP,
+				UserAgent:     input.UserAgent,
+				Metadata:      map[string]any{"identifier": identifier},
+			}); auditErr != nil {
+				return auditErr
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return LoginResult{}, err
@@ -213,13 +287,14 @@ func (s *Service) Refresh(ctx context.Context, input RefreshInput) (RefreshResul
 	now := s.now().UTC()
 
 	var (
-		result  RefreshResult
-		authErr error
+		result       RefreshResult
+		authErr      error
+		pendingAudit *AuditEntry
 	)
 	err := s.withinTx(ctx, func(txCtx context.Context) error {
 		sess, err := s.store.GetSessionByRefreshHashForUpdate(txCtx, tokenHash)
 		if err == nil {
-			authErr, err = s.rotateActiveSession(txCtx, sess, tokenHash, input, now, &result)
+			authErr, pendingAudit, err = s.rotateActiveSession(txCtx, sess, tokenHash, input, now, &result)
 			return err
 		}
 		if !errors.Is(err, errSessionNotFound) {
@@ -235,11 +310,14 @@ func (s *Service) Refresh(ctx context.Context, input RefreshInput) (RefreshResul
 			return apperr.Internal(fmt.Errorf("lookup refresh token history: %w", histErr))
 		}
 
-		authErr, err = s.handleHistoricalToken(txCtx, hist, now, &result)
+		authErr, pendingAudit, err = s.handleHistoricalToken(txCtx, hist, input, now, &result)
 		return err
 	})
 	if err != nil {
 		return RefreshResult{}, err
+	}
+	if pendingAudit != nil {
+		s.recordAuditBestEffort(ctx, *pendingAudit)
 	}
 	if authErr != nil {
 		return RefreshResult{}, authErr
@@ -247,9 +325,10 @@ func (s *Service) Refresh(ctx context.Context, input RefreshInput) (RefreshResul
 	return result, nil
 }
 
-// rotateActiveSession returns (businessAuthErr, txErr).
+// rotateActiveSession returns (businessAuthErr, pendingAudit, txErr).
 // Security revocations (disabled/deleted user) return a non-nil businessAuthErr with nil txErr
-// so the enclosing transaction commits the revocation instead of rolling it back.
+// so the enclosing transaction commits the revocation instead of rolling it back;
+// pendingAudit is emitted after commit so an audit failure never aborts the revocation tx.
 func (s *Service) rotateActiveSession(
 	txCtx context.Context,
 	sess sessionRecord,
@@ -257,37 +336,48 @@ func (s *Service) rotateActiveSession(
 	input RefreshInput,
 	now time.Time,
 	out *RefreshResult,
-) (error, error) {
+) (error, *AuditEntry, error) {
 	if sess.RevokedAt != nil || now.After(sess.ExpiresAt) {
-		return apperr.Unauthorized(apperr.CodeUnauthorized), nil
+		return apperr.Unauthorized(apperr.CodeUnauthorized), nil, nil
 	}
 
 	user, err := s.identity.GetByID(txCtx, sess.UserID)
 	if err != nil {
 		if appErr, ok := apperr.As(err); ok && appErr.Status == 404 {
-			if revErr := s.store.RevokeSession(txCtx, sess.ID); revErr != nil {
-				return nil, apperr.Internal(fmt.Errorf("revoke deleted user session: %w", revErr))
+			if _, _, revErr := s.store.RevokeSession(txCtx, sess.ID); revErr != nil {
+				return nil, nil, apperr.Internal(fmt.Errorf("revoke deleted user session: %w", revErr))
 			}
-			return apperr.Unauthorized(apperr.CodeUnauthorized), nil
+			return apperr.Unauthorized(apperr.CodeUnauthorized), nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	if user.Status == userStatusDisabled {
 		if revErr := s.store.RevokeAllUserSessions(txCtx, sess.UserID); revErr != nil {
-			return nil, apperr.Internal(fmt.Errorf("revoke disabled user sessions: %w", revErr))
+			return nil, nil, apperr.Internal(fmt.Errorf("revoke disabled user sessions: %w", revErr))
 		}
-		return accountDisabledError(), nil
+		userID := user.ID
+		return accountDisabledError(), &AuditEntry{
+			ActorID:       &userID,
+			ActorUsername: user.Username,
+			Action:        "auth.refresh",
+			Resource:      "session",
+			ResourceID:    sess.ID.String(),
+			Status:        "failure",
+			IPAddress:     input.ClientIP,
+			UserAgent:     input.UserAgent,
+			Metadata:      map[string]any{"reason": "account_disabled"},
+		}, nil
 	}
 
 	newRaw, err := security.GenerateOpaqueToken(security.DefaultOpaqueTokenBytes)
 	if err != nil {
-		return nil, apperr.Internal(err)
+		return nil, nil, apperr.Internal(err)
 	}
 	newHash := security.HashTokenSHA256(newRaw)
 	newExp := now.Add(s.cfg.RefreshTokenTTL)
 
 	if err := s.store.InsertRefreshTokenHistory(txCtx, oldHash, sess.ID, sess.ExpiresAt); err != nil {
-		return nil, apperr.Internal(fmt.Errorf("record refresh token history: %w", err))
+		return nil, nil, apperr.Internal(fmt.Errorf("record refresh token history: %w", err))
 	}
 	if err := s.store.RotateSessionRefreshToken(
 		txCtx,
@@ -297,12 +387,12 @@ func (s *Service) rotateActiveSession(
 		input.ClientIP,
 		newExp,
 	); err != nil {
-		return nil, apperr.Internal(fmt.Errorf("rotate session refresh token: %w", err))
+		return nil, nil, apperr.Internal(fmt.Errorf("rotate session refresh token: %w", err))
 	}
 
 	accessToken, accessExp, err := s.jwt.Sign(sess.UserID, sess.ID)
 	if err != nil {
-		return nil, apperr.Internal(fmt.Errorf("sign refreshed access token: %w", err))
+		return nil, nil, apperr.Internal(fmt.Errorf("sign refreshed access token: %w", err))
 	}
 
 	*out = RefreshResult{
@@ -311,53 +401,80 @@ func (s *Service) rotateActiveSession(
 		RotateCookie: true,
 		ExpiresAt:    accessExp,
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
-// handleHistoricalToken returns (businessAuthErr, txErr) so replay revocations commit cleanly.
+// handleHistoricalToken returns (businessAuthErr, pendingAudit, txErr) so replay revocations commit cleanly.
 func (s *Service) handleHistoricalToken(
 	txCtx context.Context,
 	hist refreshHistoryRecord,
+	input RefreshInput,
 	now time.Time,
 	out *RefreshResult,
-) (error, error) {
+) (error, *AuditEntry, error) {
 	sess, err := s.store.GetSessionByIDForUpdate(txCtx, hist.SessionID)
 	if errors.Is(err, errSessionNotFound) {
-		return apperr.Unauthorized(apperr.CodeUnauthorized), nil
+		return apperr.Unauthorized(apperr.CodeUnauthorized), nil, nil
 	}
 	if err != nil {
-		return nil, apperr.Internal(fmt.Errorf("lookup historical session: %w", err))
+		return nil, nil, apperr.Internal(fmt.Errorf("lookup historical session: %w", err))
 	}
 	if sess.RevokedAt != nil || now.After(sess.ExpiresAt) {
-		return refreshReusedError(), nil
+		return refreshReusedError(), nil, nil
 	}
 
 	// Outside concurrent refresh grace window: treat as token theft/replay and revoke entire session.
 	if now.Sub(hist.ReplacedAt) > refreshGraceWindow {
-		if revErr := s.store.RevokeSession(txCtx, sess.ID); revErr != nil {
-			return nil, apperr.Internal(fmt.Errorf("revoke replayed session: %w", revErr))
+		if _, _, revErr := s.store.RevokeSession(txCtx, sess.ID); revErr != nil {
+			return nil, nil, apperr.Internal(fmt.Errorf("revoke replayed session: %w", revErr))
 		}
+		actorUsername := s.lookupUsernameBestEffort(txCtx, sess.UserID)
+		userID := sess.UserID
 		s.log.Warn("refresh token replay detected; session revoked",
 			"session_id", sess.ID.String(),
 			"user_id", sess.UserID.String(),
 		)
-		return refreshReusedError(), nil
+		return refreshReusedError(), &AuditEntry{
+			ActorID:       &userID,
+			ActorUsername: actorUsername,
+			Action:        "auth.refresh_replay",
+			Resource:      "session",
+			ResourceID:    sess.ID.String(),
+			Status:        "failure",
+			IPAddress:     input.ClientIP,
+			UserAgent:     input.UserAgent,
+			Metadata: map[string]any{
+				"reason":    "refresh_token_reused",
+				"sessionId": sess.ID.String(),
+			},
+		}, nil
 	}
 
 	user, err := s.identity.GetByID(txCtx, sess.UserID)
 	if err != nil {
-		return apperr.Unauthorized(apperr.CodeUnauthorized), nil
+		return apperr.Unauthorized(apperr.CodeUnauthorized), nil, nil
 	}
 	if user.Status == userStatusDisabled {
 		if revErr := s.store.RevokeAllUserSessions(txCtx, sess.UserID); revErr != nil {
-			return nil, apperr.Internal(fmt.Errorf("revoke disabled user sessions: %w", revErr))
+			return nil, nil, apperr.Internal(fmt.Errorf("revoke disabled user sessions: %w", revErr))
 		}
-		return accountDisabledError(), nil
+		userID := user.ID
+		return accountDisabledError(), &AuditEntry{
+			ActorID:       &userID,
+			ActorUsername: user.Username,
+			Action:        "auth.refresh",
+			Resource:      "session",
+			ResourceID:    sess.ID.String(),
+			Status:        "failure",
+			IPAddress:     input.ClientIP,
+			UserAgent:     input.UserAgent,
+			Metadata:      map[string]any{"reason": "account_disabled"},
+		}, nil
 	}
 
 	accessToken, accessExp, err := s.jwt.Sign(sess.UserID, sess.ID)
 	if err != nil {
-		return nil, apperr.Internal(fmt.Errorf("sign grace-window access token: %w", err))
+		return nil, nil, apperr.Internal(fmt.Errorf("sign grace-window access token: %w", err))
 	}
 
 	*out = RefreshResult{
@@ -365,23 +482,92 @@ func (s *Service) handleHistoricalToken(
 		RotateCookie: false,
 		ExpiresAt:    accessExp,
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
-// Logout revokes the current session identified by refresh token or session ID.
-func (s *Service) Logout(ctx context.Context, rawRefreshToken string, sessionID uuid.UUID) error {
-	if trimmed := strings.TrimSpace(rawRefreshToken); trimmed != "" {
+// Logout revokes the current session identified by refresh token or session ID and writes an audit entry.
+func (s *Service) Logout(ctx context.Context, input LogoutInput) error {
+	var (
+		revokedSessID uuid.UUID
+		actorID       = input.UserID
+		anyRevoked    bool
+	)
+
+	if trimmed := strings.TrimSpace(input.RefreshToken); trimmed != "" {
 		hash := security.HashTokenSHA256(trimmed)
-		if err := s.store.RevokeSessionByRefreshHash(ctx, hash); err != nil {
+		rev, ok, err := s.store.RevokeSessionByRefreshHash(ctx, hash)
+		if err != nil {
 			return apperr.Internal(fmt.Errorf("revoke session by token: %w", err))
 		}
-	}
-	if sessionID != uuid.Nil {
-		if err := s.store.RevokeSession(ctx, sessionID); err != nil {
-			return apperr.Internal(fmt.Errorf("revoke session by id: %w", err))
+		if ok {
+			anyRevoked = true
+			revokedSessID = rev.ID
+			if actorID == uuid.Nil {
+				actorID = rev.UserID
+			}
 		}
 	}
+	if input.SessionID != uuid.Nil {
+		rev, ok, err := s.store.RevokeSession(ctx, input.SessionID)
+		if err != nil {
+			return apperr.Internal(fmt.Errorf("revoke session by id: %w", err))
+		}
+		if ok {
+			anyRevoked = true
+			revokedSessID = rev.ID
+			if actorID == uuid.Nil {
+				actorID = rev.UserID
+			}
+		}
+	}
+
+	if anyRevoked || actorID != uuid.Nil {
+		var actorPtr *uuid.UUID
+		var actorUsername string
+		if actorID != uuid.Nil {
+			idCopy := actorID
+			actorPtr = &idCopy
+			actorUsername = s.lookupUsernameBestEffort(ctx, actorID)
+		}
+		resourceID := ""
+		if revokedSessID != uuid.Nil {
+			resourceID = revokedSessID.String()
+		} else if input.SessionID != uuid.Nil {
+			resourceID = input.SessionID.String()
+		}
+		s.recordAuditBestEffort(ctx, AuditEntry{
+			ActorID:       actorPtr,
+			ActorUsername: actorUsername,
+			Action:        "auth.logout",
+			Resource:      "session",
+			ResourceID:    resourceID,
+			Status:        "success",
+			IPAddress:     input.ClientIP,
+			UserAgent:     input.UserAgent,
+		})
+	}
+
 	return nil
+}
+
+func (s *Service) lookupUsernameBestEffort(ctx context.Context, userID uuid.UUID) string {
+	if userID == uuid.Nil {
+		return ""
+	}
+	u, err := s.identity.GetByID(ctx, userID)
+	if err != nil {
+		return ""
+	}
+	return u.Username
+}
+
+func (s *Service) recordAuditBestEffort(ctx context.Context, entry AuditEntry) {
+	if s.audit == nil {
+		return
+	}
+	if err := s.audit.Record(ctx, entry); err != nil {
+		s.log.Warn("record auth audit log failed", "action", entry.Action, "error", err)
+	}
 }
 
 // Me returns the authenticated user's profile together with fresh roles and permissions.

@@ -1,0 +1,7 @@
+# Audit module messages (zh-CN)
+AUDIT_INVALID_STATUS = "无效的审计状态，允许值为 success 或 failure"
+AUDIT_INVALID_ACTION = "动作筛选参数格式无效"
+AUDIT_INVALID_RESOURCE = "资源筛选参数格式无效"
+AUDIT_INVALID_TIME_FORMAT = "时间格式无效，请使用 RFC3339 格式"
+AUDIT_INVALID_TIME_RANGE = "开始时间不能晚于结束时间"
+AUDIT_INVALID_NUMBER = "请输入有效的整数"

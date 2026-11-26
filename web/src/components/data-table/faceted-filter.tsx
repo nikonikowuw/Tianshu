@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import { type Column } from '@tanstack/react-table'
 import { Check as CheckIcon, PlusCircle as PlusCircledIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -23,6 +24,7 @@ import { Separator } from '@/components/ui/separator'
 type DataTableFacetedFilterProps<TData, TValue> = {
   column?: Column<TData, TValue>
   title?: string
+  showFacetedCounts?: boolean
   options: {
     label: string
     value: string
@@ -33,9 +35,13 @@ type DataTableFacetedFilterProps<TData, TValue> = {
 export function DataTableFacetedFilter<TData, TValue>({
   column,
   title,
+  showFacetedCounts = false,
   options,
 }: DataTableFacetedFilterProps<TData, TValue>) {
-  const facets = column?.getFacetedUniqueValues()
+  const { t } = useTranslation('common')
+  const facets = showFacetedCounts
+    ? column?.getFacetedUniqueValues()
+    : undefined
   const selectedValues = new Set(column?.getFilterValue() as string[])
 
   return (
@@ -59,7 +65,7 @@ export function DataTableFacetedFilter<TData, TValue>({
                     variant='secondary'
                     className='rounded-sm px-1 font-normal'
                   >
-                    {selectedValues.size} selected
+                    {t('table.selectedCount', { count: selectedValues.size })}
                   </Badge>
                 ) : (
                   options
@@ -79,11 +85,11 @@ export function DataTableFacetedFilter<TData, TValue>({
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className='w-50 p-0' align='start'>
+      <PopoverContent className='w-56 p-0' align='start'>
         <Command>
           <CommandInput placeholder={title} />
           <CommandList>
-            <CommandEmpty>No results found.</CommandEmpty>
+            <CommandEmpty>{t('table.noResults')}</CommandEmpty>
             <CommandGroup>
               {options.map((option) => {
                 const isSelected = selectedValues.has(option.value)
@@ -110,7 +116,7 @@ export function DataTableFacetedFilter<TData, TValue>({
                           : 'opacity-50 [&_svg]:invisible'
                       )}
                     >
-                      <CheckIcon className={cn('h-4 w-4 text-background')} />
+                      <CheckIcon className='h-4 w-4 text-primary-foreground' />
                     </div>
                     {option.icon && (
                       <option.icon className='size-4 text-muted-foreground' />
@@ -133,7 +139,7 @@ export function DataTableFacetedFilter<TData, TValue>({
                     onSelect={() => column?.setFilterValue(undefined)}
                     className='justify-center text-center'
                   >
-                    Clear filters
+                    {t('table.clearFilters')}
                   </CommandItem>
                 </CommandGroup>
               </>

@@ -22,6 +22,7 @@ type Service struct {
 	identity IdentityManager
 	roles    RoleAssigner
 	tx       TxRunner
+	audit    AuditRecorder
 	log      *slog.Logger
 
 	mu sync.Mutex
@@ -32,6 +33,7 @@ func NewService(
 	identity IdentityManager,
 	roles RoleAssigner,
 	tx TxRunner,
+	audit AuditRecorder,
 	log *slog.Logger,
 ) *Service {
 	if log == nil {
@@ -41,6 +43,7 @@ func NewService(
 		identity: identity,
 		roles:    roles,
 		tx:       tx,
+		audit:    audit,
 		log:      log,
 	}
 }
@@ -72,6 +75,7 @@ func (s *Service) BootstrapFromEnv(ctx context.Context, cfg config.BootstrapConf
 		Email:       cfg.AdminEmail,
 		DisplayName: displayName,
 		Password:    cfg.AdminPassword,
+		Method:      "env_bootstrap",
 	})
 	if err != nil {
 		if appErr, ok := apperr.As(err); ok && appErr.Code == ErrCodeAlreadyInitialized {
@@ -88,6 +92,11 @@ func (s *Service) Init(ctx context.Context, input InitInput) (CreatedAdmin, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	method := strings.TrimSpace(input.Method)
+	if method == "" {
+		method = "wizard"
+	}
+
 	var created CreatedAdmin
 	err := s.withinTx(ctx, func(txCtx context.Context) error {
 		if err := database.AcquireAdvisoryXactLock(txCtx, setupAdvisoryLockKey); err != nil {
@@ -102,7 +111,12 @@ func (s *Service) Init(ctx context.Context, input InitInput) (CreatedAdmin, erro
 			return alreadyInitializedError()
 		}
 
-		admin, err := s.identity.CreateInitialAdmin(txCtx, CreateAdminParams(input))
+		admin, err := s.identity.CreateInitialAdmin(txCtx, CreateAdminParams{
+			Username:    input.Username,
+			Email:       input.Email,
+			DisplayName: input.DisplayName,
+			Password:    input.Password,
+		})
 		if err != nil {
 			return err
 		}
@@ -111,10 +125,48 @@ func (s *Service) Init(ctx context.Context, input InitInput) (CreatedAdmin, erro
 			return err
 		}
 
+		if s.audit != nil {
+			adminID := admin.ID
+			if err := s.audit.Record(txCtx, AuditEntry{
+				ActorID:       &adminID,
+				ActorUsername: admin.Username,
+				Action:        "setup.init",
+				Resource:      "system",
+				ResourceID:    admin.ID.String(),
+				Status:        "success",
+				IPAddress:     input.ClientIP,
+				UserAgent:     input.UserAgent,
+				Metadata: map[string]any{
+					"method":   method,
+					"username": admin.Username,
+				},
+			}); err != nil {
+				return err
+			}
+		}
+
 		created = admin
 		return nil
 	})
 	if err != nil {
+		if s.audit != nil && method != "env_bootstrap" {
+			reason := "setup_failed"
+			if appErr, ok := apperr.As(err); ok && appErr.Code != "" {
+				reason = appErr.Code
+			}
+			s.recordBestEffort(ctx, AuditEntry{
+				ActorUsername: strings.ToLower(strings.TrimSpace(input.Username)),
+				Action:        "setup.init",
+				Resource:      "system",
+				Status:        "failure",
+				IPAddress:     input.ClientIP,
+				UserAgent:     input.UserAgent,
+				Metadata: map[string]any{
+					"method": method,
+					"reason": reason,
+				},
+			})
+		}
 		return CreatedAdmin{}, err
 	}
 
@@ -123,6 +175,15 @@ func (s *Service) Init(ctx context.Context, input InitInput) (CreatedAdmin, erro
 		"username", created.Username,
 	)
 	return created, nil
+}
+
+func (s *Service) recordBestEffort(ctx context.Context, entry AuditEntry) {
+	if s.audit == nil {
+		return
+	}
+	if err := s.audit.Record(ctx, entry); err != nil {
+		s.log.Warn("record setup audit log failed", "action", entry.Action, "error", err)
+	}
 }
 
 func (s *Service) withinTx(ctx context.Context, fn func(ctx context.Context) error) error {

@@ -99,24 +99,26 @@ func (f *fakeAuthStore) GetRefreshTokenHistoryByHash(_ context.Context, tokenHas
 	return h, nil
 }
 
-func (f *fakeAuthStore) RevokeSession(_ context.Context, sessionID uuid.UUID) error {
+func (f *fakeAuthStore) RevokeSession(_ context.Context, sessionID uuid.UUID) (revokedSession, bool, error) {
 	if s, ok := f.sessions[sessionID]; ok && s.RevokedAt == nil {
 		t := f.now()
 		s.RevokedAt = &t
 		f.sessions[sessionID] = s
+		return revokedSession{ID: s.ID, UserID: s.UserID}, true, nil
 	}
-	return nil
+	return revokedSession{}, false, nil
 }
 
-func (f *fakeAuthStore) RevokeSessionByRefreshHash(_ context.Context, tokenHash string) error {
+func (f *fakeAuthStore) RevokeSessionByRefreshHash(_ context.Context, tokenHash string) (revokedSession, bool, error) {
 	for id, s := range f.sessions {
 		if s.RefreshTokenHash == tokenHash && s.RevokedAt == nil {
 			t := f.now()
 			s.RevokedAt = &t
 			f.sessions[id] = s
+			return revokedSession{ID: s.ID, UserID: s.UserID}, true, nil
 		}
 	}
-	return nil
+	return revokedSession{}, false, nil
 }
 
 func (f *fakeAuthStore) RevokeAllUserSessions(_ context.Context, userID uuid.UUID) error {
@@ -193,7 +195,21 @@ func (f fakeTx) WithinTx(ctx context.Context, fn func(ctx context.Context) error
 	return err
 }
 
+type fakeAuditRecorder struct {
+	entries []AuditEntry
+}
+
+func (f *fakeAuditRecorder) Record(_ context.Context, entry AuditEntry) error {
+	f.entries = append(f.entries, entry)
+	return nil
+}
+
 func newTestAuthHarness(t *testing.T) (*Service, *fakeAuthStore, *fakeIdentityProvider, *time.Time) {
+	svc, st, idProvider, now, _ := newTestAuthHarnessWithAudit(t)
+	return svc, st, idProvider, now
+}
+
+func newTestAuthHarnessWithAudit(t *testing.T) (*Service, *fakeAuthStore, *fakeIdentityProvider, *time.Time, *fakeAuditRecorder) {
 	t.Helper()
 	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
 	nowFn := func() time.Time { return now }
@@ -238,6 +254,7 @@ func newTestAuthHarness(t *testing.T) (*Service, *fakeAuthStore, *fakeIdentityPr
 	t.Cleanup(func() { _ = mem.Close() })
 
 	st := newFakeAuthStore(nowFn)
+	auditRec := &fakeAuditRecorder{}
 	svc := newServiceWithStore(
 		config.AuthConfig{
 			JWTSecret:       "test-secret-for-auth-service-32-bytes!!",
@@ -254,10 +271,11 @@ func newTestAuthHarness(t *testing.T) (*Service, *fakeAuthStore, *fakeIdentityPr
 		jwtMgr,
 		fakeTx{st: st},
 		mem,
+		auditRec,
 		logger.New("test", "error", io.Discard),
 	)
 	svc.now = nowFn
-	return svc, st, idProvider, &now
+	return svc, st, idProvider, &now, auditRec
 }
 
 func TestLoginRefreshGraceWindowAndReplayRevocation(t *testing.T) {
@@ -371,6 +389,82 @@ func TestLoginDisabledUserReturns403(t *testing.T) {
 	appErr, ok := apperr.As(err)
 	if !ok || appErr.Status != http.StatusForbidden || appErr.Code != ErrCodeAccountDisabled {
 		t.Fatalf("disabled login err = %v, want 403 %s", err, ErrCodeAccountDisabled)
+	}
+}
+
+func TestAuthEmitsAuditEvents(t *testing.T) {
+	svc, _, _, now, auditRec := newTestAuthHarnessWithAudit(t)
+
+	// Failed login writes failure audit without exposing password.
+	_, err := svc.Login(t.Context(), LoginInput{
+		Identifier: "admin",
+		Password:   "wrong-password-123",
+		ClientIP:   "10.0.0.1",
+		UserAgent:  "ua-test",
+	})
+	if err == nil {
+		t.Fatal("expected login error")
+	}
+
+	// Successful login writes success audit.
+	res, err := svc.Login(t.Context(), LoginInput{
+		Identifier: "admin",
+		Password:   "correct-password-123",
+		ClientIP:   "10.0.0.1",
+		UserAgent:  "ua-test",
+	})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	// Rotate once, advance past grace window, then replay -> emits auth.refresh_replay failure audit.
+	_, err = svc.Refresh(t.Context(), RefreshInput{RefreshToken: res.RefreshToken, ClientIP: "10.0.0.1"})
+	if err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	*now = now.Add(60 * time.Second)
+	_, _ = svc.Refresh(t.Context(), RefreshInput{RefreshToken: res.RefreshToken, ClientIP: "10.0.0.2"})
+
+	// Logout on a fresh session emits auth.logout success audit.
+	res2, err := svc.Login(t.Context(), LoginInput{
+		Identifier: "admin",
+		Password:   "correct-password-123",
+		ClientIP:   "10.0.0.3",
+	})
+	if err != nil {
+		t.Fatalf("second Login() error = %v", err)
+	}
+	if err := svc.Logout(t.Context(), LogoutInput{
+		RefreshToken: res2.RefreshToken,
+		ClientIP:     "10.0.0.3",
+		UserAgent:    "ua-logout",
+	}); err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+
+	var gotActions []string
+	for _, entry := range auditRec.entries {
+		gotActions = append(gotActions, entry.Action+":"+entry.Status)
+		if entry.Metadata != nil {
+			if _, hasPassword := entry.Metadata["password"]; hasPassword {
+				t.Fatalf("audit metadata must never include password: %+v", entry.Metadata)
+			}
+		}
+	}
+	wantPrefix := []string{
+		"auth.login:failure",
+		"auth.login:success",
+		"auth.refresh_replay:failure",
+		"auth.login:success",
+		"auth.logout:success",
+	}
+	if len(gotActions) != len(wantPrefix) {
+		t.Fatalf("audit actions = %v, want %v", gotActions, wantPrefix)
+	}
+	for i := range wantPrefix {
+		if gotActions[i] != wantPrefix[i] {
+			t.Fatalf("audit[%d] = %q, want %q (all=%v)", i, gotActions[i], wantPrefix[i], gotActions)
+		}
 	}
 }
 

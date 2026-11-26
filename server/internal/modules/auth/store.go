@@ -14,6 +14,11 @@ import (
 	"tianshu/internal/platform/database"
 )
 
+type revokedSession struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
 type store interface {
 	CreateSession(ctx context.Context, rec sessionRecord) error
 	GetSessionByRefreshHashForUpdate(ctx context.Context, tokenHash string) (sessionRecord, error)
@@ -21,8 +26,8 @@ type store interface {
 	RotateSessionRefreshToken(ctx context.Context, sessionID uuid.UUID, newHash, ua, ip string, expiresAt time.Time) error
 	InsertRefreshTokenHistory(ctx context.Context, tokenHash string, sessionID uuid.UUID, expiresAt time.Time) error
 	GetRefreshTokenHistoryByHash(ctx context.Context, tokenHash string) (refreshHistoryRecord, error)
-	RevokeSession(ctx context.Context, sessionID uuid.UUID) error
-	RevokeSessionByRefreshHash(ctx context.Context, tokenHash string) error
+	RevokeSession(ctx context.Context, sessionID uuid.UUID) (revokedSession, bool, error)
+	RevokeSessionByRefreshHash(ctx context.Context, tokenHash string) (revokedSession, bool, error)
 	RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) error
 }
 
@@ -117,12 +122,26 @@ func (s *pgStore) GetRefreshTokenHistoryByHash(ctx context.Context, tokenHash st
 	}, nil
 }
 
-func (s *pgStore) RevokeSession(ctx context.Context, sessionID uuid.UUID) error {
-	return s.queries(ctx).RevokeSession(ctx, sessionID)
+func (s *pgStore) RevokeSession(ctx context.Context, sessionID uuid.UUID) (revokedSession, bool, error) {
+	row, err := s.queries(ctx).RevokeSession(ctx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return revokedSession{}, false, nil
+	}
+	if err != nil {
+		return revokedSession{}, false, err
+	}
+	return revokedSession{ID: row.ID, UserID: row.UserID}, true, nil
 }
 
-func (s *pgStore) RevokeSessionByRefreshHash(ctx context.Context, tokenHash string) error {
-	return s.queries(ctx).RevokeSessionByRefreshHash(ctx, tokenHash)
+func (s *pgStore) RevokeSessionByRefreshHash(ctx context.Context, tokenHash string) (revokedSession, bool, error) {
+	row, err := s.queries(ctx).RevokeSessionByRefreshHash(ctx, tokenHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return revokedSession{}, false, nil
+	}
+	if err != nil {
+		return revokedSession{}, false, err
+	}
+	return revokedSession{ID: row.ID, UserID: row.UserID}, true, nil
 }
 
 func (s *pgStore) RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) error {

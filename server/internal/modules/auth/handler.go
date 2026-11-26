@@ -85,16 +85,26 @@ func (h *Handler) refresh(c *gin.Context) {
 func (h *Handler) logout(c *gin.Context) {
 	cookieToken, _ := c.Cookie(refreshCookieName)
 
-	var sessionID uuid.UUID
+	var (
+		sessionID uuid.UUID
+		userID    uuid.UUID
+	)
 	if rawAuth := strings.TrimSpace(c.GetHeader("Authorization")); rawAuth != "" {
 		if token, ok := strings.CutPrefix(rawAuth, "Bearer "); ok {
 			if claims, err := h.service.JWTManager().Verify(strings.TrimSpace(token)); err == nil {
 				sessionID = claims.SessionID
+				userID = claims.UserID
 			}
 		}
 	}
 
-	err := h.service.Logout(c.Request.Context(), cookieToken, sessionID)
+	err := h.service.Logout(c.Request.Context(), LogoutInput{
+		RefreshToken: cookieToken,
+		SessionID:    sessionID,
+		UserID:       userID,
+		ClientIP:     c.ClientIP(),
+		UserAgent:    c.GetHeader("User-Agent"),
+	})
 	h.clearRefreshCookie(c)
 	if err != nil {
 		_ = c.Error(err)

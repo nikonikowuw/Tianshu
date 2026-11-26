@@ -30,6 +30,15 @@ type RefreshInput struct {
 	UserAgent    string
 }
 
+// LogoutInput carries session identifiers and client metadata for logout auditing.
+type LogoutInput struct {
+	RefreshToken string
+	SessionID    uuid.UUID
+	UserID       uuid.UUID
+	ClientIP     string
+	UserAgent    string
+}
+
 // LoginResult contains the issued access token, raw refresh token (for HttpOnly cookie), and session profile.
 type LoginResult struct {
 	AccessToken  string
