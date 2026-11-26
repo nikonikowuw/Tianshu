@@ -1,0 +1,98 @@
+{
+  "title": "Users",
+  "description": "Manage user accounts, status, and role assignments.",
+  "createUser": "Create User",
+  "searchPlaceholder": "Search username, email, or display name...",
+  "columns": {
+    "user": "User",
+    "email": "Email",
+    "roles": "Roles",
+    "status": "Status",
+    "lastLoginAt": "Last Login",
+    "createdBy": "Created By",
+    "createdAt": "Created At"
+  },
+  "status": {
+    "active": "Active",
+    "disabled": "Disabled"
+  },
+  "filters": {
+    "status": "Status",
+    "role": "Role"
+  },
+  "empty": {
+    "noData": "No users yet",
+    "noResults": "No matching users found",
+    "noRoles": "No roles",
+    "neverLoggedIn": "Never",
+    "systemActor": "System"
+  },
+  "error": {
+    "loadTitle": "Failed to load users",
+    "retry": "Retry"
+  },
+  "rowActions": {
+    "openMenu": "Open menu",
+    "edit": "Edit user",
+    "resetPassword": "Reset password",
+    "enable": "Enable account",
+    "disable": "Disable account",
+    "delete": "Delete user",
+    "selfDisabledHint": "Cannot perform this action on your own account",
+    "superAdminProtectedHint": "Only a super administrator can manage super administrator accounts"
+  },
+  "form": {
+    "createTitle": "Create User",
+    "createDescription": "Create a new account and assign initial roles.",
+    "editTitle": "Edit User",
+    "editDescription": "Update user profile, status, and role assignments.",
+    "username": "Username",
+    "usernamePlaceholder": "e.g. alice",
+    "usernameImmutableHint": "Username cannot be changed after creation",
+    "email": "Email",
+    "emailPlaceholder": "alice@example.com",
+    "displayName": "Display Name",
+    "displayNamePlaceholder": "Defaults to username if left empty",
+    "password": "Password",
+    "passwordPlaceholder": "8 to 128 characters",
+    "status": "Account Status",
+    "statusActiveHint": "Allow this user to sign in",
+    "roles": "Assigned Roles",
+    "rolesPlaceholder": "Select roles...",
+    "rolesSearchPlaceholder": "Search roles...",
+    "rolesEmpty": "No roles available",
+    "rolesSelectedCount": "{{count}} selected",
+    "superAdminProtected": "Only a super administrator can grant or revoke super_admin",
+    "selfSuperAdminHint": "Cannot remove your own super_admin role",
+    "submitCreate": "Create User",
+    "submitSave": "Save Changes"
+  },
+  "resetPasswordDialog": {
+    "title": "Reset Password",
+    "description": "Set a new password for {{username}}. All active sessions for this user will be revoked immediately.",
+    "newPassword": "New Password",
+    "confirmPassword": "Confirm New Password",
+    "confirm": "Reset Password"
+  },
+  "toggleStatusDialog": {
+    "enableTitle": "Enable Account",
+    "enableDescription": "Re-enable {{username}}? The user will be able to sign in again.",
+    "enableConfirm": "Enable",
+    "disableTitle": "Disable Account",
+    "disableDescription": "Disable {{username}}? All active sessions will be revoked and sign-in will be blocked.",
+    "disableConfirm": "Disable"
+  },
+  "deleteDialog": {
+    "title": "Delete User",
+    "description": "Delete user \"{{username}}\"? This soft-deletes the account, clears role bindings, and revokes all active sessions.",
+    "confirm": "Delete"
+  },
+  "toast": {
+    "created": "User created",
+    "updated": "User updated",
+    "passwordReset": "Password reset and active sessions revoked",
+    "enabled": "User enabled",
+    "disabled": "User disabled",
+    "deleted": "User deleted"
+  }
+}

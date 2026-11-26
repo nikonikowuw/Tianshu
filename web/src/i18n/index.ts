@@ -5,12 +5,14 @@ import enAuth from './locales/en-US/auth.json'
 import enCommon from './locales/en-US/common.json'
 import enErrors from './locales/en-US/errors.json'
 import enRoles from './locales/en-US/roles.json'
+import enUsers from './locales/en-US/users.json'
 import enValidation from './locales/en-US/validation.json'
 import zhAudit from './locales/zh-CN/audit.json'
 import zhAuth from './locales/zh-CN/auth.json'
 import zhCommon from './locales/zh-CN/common.json'
 import zhErrors from './locales/zh-CN/errors.json'
 import zhRoles from './locales/zh-CN/roles.json'
+import zhUsers from './locales/zh-CN/users.json'
 import zhValidation from './locales/zh-CN/validation.json'
 
 const LANGUAGE_STORAGE_KEY = 'tianshu.lang'
@@ -38,13 +40,14 @@ void i18n.use(initReactI18next).init({
   fallbackLng: 'zh-CN',
   supportedLngs: [...SUPPORTED_LANGUAGES],
   defaultNS: 'common',
-  ns: ['common', 'auth', 'audit', 'roles', 'errors', 'validation'],
+  ns: ['common', 'auth', 'audit', 'roles', 'users', 'errors', 'validation'],
   resources: {
     'zh-CN': {
       common: zhCommon,
       auth: zhAuth,
       audit: zhAudit,
       roles: zhRoles,
+      users: zhUsers,
       errors: zhErrors,
       validation: zhValidation,
     },
@@ -53,6 +56,7 @@ void i18n.use(initReactI18next).init({
       auth: enAuth,
       audit: enAudit,
       roles: enRoles,
+      users: enUsers,
       errors: enErrors,
       validation: enValidation,
     },

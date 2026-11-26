@@ -1,5 +1,5 @@
 import { type TFunction } from 'i18next'
-import { LayoutDashboard, ScrollText, Shield } from 'lucide-react'
+import { LayoutDashboard, ScrollText, Shield, Users } from 'lucide-react'
 import { type NavGroup, type NavItem } from '@/components/layout/types'
 
 export function buildNavGroups(
@@ -21,6 +21,12 @@ export function buildNavGroups(
     {
       title: t('nav.system'),
       items: [
+        {
+          title: t('nav.users'),
+          url: '/users',
+          icon: Users,
+          permission: 'users:read',
+        },
         {
           title: t('nav.roles'),
           url: '/roles',
