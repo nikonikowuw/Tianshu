@@ -55,3 +55,17 @@ export type UpdateRolePayload = {
   description?: string
   permissions?: string[]
 }
+
+export type RoleMenuTreeNode = {
+  id: string
+  type: 'directory' | 'menu' | 'button'
+  code: string
+  title: string
+  icon: string
+  permissionCode: string
+  children: RoleMenuTreeNode[]
+}
+
+export type RoleMenuTreeResponse = {
+  items: RoleMenuTreeNode[]
+}

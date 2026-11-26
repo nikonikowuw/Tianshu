@@ -218,7 +218,7 @@
 
 ## 12. Menus 端点契约
 
-- `GET /api/v1/menus/tree`（`menus:read`）：返回完整菜单树 `{ "items": [MenuTreeNode...] }`（按 `sortOrder ASC, createdAt ASC` 排序）。
+- `GET /api/v1/menus/tree`（`menus:read` 或 `roles:read`）：返回完整菜单树 `{ "items": [MenuTreeNode...] }`（按 `sortOrder ASC, createdAt ASC` 排序）。
 - `GET /api/v1/menus/user`（已登录即可）：返回当前用户有权限且 `visible=true`、`status='active'` 的导航菜单树 `{ "items": [MenuTreeNode...] }`（自动裁剪无可见子项的空目录）。
 - `POST /api/v1/menus`（`menus:create`）：新增目录/菜单/按钮节点，返回 `201 MenuNodeDTO`。
 - `PATCH /api/v1/menus/:id`（`menus:update`）：编辑节点、调整 `parentId` 与 `sortOrder`，返回 `200 MenuNodeDTO`。

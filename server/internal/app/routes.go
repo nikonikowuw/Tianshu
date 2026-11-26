@@ -40,7 +40,7 @@ func (a *App) registerRoutes() {
 				RequireCreate:     access.RequirePermission(a.access, access.PermRolesCreate),
 				RequireUpdate:     access.RequirePermission(a.access, access.PermRolesUpdate),
 				RequireDelete:     access.RequirePermission(a.access, access.PermRolesDelete),
-				RequireMenuRead:   access.RequirePermission(a.access, access.PermMenusRead),
+				RequireMenuRead:   access.RequireAnyPermission(a.access, access.PermMenusRead, access.PermRolesRead),
 				RequireMenuCreate: access.RequirePermission(a.access, access.PermMenusCreate),
 				RequireMenuUpdate: access.RequirePermission(a.access, access.PermMenusUpdate),
 				RequireMenuDelete: access.RequirePermission(a.access, access.PermMenusDelete),

@@ -48,6 +48,14 @@
     "selectAll": "全选",
     "clearAll": "清空",
     "permissionsLoadFailed": "权限目录加载失败",
+    "otherPermissions": "其他未挂载权限",
+    "expandAll": "展开",
+    "collapseAll": "折叠",
+    "nodeTypes": {
+      "directory": "目录",
+      "menu": "菜单",
+      "button": "按钮"
+    },
     "saveCreate": "创建角色",
     "saveEdit": "保存更改",
     "close": "关闭"
