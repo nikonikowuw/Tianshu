@@ -592,6 +592,30 @@ func (q *Queries) UpdateUserPasswordHash(ctx context.Context, arg UpdateUserPass
 	return err
 }
 
+const updateUserPasswordHashIfMatches = `-- name: UpdateUserPasswordHashIfMatches :execrows
+UPDATE users
+SET password_hash = $2,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+  AND status = 'active'
+  AND password_hash = $3
+`
+
+type UpdateUserPasswordHashIfMatchesParams struct {
+	ID             uuid.UUID
+	PasswordHash   string
+	PasswordHash_2 string
+}
+
+func (q *Queries) UpdateUserPasswordHashIfMatches(ctx context.Context, arg UpdateUserPasswordHashIfMatchesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUserPasswordHashIfMatches, arg.ID, arg.PasswordHash, arg.PasswordHash_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateUserPasswordWithActor = `-- name: UpdateUserPasswordWithActor :exec
 UPDATE users
 SET password_hash = $2,

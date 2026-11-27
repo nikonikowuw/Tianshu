@@ -1,5 +1,6 @@
 # Auth module messages (en-US)
 AUTH_INVALID_CREDENTIALS = "Invalid username or password"
 AUTH_ACCOUNT_DISABLED = "Your account has been disabled, please contact an administrator"
+AUTH_TOKEN_EXPIRED = "Access token has expired, please refresh your session or sign in again"
 AUTH_REFRESH_REUSED = "Refresh token reuse detected; session has been revoked, please sign in again"
 AUTH_ORIGIN_REJECTED = "Request origin is not allowed"

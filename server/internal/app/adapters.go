@@ -126,12 +126,12 @@ func (a *authIdentityAdapter) GetByID(ctx context.Context, userID uuid.UUID) (au
 	}, nil
 }
 
-func (a *authIdentityAdapter) RecordLogin(ctx context.Context, userID uuid.UUID) error {
-	return a.svc.RecordLogin(ctx, userID)
-}
-
-func (a *authIdentityAdapter) UpdatePasswordHash(ctx context.Context, userID uuid.UUID, newHash string) error {
-	return a.svc.UpdatePasswordHash(ctx, userID, newHash)
+func (a *authIdentityAdapter) CompleteLogin(ctx context.Context, input auth.CompleteLoginInput) error {
+	return a.svc.CompleteLogin(ctx, identity.CompleteLoginInput{
+		UserID:               input.UserID,
+		ExpectedPasswordHash: input.ExpectedPasswordHash,
+		UpgradedPasswordHash: input.UpgradedPasswordHash,
+	})
 }
 
 // authAccessAdapter bridges access.Service into auth.AccessProvider.

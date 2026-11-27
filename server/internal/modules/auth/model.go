@@ -45,6 +45,7 @@ type RefreshInput struct {
 // LogoutInput carries session identifiers and client metadata for logout auditing.
 type LogoutInput struct {
 	RefreshToken string
+	AccessToken  string
 	SessionID    uuid.UUID
 	UserID       uuid.UUID
 	ClientIP     string

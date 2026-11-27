@@ -11,6 +11,7 @@ import (
 const (
 	ErrCodeInvalidCredentials = "AUTH_INVALID_CREDENTIALS"
 	ErrCodeAccountDisabled    = "AUTH_ACCOUNT_DISABLED"
+	ErrCodeTokenExpired       = "AUTH_TOKEN_EXPIRED"
 	ErrCodeRefreshReused      = "AUTH_REFRESH_REUSED"
 	ErrCodeOriginRejected     = "AUTH_ORIGIN_REJECTED"
 )
@@ -26,6 +27,10 @@ func invalidCredentialsError() *apperr.Error {
 
 func accountDisabledError() *apperr.Error {
 	return apperr.New(http.StatusForbidden, ErrCodeAccountDisabled)
+}
+
+func tokenExpiredError() *apperr.Error {
+	return apperr.New(http.StatusUnauthorized, ErrCodeTokenExpired)
 }
 
 func refreshReusedError() *apperr.Error {

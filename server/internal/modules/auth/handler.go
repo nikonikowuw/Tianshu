@@ -3,10 +3,9 @@ package auth
 import (
 	"fmt"
 	"net/http"
-	"strings"
+	"slices"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 
 	"tianshu/internal/shared/apperr"
 	"tianshu/internal/shared/authctx"
@@ -27,7 +26,7 @@ type Handler struct {
 func NewHandler(service *Service, allowedOrigins []string) *Handler {
 	return &Handler{
 		service:        service,
-		allowedOrigins: allowedOrigins,
+		allowedOrigins: slices.Clone(allowedOrigins),
 	}
 }
 
@@ -84,24 +83,11 @@ func (h *Handler) refresh(c *gin.Context) {
 
 func (h *Handler) logout(c *gin.Context) {
 	cookieToken, _ := c.Cookie(refreshCookieName)
-
-	var (
-		sessionID uuid.UUID
-		userID    uuid.UUID
-	)
-	if rawAuth := strings.TrimSpace(c.GetHeader("Authorization")); rawAuth != "" {
-		if token, ok := strings.CutPrefix(rawAuth, "Bearer "); ok {
-			if claims, err := h.service.JWTManager().Verify(strings.TrimSpace(token)); err == nil {
-				sessionID = claims.SessionID
-				userID = claims.UserID
-			}
-		}
-	}
+	accessToken, _ := extractBearerToken(c.GetHeader("Authorization"))
 
 	err := h.service.Logout(c.Request.Context(), LogoutInput{
 		RefreshToken: cookieToken,
-		SessionID:    sessionID,
-		UserID:       userID,
+		AccessToken:  accessToken,
 		ClientIP:     c.ClientIP(),
 		UserAgent:    c.GetHeader("User-Agent"),
 	})
@@ -129,7 +115,7 @@ func (h *Handler) me(c *gin.Context) {
 }
 
 func (h *Handler) setRefreshCookie(c *gin.Context, token string) {
-	maxAge := int(h.service.RefreshTokenTTL().Seconds())
+	maxAge := int(h.service.refreshTokenTTL().Seconds())
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(
 		refreshCookieName,
@@ -137,7 +123,7 @@ func (h *Handler) setRefreshCookie(c *gin.Context, token string) {
 		maxAge,
 		refreshCookiePath,
 		"",
-		h.service.CookieSecure(),
+		h.service.cookieSecure(),
 		true,
 	)
 }
@@ -150,7 +136,7 @@ func (h *Handler) clearRefreshCookie(c *gin.Context) {
 		-1,
 		refreshCookiePath,
 		"",
-		h.service.CookieSecure(),
+		h.service.cookieSecure(),
 		true,
 	)
 }
