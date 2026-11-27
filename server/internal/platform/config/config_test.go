@@ -3,10 +3,14 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"tianshu/internal/platform/config"
 )
+
+const testProdDatabaseDSN = "postgres://tianshu:prod-strong-db-password-99@db.internal:5432/tianshu?sslmode=require"
+const testProdJWTSecret = "super-strong-production-secret-at-least-32-bytes"
 
 func TestLoadWithExplicitAndPrecedence(t *testing.T) {
 	dir := t.TempDir()
@@ -46,17 +50,127 @@ level = "debug"
 }
 
 func TestBootstrapAdminEnvAliasesAndPartialValidation(t *testing.T) {
-	t.Setenv("TIANSHU_ADMIN_USERNAME", "rootadmin")
-	t.Setenv("TIANSHU_ADMIN_EMAIL", "root@example.com")
-	t.Setenv("TIANSHU_ADMIN_PASSWORD", "pass1234")
+	t.Run("full flat env aliases enable bootstrap", func(t *testing.T) {
+		t.Setenv("TIANSHU_ADMIN_USERNAME", "rootadmin")
+		t.Setenv("TIANSHU_ADMIN_EMAIL", "root@example.com")
+		t.Setenv("TIANSHU_ADMIN_PASSWORD", "pass1234")
 
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !cfg.Bootstrap.Enabled() || cfg.Bootstrap.AdminUsername != "rootadmin" {
-		t.Fatalf("expected enabled bootstrap config, got %+v", cfg.Bootstrap)
-	}
+		cfg, err := config.LoadWithExplicit("", nil)
+		if err != nil {
+			t.Fatalf("LoadWithExplicit() error = %v", err)
+		}
+		if !cfg.Bootstrap.Enabled() || cfg.Bootstrap.AdminUsername != "rootadmin" {
+			t.Fatalf("expected enabled bootstrap config, got %+v", cfg.Bootstrap)
+		}
+	})
+
+	t.Run("partial bootstrap env fails validation", func(t *testing.T) {
+		t.Setenv("TIANSHU_ADMIN_USERNAME", "rootadmin")
+		if _, err := config.LoadWithExplicit("", nil); err == nil {
+			t.Fatal("expected error when only partial bootstrap credentials are provided")
+		}
+	})
+}
+
+func TestConfigValidateBranches(t *testing.T) {
+	t.Run("rejects invalid app.env and empty server.addr", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.App.Env = "staging"
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for invalid app.env")
+		}
+
+		cfg = config.Default()
+		cfg.Server.Addr = ""
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for empty server.addr")
+		}
+	})
+
+	t.Run("rejects empty, invalid, and production weak database.dsn", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Database.DSN = ""
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for empty database.dsn")
+		}
+
+		cfg = config.Default()
+		cfg.Database.DSN = "://bad-dsn"
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for unparseable database.dsn")
+		}
+
+		// Production rejects default dev DSN.
+		cfg = config.Default()
+		cfg.App.Env = "production"
+		cfg.Auth.JWTSecret = testProdJWTSecret
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected production validation error for default database.dsn")
+		}
+
+		// Production rejects weak/empty DB passwords even with custom host/db.
+		for _, weakDSN := range []string{
+			"postgres://tianshu@db.internal:5432/tianshu?sslmode=require",
+			"postgres://tianshu:postgres@db.internal:5432/tianshu?sslmode=require",
+			"postgres://tianshu:tianshu@db.internal:5432/tianshu?sslmode=require",
+		} {
+			cfg.Database.DSN = weakDSN
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("expected production validation error for weak DSN %q", weakDSN)
+			}
+		}
+
+		cfg.Database.DSN = testProdDatabaseDSN
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected valid production config, got %v", err)
+		}
+	})
+
+	t.Run("rejects weak/whitespace jwt_secret, prod default secrets, wildcard CORS, negative audit retention, and unknown cache driver", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Auth.JWTSecret = strings.Repeat(" ", 40)
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for whitespace-only jwt_secret")
+		}
+
+		cfg = config.Default()
+		cfg.Auth.JWTSecret = "short"
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for short jwt_secret")
+		}
+
+		cfg = config.Default()
+		cfg.App.Env = "production"
+		cfg.Database.DSN = testProdDatabaseDSN
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected production validation error for default jwt_secret")
+		}
+
+		cfg.Auth.JWTSecret = testProdJWTSecret
+		cfg.Storage.SignedURLSecret = config.Default().Auth.JWTSecret
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected production validation error for default signed_url_secret")
+		}
+
+		cfg = config.Default()
+		cfg.CORS.Enabled = true
+		cfg.CORS.AllowedOrigins = []string{"*"}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for wildcard CORS origin")
+		}
+
+		cfg = config.Default()
+		cfg.Audit.RetentionDays = -1
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for negative audit.retention_days")
+		}
+
+		cfg = config.Default()
+		cfg.Cache.Driver = "redis"
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for unsupported cache.driver")
+		}
+	})
 }
 
 func TestStorageValidation(t *testing.T) {
@@ -86,7 +200,8 @@ func TestStorageValidation(t *testing.T) {
 	t.Run("production rejects default s3 credentials", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.App.Env = "production"
-		cfg.Auth.JWTSecret = "super-strong-production-secret-at-least-32-bytes"
+		cfg.Database.DSN = testProdDatabaseDSN
+		cfg.Auth.JWTSecret = testProdJWTSecret
 		cfg.Storage.Driver = "s3"
 		cfg.Storage.S3.Bucket = "prod-bucket"
 		cfg.Storage.S3.AccessKey = "tianshu"
@@ -117,7 +232,8 @@ func TestStorageValidation(t *testing.T) {
 	t.Run("production rejects weak s3 credentials even when default driver is local", func(t *testing.T) {
 		cfg := config.Default()
 		cfg.App.Env = "production"
-		cfg.Auth.JWTSecret = "super-strong-production-secret-at-least-32-bytes"
+		cfg.Database.DSN = testProdDatabaseDSN
+		cfg.Auth.JWTSecret = testProdJWTSecret
 		cfg.Storage.Driver = "local"
 		cfg.Storage.S3.Bucket = "legacy-bucket"
 		cfg.Storage.S3.AccessKey = "minioadmin"
@@ -167,9 +283,9 @@ func TestAuthLoginRateLimitConfig(t *testing.T) {
 
 	t.Run("supports env override for positive login_rate_limit", func(t *testing.T) {
 		t.Setenv("TIANSHU_AUTH__LOGIN_RATE_LIMIT", "30")
-		cfg, err := config.Load()
+		cfg, err := config.LoadWithExplicit("", nil)
 		if err != nil {
-			t.Fatalf("Load() error = %v", err)
+			t.Fatalf("LoadWithExplicit() error = %v", err)
 		}
 		if cfg.Auth.LoginRateLimit != 30 {
 			t.Fatalf("Auth.LoginRateLimit = %d, want 30", cfg.Auth.LoginRateLimit)
@@ -178,8 +294,8 @@ func TestAuthLoginRateLimitConfig(t *testing.T) {
 
 	t.Run("rejects zero login_rate_limit via env override", func(t *testing.T) {
 		t.Setenv("TIANSHU_AUTH__LOGIN_RATE_LIMIT", "0")
-		if _, err := config.Load(); err == nil {
-			t.Fatal("expected Load() validation error for TIANSHU_AUTH__LOGIN_RATE_LIMIT=0")
+		if _, err := config.LoadWithExplicit("", nil); err == nil {
+			t.Fatal("expected LoadWithExplicit() validation error for TIANSHU_AUTH__LOGIN_RATE_LIMIT=0")
 		}
 	})
 }

@@ -1,7 +1,6 @@
 package storage_test
 
 import (
-	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -107,7 +106,7 @@ func TestS3StoragePutGetStatDeleteAndAutoCreateBucket(t *testing.T) {
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	store, err := storage.NewS3(ctx, storage.S3Config{
 		Endpoint:         srv.URL,
 		Region:           "us-east-1",

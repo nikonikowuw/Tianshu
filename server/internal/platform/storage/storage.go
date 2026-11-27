@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // DriverLocal and DriverS3 are the canonical storage driver identifiers persisted in files.storage_driver.
@@ -39,8 +41,10 @@ type Storage interface {
 }
 
 // Local implements Storage on the local filesystem rooted at baseDir.
+// It uses os.Root to enforce kernel-level path and symlink containment within baseDir.
 type Local struct {
 	baseDir string
+	root    *os.Root
 }
 
 var _ Storage = (*Local)(nil)
@@ -54,7 +58,19 @@ func NewLocal(baseDir string) (*Local, error) {
 	if err := os.MkdirAll(abs, 0o750); err != nil {
 		return nil, fmt.Errorf("create local storage root: %w", err)
 	}
-	return &Local{baseDir: abs}, nil
+	root, err := os.OpenRoot(abs)
+	if err != nil {
+		return nil, fmt.Errorf("open local storage root: %w", err)
+	}
+	return &Local{baseDir: abs, root: root}, nil
+}
+
+// Close releases the underlying directory handle held by the local driver.
+func (l *Local) Close() error {
+	if l.root == nil {
+		return nil
+	}
+	return l.root.Close()
 }
 
 // Driver returns "local".
@@ -64,23 +80,30 @@ func (l *Local) Driver() string {
 
 // Put writes r atomically to key under baseDir.
 func (l *Local) Put(_ context.Context, key string, r io.Reader) (int64, error) {
-	target, err := l.resolvePath(key)
+	relTarget, err := l.resolveRelativePath(key)
 	if err != nil {
 		return 0, err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-		return 0, fmt.Errorf("create object dir: %w", err)
+	relDir := filepath.Dir(relTarget)
+	if relDir != "." {
+		if err := l.root.MkdirAll(relDir, 0o750); err != nil {
+			return 0, fmt.Errorf("create object dir: %w", err)
+		}
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(target), ".upload-*")
+	tmpName := ".upload-" + uuid.NewString()
+	tmpRel := tmpName
+	if relDir != "." {
+		tmpRel = filepath.Join(relDir, tmpName)
+	}
+	tmp, err := l.root.OpenFile(tmpRel, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return 0, fmt.Errorf("create temp file: %w", err)
 	}
-	tmpPath := tmp.Name()
 	cleanup := true
 	defer func() {
 		if cleanup {
-			_ = os.Remove(tmpPath)
+			_ = l.root.Remove(tmpRel)
 		}
 	}()
 
@@ -92,7 +115,7 @@ func (l *Local) Put(_ context.Context, key string, r io.Reader) (int64, error) {
 	if err := tmp.Close(); err != nil {
 		return 0, fmt.Errorf("close temp file: %w", err)
 	}
-	if err := os.Rename(tmpPath, target); err != nil {
+	if err := l.root.Rename(tmpRel, relTarget); err != nil {
 		return 0, fmt.Errorf("commit object: %w", err)
 	}
 	cleanup = false
@@ -101,27 +124,36 @@ func (l *Local) Put(_ context.Context, key string, r io.Reader) (int64, error) {
 
 // Get opens key for reading.
 func (l *Local) Get(_ context.Context, key string) (io.ReadCloser, error) {
-	target, err := l.resolvePath(key)
+	relTarget, err := l.resolveRelativePath(key)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(target)
+	f, err := l.root.Open(relTarget)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("open object: %w", err)
 	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("stat opened object: %w", err)
+	}
+	if info.IsDir() {
+		_ = f.Close()
+		return nil, ErrNotFound
+	}
 	return f, nil
 }
 
 // Delete removes key from disk, ignoring missing files.
 func (l *Local) Delete(_ context.Context, key string) error {
-	target, err := l.resolvePath(key)
+	relTarget, err := l.resolveRelativePath(key)
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := l.root.Remove(relTarget); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("delete object: %w", err)
 	}
 	return nil
@@ -129,16 +161,19 @@ func (l *Local) Delete(_ context.Context, key string) error {
 
 // Stat returns size metadata for key.
 func (l *Local) Stat(_ context.Context, key string) (ObjectInfo, error) {
-	target, err := l.resolvePath(key)
+	relTarget, err := l.resolveRelativePath(key)
 	if err != nil {
 		return ObjectInfo{}, err
 	}
-	info, err := os.Stat(target)
+	info, err := l.root.Stat(relTarget)
 	if errors.Is(err, os.ErrNotExist) {
 		return ObjectInfo{}, ErrNotFound
 	}
 	if err != nil {
 		return ObjectInfo{}, fmt.Errorf("stat object: %w", err)
+	}
+	if info.IsDir() {
+		return ObjectInfo{}, ErrNotFound
 	}
 	return ObjectInfo{Key: key, Size: info.Size()}, nil
 }
@@ -154,15 +189,16 @@ func validateKey(key string) (string, error) {
 	return cleaned, nil
 }
 
-func (l *Local) resolvePath(key string) (string, error) {
+func (l *Local) resolveRelativePath(key string) (string, error) {
 	cleaned, err := validateKey(key)
 	if err != nil {
 		return "", err
 	}
-	full := filepath.Join(l.baseDir, filepath.FromSlash(cleaned))
-	rel, err := filepath.Rel(l.baseDir, full)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	rel := filepath.FromSlash(cleaned)
+	full := filepath.Join(l.baseDir, rel)
+	relCheck, err := filepath.Rel(l.baseDir, full)
+	if err != nil || relCheck == ".." || strings.HasPrefix(relCheck, ".."+string(filepath.Separator)) {
 		return "", ErrInvalidKey
 	}
-	return full, nil
+	return rel, nil
 }

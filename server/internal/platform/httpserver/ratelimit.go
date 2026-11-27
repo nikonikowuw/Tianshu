@@ -1,7 +1,7 @@
 package httpserver
 
 import (
-	"fmt"
+	"container/list"
 	"math"
 	"strconv"
 	"sync"
@@ -12,16 +12,22 @@ import (
 	"tianshu/internal/shared/apperr"
 )
 
+const defaultMaxRateLimitBuckets = 4096
+
 // RateLimitConfig configures a fixed-window in-process rate limiter middleware.
 type RateLimitConfig struct {
-	Limit   int
-	Window  time.Duration
-	KeyFunc func(c *gin.Context) string
+	Limit      int
+	Window     time.Duration
+	MaxBuckets int
+	KeyFunc    func(c *gin.Context) string
+	Now        func() time.Time
 }
 
 type rateWindow struct {
+	key     string
 	count   int
 	resetAt time.Time
+	elem    *list.Element
 }
 
 // RateLimitMiddleware returns a Gin middleware enforcing Limit requests per Window per key.
@@ -33,16 +39,26 @@ func RateLimitMiddleware(cfg RateLimitConfig) gin.HandlerFunc {
 	if cfg.Window <= 0 {
 		cfg.Window = time.Minute
 	}
+	maxBuckets := cfg.MaxBuckets
+	if maxBuckets <= 0 {
+		maxBuckets = defaultMaxRateLimitBuckets
+	}
 	keyFn := cfg.KeyFunc
 	if keyFn == nil {
 		keyFn = func(c *gin.Context) string {
 			return c.ClientIP()
 		}
 	}
+	nowFn := cfg.Now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
 
 	var (
-		mu      sync.Mutex
-		buckets = make(map[string]*rateWindow)
+		mu        sync.Mutex
+		buckets   = make(map[string]*rateWindow)
+		order     = list.New()
+		lastSweep time.Time
 	)
 
 	return func(c *gin.Context) {
@@ -52,40 +68,69 @@ func RateLimitMiddleware(cfg RateLimitConfig) gin.HandlerFunc {
 			return
 		}
 
-		now := time.Now()
+		now := nowFn()
 		mu.Lock()
-		// Periodic opportunistic sweep to keep memory bounded under high key churn.
-		if len(buckets) > 4096 {
-			for k, b := range buckets {
-				if !now.Before(b.resetAt) {
-					delete(buckets, k)
-				}
-			}
-		}
 
 		bucket, ok := buckets[key]
-		if !ok || !now.Before(bucket.resetAt) {
-			bucket = &rateWindow{
-				count:   1,
-				resetAt: now.Add(cfg.Window),
+		if ok && now.Before(bucket.resetAt) {
+			order.MoveToBack(bucket.elem)
+			if bucket.count >= cfg.Limit {
+				retrySeconds := max(int(math.Ceil(bucket.resetAt.Sub(now).Seconds())), 1)
+				mu.Unlock()
+				c.Header("Retry-After", strconv.Itoa(retrySeconds))
+				c.Header("X-RateLimit-Limit", strconv.Itoa(cfg.Limit))
+				_ = c.Error(apperr.RateLimited())
+				c.Abort()
+				return
 			}
-			buckets[key] = bucket
+			bucket.count++
 			mu.Unlock()
 			c.Next()
 			return
 		}
 
-		if bucket.count >= cfg.Limit {
-			retrySeconds := max(int(math.Ceil(time.Until(bucket.resetAt).Seconds())), 1)
+		if ok {
+			// Window expired for existing key: reset in place without reallocating map entry.
+			bucket.count = 1
+			bucket.resetAt = now.Add(cfg.Window)
+			order.MoveToBack(bucket.elem)
 			mu.Unlock()
-			c.Header("Retry-After", strconv.Itoa(retrySeconds))
-			c.Header("X-RateLimit-Limit", fmt.Sprint(cfg.Limit))
-			_ = c.Error(apperr.RateLimited())
-			c.Abort()
+			c.Next()
 			return
 		}
 
-		bucket.count++
+		// Evict expired entries at most once per Window when hitting capacity,
+		// then fall back to O(1) oldest-bucket eviction to keep memory strictly bounded.
+		if len(buckets) >= maxBuckets {
+			if lastSweep.IsZero() || !now.Before(lastSweep.Add(cfg.Window)) {
+				for k, b := range buckets {
+					if !now.Before(b.resetAt) {
+						delete(buckets, k)
+						order.Remove(b.elem)
+					}
+				}
+				lastSweep = now
+			}
+			for len(buckets) >= maxBuckets {
+				oldest := order.Front()
+				if oldest == nil {
+					break
+				}
+				evicted, _ := oldest.Value.(*rateWindow)
+				order.Remove(oldest)
+				if evicted != nil {
+					delete(buckets, evicted.key)
+				}
+			}
+		}
+
+		bucket = &rateWindow{
+			key:     key,
+			count:   1,
+			resetAt: now.Add(cfg.Window),
+		}
+		bucket.elem = order.PushBack(bucket)
+		buckets[key] = bucket
 		mu.Unlock()
 		c.Next()
 	}

@@ -69,7 +69,14 @@ func TestParseAcceptLanguage(t *testing.T) {
 		{"", i18n.LangZhCN},
 		{"en-US,en;q=0.9,zh-CN;q=0.8", i18n.LangEnUS},
 		{"zh-CN,zh;q=0.9", i18n.LangZhCN},
+		{"zh-CN;q=0.5, en-US;q=0.9", i18n.LangEnUS},
+		{"en-US;q=0, zh-CN;q=1.0", i18n.LangZhCN},
+		{"en-US;q=0", i18n.LangZhCN},
+		{"en-US;q=1.5, zh-CN;q=0.8", i18n.LangZhCN},
 		{"fr-FR,en;q=0.8", i18n.LangEnUS},
+		{"english,zhx", i18n.LangZhCN},
+		{"en_US", i18n.LangEnUS},
+		{"zh_CN", i18n.LangZhCN},
 		{"ja-JP", i18n.LangZhCN},
 	}
 	for _, tc := range tests {

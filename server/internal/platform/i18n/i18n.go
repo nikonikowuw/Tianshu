@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -26,6 +27,10 @@ var baseLocalesFS embed.FS
 type ctxKey struct{}
 
 // Bundle aggregates base and module TOML translation catalogs.
+//
+// Concurrency contract: all RegisterFS and Validate calls must complete during
+// application startup before concurrent Translate calls begin. After startup,
+// the catalog map is immutable and safe for concurrent reads without locking.
 type Bundle struct {
 	messages map[string]map[string]string
 }
@@ -45,6 +50,7 @@ func NewBundle() (*Bundle, error) {
 }
 
 // RegisterFS loads zh-CN.toml and en-US.toml from dir inside fsys, rejecting duplicate keys.
+// Must only be invoked during single-threaded startup initialization.
 func (b *Bundle) RegisterFS(source string, fsys fs.FS, dir string) error {
 	for _, lang := range supportedLanguages {
 		filePath := lang + ".toml"
@@ -124,25 +130,57 @@ func (b *Bundle) Translate(lang, key string, params map[string]any) string {
 	return msg
 }
 
-// ParseAcceptLanguage picks the first supported locale from an Accept-Language header.
+// ParseAcceptLanguage resolves the highest-priority supported locale from an Accept-Language header,
+// honoring RFC 9110 quality weights (q-values) and subtag boundaries.
 func ParseAcceptLanguage(header string) string {
 	if strings.TrimSpace(header) == "" {
 		return LangZhCN
 	}
+
+	bestLang := LangZhCN
+	bestQ := -1.0
+
 	for part := range strings.SplitSeq(header, ",") {
-		tag := strings.TrimSpace(strings.Split(part, ";")[0])
+		segments := strings.Split(part, ";")
+		tag := strings.ToLower(strings.TrimSpace(segments[0]))
 		if tag == "" {
 			continue
 		}
-		lower := strings.ToLower(tag)
+
+		q := 1.0
+		validQ := true
+		for _, param := range segments[1:] {
+			key, val, ok := strings.Cut(strings.TrimSpace(param), "=")
+			if !ok || !strings.EqualFold(strings.TrimSpace(key), "q") {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(val), 64)
+			if err != nil || parsed < 0 || parsed > 1 {
+				validQ = false
+				break
+			}
+			q = parsed
+		}
+		if !validQ || q == 0 {
+			continue
+		}
+
+		var candidate string
 		switch {
-		case strings.HasPrefix(lower, "en"):
-			return LangEnUS
-		case strings.HasPrefix(lower, "zh"):
-			return LangZhCN
+		case tag == "en" || strings.HasPrefix(tag, "en-") || strings.HasPrefix(tag, "en_"):
+			candidate = LangEnUS
+		case tag == "zh" || strings.HasPrefix(tag, "zh-") || strings.HasPrefix(tag, "zh_"):
+			candidate = LangZhCN
+		default:
+			continue
+		}
+
+		if q > bestQ {
+			bestQ = q
+			bestLang = candidate
 		}
 	}
-	return LangZhCN
+	return bestLang
 }
 
 // NormalizeLocale maps arbitrary language tags onto supported locales.

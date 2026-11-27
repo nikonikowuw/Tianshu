@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -102,10 +103,23 @@ func (m *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) e
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rbCtx)
+	}()
+
 	state := &txState{tx: tx}
 	txCtx := context.WithValue(ctx, txCtxKey{}, state)
 	if err := fn(txCtx); err != nil {
-		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		rbErr := tx.Rollback(rbCtx)
+		cancel()
+		if rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
 			return fmt.Errorf("rollback transaction after %w: %v", err, rbErr)
 		}
 		return err
@@ -114,6 +128,7 @@ func (m *TxManager) WithinTx(ctx context.Context, fn func(ctx context.Context) e
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
+	committed = true
 
 	state.runAfterCommit()
 	return nil
@@ -182,6 +197,9 @@ func TxFromContext(ctx context.Context) (pgx.Tx, bool) {
 func Executor(ctx context.Context, pool *pgxpool.Pool) DBTX {
 	if tx, ok := TxFromContext(ctx); ok {
 		return tx
+	}
+	if pool == nil {
+		return nil
 	}
 	return pool
 }

@@ -8,9 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path"
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,11 +37,24 @@ var (
 
 // Options configures the Gin HTTP engine and global middleware chain.
 type Options struct {
-	Env            string
-	TrustedProxies []string
-	CORS           config.CORSConfig
-	Logger         *slog.Logger
-	I18n           *i18n.Bundle
+	Env                string
+	TrustedProxies     []string
+	CORS               config.CORSConfig
+	Logger             *slog.Logger
+	I18n               *i18n.Bundle
+	RedactPathPrefixes []string
+}
+
+// ConfigureMode sets Gin's global runtime mode once during process or test initialization.
+func ConfigureMode(env string) {
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "production":
+		gin.SetMode(gin.ReleaseMode)
+	case "test":
+		gin.SetMode(gin.TestMode)
+	default:
+		gin.SetMode(gin.DebugMode)
+	}
 }
 
 // ReadinessCheck validates an external runtime dependency for /readyz.
@@ -54,18 +69,13 @@ type errorResponse struct {
 // NewEngine initializes a Gin engine with the contract-fixed middleware order:
 // RequestID -> Recovery -> Logger -> SecurityHeaders -> CORS (optional) -> Locale -> ErrorHandler.
 func NewEngine(opts Options) (*gin.Engine, error) {
-	if strings.EqualFold(opts.Env, "production") {
-		gin.SetMode(gin.ReleaseMode)
-	} else if strings.EqualFold(opts.Env, "test") {
-		gin.SetMode(gin.TestMode)
-	}
-
 	configureValidatorTagNames()
 
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
 	}
+	redactPrefixes := normalizeRedactPrefixes(opts.RedactPathPrefixes)
 
 	r := gin.New()
 	if err := r.SetTrustedProxies(opts.TrustedProxies); err != nil {
@@ -73,8 +83,8 @@ func NewEngine(opts Options) (*gin.Engine, error) {
 	}
 
 	r.Use(requestIDMiddleware())
-	r.Use(recoveryMiddleware(log, opts.I18n))
-	r.Use(loggerMiddleware(log))
+	r.Use(recoveryMiddleware(log, opts.I18n, redactPrefixes))
+	r.Use(loggerMiddleware(log, redactPrefixes))
 	r.Use(securityHeadersMiddleware())
 	if opts.CORS.Enabled {
 		r.Use(corsMiddleware(opts.CORS.AllowedOrigins))
@@ -155,7 +165,7 @@ func requestIDMiddleware() gin.HandlerFunc {
 	}
 }
 
-func recoveryMiddleware(log *slog.Logger, bundle *i18n.Bundle) gin.HandlerFunc {
+func recoveryMiddleware(log *slog.Logger, bundle *i18n.Bundle, redactPrefixes []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -163,21 +173,25 @@ func recoveryMiddleware(log *slog.Logger, bundle *i18n.Bundle) gin.HandlerFunc {
 				reqLog.Error("http panic recovered",
 					"panic", rec,
 					"method", c.Request.Method,
-					"path", requestLogPath(c),
+					"path", requestLogPath(c, redactPrefixes),
 				)
-				lang := i18n.LocaleFromContext(c.Request.Context())
-				msg := translate(bundle, lang, apperr.CodeInternal, nil)
-				c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse{
-					Code:    apperr.CodeInternal,
-					Message: msg,
-				})
+				if !c.Writer.Written() {
+					lang := i18n.LocaleFromContext(c.Request.Context())
+					msg := translate(bundle, lang, apperr.CodeInternal, nil)
+					c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse{
+						Code:    apperr.CodeInternal,
+						Message: msg,
+					})
+					return
+				}
+				c.Abort()
 			}
 		}()
 		c.Next()
 	}
 }
 
-func loggerMiddleware(log *slog.Logger) gin.HandlerFunc {
+func loggerMiddleware(log *slog.Logger, redactPrefixes []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
@@ -185,7 +199,7 @@ func loggerMiddleware(log *slog.Logger) gin.HandlerFunc {
 		reqLog := logger.FromContext(c.Request.Context(), log)
 		reqLog.Info("http request",
 			"method", c.Request.Method,
-			"path", requestLogPath(c),
+			"path", requestLogPath(c, redactPrefixes),
 			"status", c.Writer.Status(),
 			"latency_ms", time.Since(start).Milliseconds(),
 			"client_ip", c.ClientIP(),
@@ -193,17 +207,34 @@ func loggerMiddleware(log *slog.Logger) gin.HandlerFunc {
 	}
 }
 
+func normalizeRedactPrefixes(prefixes []string) []string {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(prefixes))
+	for _, raw := range prefixes {
+		cleaned := path.Clean("/" + strings.TrimSpace(raw))
+		if cleaned == "/" {
+			continue
+		}
+		out = append(out, strings.TrimRight(cleaned, "/")+"/")
+	}
+	return out
+}
+
 // requestLogPath returns the matched route template so bearer credentials embedded in path
 // parameters (for example signed file URLs) never reach access or recovery logs.
-func requestLogPath(c *gin.Context) string {
+func requestLogPath(c *gin.Context, redactPrefixes []string) string {
 	if route := c.FullPath(); route != "" {
 		return route
 	}
-	const signedPrefix = "/api/v1/files/signed/"
-	if strings.HasPrefix(c.Request.URL.Path, signedPrefix) {
-		// NoRoute/405 requests still carry the bearer token in the path; never fall
-		// back to the raw URL for the signed-content prefix.
-		return signedPrefix + ":token"
+	cleaned := path.Clean("/" + c.Request.URL.Path)
+	for _, prefix := range redactPrefixes {
+		if strings.HasPrefix(cleaned, prefix) || cleaned+"/" == prefix {
+			// NoRoute/405/uncleaned paths can still carry bearer tokens in the path;
+			// never fall back to the raw URL for configured sensitive prefixes.
+			return prefix + ":token"
+		}
 	}
 	return c.Request.URL.Path
 }
@@ -228,11 +259,11 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 	}
 
 	return func(c *gin.Context) {
+		c.Header("Vary", "Origin")
 		origin := c.GetHeader("Origin")
 		if origin != "" {
 			if _, ok := allowed[origin]; ok {
 				c.Header("Access-Control-Allow-Origin", origin)
-				c.Header("Vary", "Origin")
 				c.Header("Access-Control-Allow-Credentials", "true")
 				c.Header("Access-Control-Expose-Headers", headerRequestID+", Retry-After, Content-Disposition")
 				c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept-Language, X-Request-Id")
@@ -302,9 +333,25 @@ func errorHandlerMiddleware(log *slog.Logger, bundle *i18n.Bundle) gin.HandlerFu
 			return
 		}
 
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, errorResponse{
+				Code:    apperr.CodeTooLarge,
+				Message: translate(bundle, lang, apperr.CodeTooLarge, nil),
+			})
+			return
+		}
+
 		var syntaxErr *json.SyntaxError
 		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		var numErr *strconv.NumError
+		var timeErr *time.ParseError
+		if errors.As(err, &syntaxErr) ||
+			errors.As(err, &typeErr) ||
+			errors.As(err, &numErr) ||
+			errors.As(err, &timeErr) ||
+			errors.Is(err, io.EOF) ||
+			errors.Is(err, io.ErrUnexpectedEOF) {
 			c.JSON(http.StatusBadRequest, errorResponse{
 				Code:    apperr.CodeBadRequest,
 				Message: translate(bundle, lang, apperr.CodeBadRequest, nil),
