@@ -152,8 +152,10 @@ func mapAuditLogRow(row dbgen.AuditLog) Entry {
 	}
 }
 
+var ilikeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
 func resolveActorUUID(id *uuid.UUID) (uuid.UUID, bool) {
-	if id == nil || *id == uuid.Nil {
+	if id == nil {
 		return uuid.Nil, false
 	}
 	return *id, true
@@ -178,6 +180,5 @@ func escapeILIKE(raw string) string {
 	if trimmed == "" {
 		return ""
 	}
-	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return replacer.Replace(trimmed)
+	return ilikeEscaper.Replace(trimmed)
 }

@@ -150,7 +150,7 @@ func TestFilesPostgresLifecycleFiltersAvatarGuardAndOrphanCleanup(t *testing.T) 
 	}
 
 	adapter := &identityAdapter{svc: identitySvc}
-	auditSvc := audit.NewService(pool, log)
+	auditSvc := audit.NewService(pool)
 	fileSvc := files.NewService(pool, reg, files.ServiceConfig{
 		SignedURLSecret: "integration-test-secret-at-least-32-bytes",
 		SignedURLTTL:    5 * time.Minute,

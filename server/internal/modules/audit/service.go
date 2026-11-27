@@ -3,7 +3,6 @@ package audit
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -18,23 +17,18 @@ import (
 // Service provides immutable audit log recording, filtered querying, and retention cleanup.
 type Service struct {
 	store          store
-	log            *slog.Logger
 	now            func() time.Time
 	purgeBatchSize int32
 }
 
 // NewService creates a PostgreSQL-backed audit Service.
-func NewService(pool *pgxpool.Pool, log *slog.Logger) *Service {
-	return newServiceWithStore(newStore(pool), log)
+func NewService(pool *pgxpool.Pool) *Service {
+	return newServiceWithStore(newStore(pool))
 }
 
-func newServiceWithStore(s store, log *slog.Logger) *Service {
-	if log == nil {
-		log = slog.Default()
-	}
+func newServiceWithStore(s store) *Service {
 	return &Service{
 		store:          s,
-		log:            log,
 		now:            time.Now,
 		purgeBatchSize: defaultRetentionBatchSize,
 	}
@@ -43,9 +37,9 @@ func newServiceWithStore(s store, log *slog.Logger) *Service {
 // Record appends an immutable audit log entry after redacting sensitive metadata keys.
 // When ctx carries an active database transaction, the insert participates in that transaction.
 func (s *Service) Record(ctx context.Context, input RecordInput) error {
-	action := strings.TrimSpace(input.Action)
-	resource := strings.TrimSpace(input.Resource)
-	status := strings.TrimSpace(input.Status)
+	action := sanitizeUTF8(input.Action)
+	resource := sanitizeUTF8(input.Resource)
+	status := sanitizeUTF8(input.Status)
 
 	var fields []apperr.FieldError
 	if action == "" {
@@ -66,9 +60,9 @@ func (s *Service) Record(ctx context.Context, input RecordInput) error {
 		return apperr.Internal(fmt.Errorf("generate audit log uuid: %w", err))
 	}
 
-	requestID := strings.TrimSpace(input.RequestID)
+	requestID := sanitizeUTF8(input.RequestID)
 	if requestID == "" {
-		requestID = logger.RequestIDFromContext(ctx)
+		requestID = sanitizeUTF8(logger.RequestIDFromContext(ctx))
 	}
 
 	var actorID *uuid.UUID
@@ -80,12 +74,12 @@ func (s *Service) Record(ctx context.Context, input RecordInput) error {
 	entry := Entry{
 		ID:            id,
 		ActorID:       actorID,
-		ActorUsername: strings.TrimSpace(input.ActorUsername),
+		ActorUsername: sanitizeUTF8(input.ActorUsername),
 		Action:        action,
 		Resource:      resource,
-		ResourceID:    strings.TrimSpace(input.ResourceID),
+		ResourceID:    sanitizeUTF8(input.ResourceID),
 		Status:        status,
-		IPAddress:     strings.TrimSpace(input.IPAddress),
+		IPAddress:     sanitizeUTF8(input.IPAddress),
 		UserAgent:     truncateUA(input.UserAgent),
 		RequestID:     requestID,
 		Metadata:      RedactMetadata(input.Metadata),
@@ -135,11 +129,11 @@ func (s *Service) PurgeExpired(ctx context.Context, retentionDays int) (int64, e
 	var totalDeleted int64
 	for {
 		if err := ctx.Err(); err != nil {
-			return totalDeleted, err
+			return totalDeleted, apperr.Internal(err)
 		}
 		deleted, err := s.store.DeleteExpiredBatch(ctx, cutoff, batchSize)
 		if err != nil {
-			return totalDeleted, fmt.Errorf("delete expired audit logs batch: %w", err)
+			return totalDeleted, apperr.Internal(fmt.Errorf("delete expired audit logs batch: %w", err))
 		}
 		totalDeleted += deleted
 		if deleted < int64(batchSize) {
@@ -153,6 +147,20 @@ func normalizeFilter(filter ListFilter) (ListFilter, error) {
 	out.Pagination = pagination.Normalize(filter.Pagination.Page, filter.Pagination.PageSize)
 	out.Q = strings.TrimSpace(filter.Q)
 	out.Actor = strings.TrimSpace(filter.Actor)
+	out.Actions = cleanStringSlice(filter.Actions)
+	out.Resources = cleanStringSlice(filter.Resources)
+	out.Statuses = cleanStringSlice(filter.Statuses)
+
+	if out.ActorID != nil {
+		if *out.ActorID == uuid.Nil {
+			return ListFilter{}, apperr.Validation([]apperr.FieldError{{
+				Field:   "actorId",
+				Message: "VALIDATION_UUID",
+			}})
+		}
+		copied := *out.ActorID
+		out.ActorID = &copied
+	}
 
 	sortCol := strings.TrimSpace(filter.Sort)
 	if sortCol == "" {
@@ -199,4 +207,19 @@ func normalizeFilter(filter ListFilter) (ListFilter, error) {
 	}
 
 	return out, nil
+}
+
+func cleanStringSlice(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, item := range in {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
 }

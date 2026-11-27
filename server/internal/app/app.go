@@ -149,7 +149,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		setupHandler     *setup.Handler
 	)
 	if pool != nil {
-		auditSvc = audit.NewService(pool, log)
+		auditSvc = audit.NewService(pool)
 		auditHandler = audit.NewHandler(auditSvc)
 
 		identitySessionMgr := &identitySessionAdapter{}

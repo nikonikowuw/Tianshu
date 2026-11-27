@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -14,34 +15,56 @@ import (
 	"tianshu/internal/shared/pagination"
 )
 
-type listAuditLogsRequest struct {
-	Page     *int     `form:"page" binding:"omitempty,min=1"`
-	PageSize *int     `form:"pageSize" binding:"omitempty,min=10,max=100"`
-	Q        string   `form:"q" binding:"omitempty,max=100"`
-	Actor    string   `form:"actor" binding:"omitempty,max=100"`
-	ActorID  string   `form:"actorId" binding:"omitempty,uuid"`
-	Action   []string `form:"action"`
-	Resource []string `form:"resource"`
-	Status   []string `form:"status"`
-	From     string   `form:"from"`
-	To       string   `form:"to"`
-	Sort     string   `form:"sort" binding:"omitempty,oneof=created_at action resource status"`
-	Order    string   `form:"order" binding:"omitempty,oneof=asc desc"`
-}
+const (
+	maxSearchQueryLen      = 100
+	maxActorQueryLen       = 100
+	maxFilterTokenRunes    = 64
+	maxStatusTokenRunes    = 32
+	maxMultiFilterItems    = 20
+	maxMultiFilterRawItems = 100
+)
 
 func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
-	if fieldErrs := validateNumericQueryParams(c); len(fieldErrs) > 0 {
-		return ListFilter{}, apperr.Validation(fieldErrs)
-	}
-
-	var req listAuditLogsRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		return ListFilter{}, err
-	}
-
 	var fieldErrs []apperr.FieldError
 
-	actions, okAction := normalizeMultiValues(req.Action, 64)
+	page, pageParseOK := parseOptionalInt(c.Query("page"), pagination.DefaultPage)
+	if !pageParseOK {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "page", Message: ErrCodeInvalidNumber})
+	} else if page < pagination.DefaultPage {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "page", Message: ErrCodeInvalidPage})
+	}
+
+	pageSize, pageSizeParseOK := parseOptionalInt(c.Query("pageSize"), pagination.DefaultPageSize)
+	if !pageSizeParseOK {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "pageSize", Message: ErrCodeInvalidNumber})
+	} else if pageSize < pagination.MinPageSize || pageSize > pagination.MaxPageSize {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "pageSize", Message: ErrCodeInvalidPageSize})
+	}
+
+	q := strings.TrimSpace(c.Query("q"))
+	if utf8.RuneCountInString(q) > maxSearchQueryLen {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "q", Message: ErrCodeQueryTooLong})
+	}
+
+	actor := strings.TrimSpace(c.Query("actor"))
+	if utf8.RuneCountInString(actor) > maxActorQueryLen {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "actor", Message: ErrCodeActorTooLong})
+	}
+
+	var actorUUID *uuid.UUID
+	if trimmedID := strings.TrimSpace(c.Query("actorId")); trimmedID != "" {
+		parsed, err := uuid.Parse(trimmedID)
+		if err != nil || parsed == uuid.Nil {
+			fieldErrs = append(fieldErrs, apperr.FieldError{
+				Field:   "actorId",
+				Message: "VALIDATION_UUID",
+			})
+		} else {
+			actorUUID = &parsed
+		}
+	}
+
+	actions, okAction := normalizeMultiValues(c.QueryArray("action"), maxFilterTokenRunes, maxMultiFilterItems)
 	if !okAction {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "action",
@@ -49,7 +72,7 @@ func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
 		})
 	}
 
-	resources, okResource := normalizeMultiValues(req.Resource, 64)
+	resources, okResource := normalizeMultiValues(c.QueryArray("resource"), maxFilterTokenRunes, maxMultiFilterItems)
 	if !okResource {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "resource",
@@ -57,7 +80,7 @@ func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
 		})
 	}
 
-	statuses, okStatus := normalizeMultiValues(req.Status, 32)
+	statuses, okStatus := normalizeMultiValues(c.QueryArray("status"), maxStatusTokenRunes, maxMultiFilterItems)
 	if !okStatus {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "status",
@@ -75,20 +98,7 @@ func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
 		}
 	}
 
-	var actorUUID *uuid.UUID
-	if trimmedID := strings.TrimSpace(req.ActorID); trimmedID != "" {
-		parsed, err := uuid.Parse(trimmedID)
-		if err != nil {
-			fieldErrs = append(fieldErrs, apperr.FieldError{
-				Field:   "actorId",
-				Message: "VALIDATION_UUID",
-			})
-		} else {
-			actorUUID = &parsed
-		}
-	}
-
-	fromTime, fromOK := parseOptionalRFC3339(req.From)
+	fromTime, fromOK := parseOptionalRFC3339(c.Query("from"))
 	if !fromOK {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "from",
@@ -96,7 +106,7 @@ func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
 		})
 	}
 
-	toTime, toOK := parseOptionalRFC3339(req.To)
+	toTime, toOK := parseOptionalRFC3339(c.Query("to"))
 	if !toOK {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "to",
@@ -111,69 +121,78 @@ func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
 		})
 	}
 
+	sortBy := strings.TrimSpace(c.Query("sort"))
+	if sortBy != "" && sortBy != SortCreatedAt && sortBy != SortAction && sortBy != SortResource && sortBy != SortStatus {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "sort",
+			Message: "VALIDATION_ONE_OF",
+		})
+	}
+
+	order := strings.ToLower(strings.TrimSpace(c.Query("order")))
+	if order != "" && order != OrderAsc && order != OrderDesc {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "order",
+			Message: "VALIDATION_ONE_OF",
+		})
+	}
+
 	if len(fieldErrs) > 0 {
 		return ListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
 	}
 
-	page := pagination.DefaultPage
-	if req.Page != nil {
-		page = *req.Page
-	}
-	pageSize := pagination.DefaultPageSize
-	if req.PageSize != nil {
-		pageSize = *req.PageSize
-	}
-
 	return ListFilter{
 		Pagination: pagination.Normalize(page, pageSize),
-		Q:          strings.TrimSpace(req.Q),
-		Actor:      strings.TrimSpace(req.Actor),
+		Q:          q,
+		Actor:      actor,
 		ActorID:    actorUUID,
 		Actions:    actions,
 		Resources:  resources,
 		Statuses:   statuses,
 		From:       fromTime,
 		To:         toTime,
-		Sort:       req.Sort,
-		Order:      req.Order,
+		Sort:       sortBy,
+		Order:      order,
 	}, nil
 }
 
-func validateNumericQueryParams(c *gin.Context) []apperr.FieldError {
-	var errs []apperr.FieldError
-	for _, name := range []string{"page", "pageSize"} {
-		if raw, exists := c.GetQuery(name); exists {
-			if strings.TrimSpace(raw) == "" {
-				continue
-			}
-			if _, err := strconv.Atoi(raw); err != nil {
-				errs = append(errs, apperr.FieldError{
-					Field:   name,
-					Message: ErrCodeInvalidNumber,
-				})
-			}
-		}
+func parseOptionalInt(raw string, fallback int) (int, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fallback, true
 	}
-	return errs
+	v, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
-func normalizeMultiValues(raw []string, maxItemLen int) ([]string, bool) {
+func normalizeMultiValues(raw []string, maxItemRunes, maxItems int) ([]string, bool) {
 	if len(raw) == 0 {
 		return nil, true
 	}
-	seen := make(map[string]struct{}, len(raw))
-	out := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, min(len(raw), maxItems))
+	out := make([]string, 0, min(len(raw), maxItems))
+	rawScanned := 0
 	for _, part := range raw {
 		for item := range strings.SplitSeq(part, ",") {
+			rawScanned++
+			if rawScanned > maxMultiFilterRawItems {
+				return nil, false
+			}
 			trimmed := strings.TrimSpace(item)
 			if trimmed == "" {
 				continue
 			}
-			if len(trimmed) > maxItemLen {
+			if utf8.RuneCountInString(trimmed) > maxItemRunes {
 				return nil, false
 			}
 			if _, exists := seen[trimmed]; exists {
 				continue
+			}
+			if len(out) >= maxItems {
+				return nil, false
 			}
 			seen[trimmed] = struct{}{}
 			out = append(out, trimmed)

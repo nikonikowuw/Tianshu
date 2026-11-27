@@ -307,7 +307,27 @@
   - `activityTrend`：按 UTC 日期升序连续补零的 `rangeDays` 项 `[{ date, logins, operations, failures }]`（`logins` 为成功登录、`operations` 为非登录成功操作、`failures` 为失败事件，三者互斥无重复计数）；
   - `recentActivity`：最新 8 条脱敏审计摘要 `[{ id, actorUsername, action, resource, resourceId, status, ipAddress, createdAt }]`（不暴露 `metadata` 与 `userAgent`，空切片序列化为 `[]`）。
 
-## 16. 暂不纳入 v1
+## 16. Audit Logs 端点契约
+
+审计日志为**严格只读**接口，不提供任何 `POST`/`PUT`/`PATCH`/`DELETE` 写端点；历史记录仅由服务端后台任务按 `audit.retention_days` 分批清理。
+
+- `GET /api/v1/audit-logs`（`audit:read`）：返回 `200 Paginated<AuditLogDTO>`（无信封，空 `items` 序列化为 `[]`）。
+  - 查询参数：
+    - `page`（可选整数，空串回落默认 `1`，必须 `>= 1`；非整数返 `422` `AUDIT_INVALID_NUMBER`，超界返 `AUDIT_INVALID_PAGE`）
+    - `pageSize`（可选整数，空串回落默认 `20`，范围 `10..100`；非整数返 `422` `AUDIT_INVALID_NUMBER`，超界返 `AUDIT_INVALID_PAGE_SIZE`）
+    - `q`（可选，最大 100 个 Unicode 字符，超限返 `422` `AUDIT_QUERY_TOO_LONG`）：大小写不敏感转义 `ILIKE` 匹配 `actor_username`、`action`、`resource`、`resource_id`、`request_id`、`ip_address`
+    - `actor`（可选，最大 100 个 Unicode 字符，超限返 `422` `AUDIT_ACTOR_TOO_LONG`）：大小写不敏感转义 `ILIKE` 匹配 `actor_username`
+    - `actorId`（可选非零 UUID；格式非法或 Nil UUID `00000000-0000-0000-0000-000000000000` 均返 `422` `VALIDATION_UUID`）
+    - `action`、`resource`（可选多值数组，支持重复 key 如 `?action=a&action=b` 或逗号分隔如 `?action=a,b`，自动 trim 与去重，单值 ≤64 字符且最多 20 项；超限返 `422` `AUDIT_INVALID_ACTION` / `AUDIT_INVALID_RESOURCE`）
+    - `status`（可选多值数组，同上规则，白名单 `success` / `failure`；非法值返 `422` `AUDIT_INVALID_STATUS`）
+    - `from`、`to`（可选 RFC3339 / RFC3339Nano 时间戳，统一转 UTC 比较，闭区间 `[from, to]`；格式非法返 `422` `AUDIT_INVALID_TIME_FORMAT`，`from > to` 返 `422` `from: AUDIT_INVALID_TIME_RANGE`）
+    - `sort`（白名单 `created_at` / `action` / `resource` / `status`，默认 `created_at`；非法值返 `422` `VALIDATION_ONE_OF`）
+    - `order`（白名单 `asc` / `desc`，默认 `desc`；非法值返 `422` `VALIDATION_ONE_OF`）
+    - 默认排序：`created_at DESC, id DESC`（带确定性 UUIDv7 tie-breaker）。
+  - `AuditLogDTO` 字段：`id`（UUIDv7）、`actorId`（UUID 或 `null`）、`actorUsername`、`action`、`resource`、`resourceId`、`status`（`success` / `failure`）、`ipAddress`、`userAgent`（按 UTF-8 字符边界截断 ≤512 字节）、`requestId`、`metadata`（对象，落库前已深度脱敏，空时为 `{}`）、`createdAt`（RFC3339 UTC）。
+  - 模块级字段校验键（均通过 `422 VALIDATION_FAILED` 的 `errors[].message` 按 `Accept-Language` 翻译）：`AUDIT_INVALID_STATUS`、`AUDIT_INVALID_ACTION`、`AUDIT_INVALID_RESOURCE`、`AUDIT_INVALID_TIME_FORMAT`、`AUDIT_INVALID_TIME_RANGE`、`AUDIT_INVALID_NUMBER`、`AUDIT_INVALID_PAGE`、`AUDIT_INVALID_PAGE_SIZE`、`AUDIT_QUERY_TOO_LONG`、`AUDIT_ACTOR_TOO_LONG`。
+
+## 17. 暂不纳入 v1
 
 - 通用 `Idempotency-Key` 重放表：Setup 用数据库咨询锁/唯一约束保证幂等；文件上传用 SHA-256 去重作为后续增强。
 - GraphQL、gRPC 对外接口、批量导入接口。
