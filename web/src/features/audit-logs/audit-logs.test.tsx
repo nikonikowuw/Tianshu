@@ -378,7 +378,7 @@ describe('audit-logs feature', () => {
     expect(trigger.getBoundingClientRect().width).toBeGreaterThanOrEqual(80)
   })
 
-  it('renders success status with soft semantic success badge styling', async () => {
+  it('renders success and failure statuses with soft semantic badge styling in light and dark modes', async () => {
     const pageData: AuditLogsPage = {
       items: sampleEntries,
       total: 2,
@@ -402,10 +402,40 @@ describe('audit-logs feature', () => {
     expect(successBadge).toBeDefined()
     expect(failureBadge).toBeDefined()
 
-    const successStyle = getComputedStyle(successBadge!)
-    const failureStyle = getComputedStyle(failureBadge!)
-    expect(successStyle.backgroundColor).not.toBe(failureStyle.backgroundColor)
-    expect(successStyle.borderTopColor).not.toBe('rgba(0, 0, 0, 0)')
+    const root = document.documentElement
+    const hadDark = root.classList.contains('dark')
+    try {
+      root.classList.remove('dark')
+      const lightSuccessBg = getComputedStyle(successBadge!).backgroundColor
+      const lightSuccessBorder = getComputedStyle(successBadge!).borderTopColor
+      const lightFailureBg = getComputedStyle(failureBadge!).backgroundColor
+      const lightFailureBorder = getComputedStyle(failureBadge!).borderTopColor
+      const lightFailureColor = getComputedStyle(failureBadge!).color
+
+      expect(lightSuccessBg).not.toBe(lightFailureBg)
+      expect(lightSuccessBorder).not.toBe('rgba(0, 0, 0, 0)')
+      expect(lightFailureBorder).not.toBe('rgba(0, 0, 0, 0)')
+      expect(lightFailureBg).toMatch(/\/\s*0\.\d+|rgba\([^)]+,\s*0\.\d+\)/)
+      expect(lightFailureColor).not.toBe('rgb(255, 255, 255)')
+
+      root.classList.add('dark')
+      await expect
+        .poll(() => getComputedStyle(failureBadge!).color)
+        .not.toBe(lightFailureColor)
+
+      const darkSuccessBg = getComputedStyle(successBadge!).backgroundColor
+      const darkFailureBg = getComputedStyle(failureBadge!).backgroundColor
+      const darkFailureBorder = getComputedStyle(failureBadge!).borderTopColor
+      const darkFailureColor = getComputedStyle(failureBadge!).color
+
+      expect(darkSuccessBg).not.toBe(darkFailureBg)
+      expect(darkFailureBg).not.toBe(lightFailureBg)
+      expect(darkFailureBg).toMatch(/\/\s*0\.\d+|rgba\([^)]+,\s*0\.\d+\)/)
+      expect(darkFailureBorder).not.toBe('rgba(0, 0, 0, 0)')
+      expect(darkFailureColor).not.toBe('rgb(255, 255, 255)')
+    } finally {
+      root.classList.toggle('dark', hadDark)
+    }
   })
 
   it('wraps pagination buttons cleanly on narrow 320px viewports without horizontal overflow', async () => {

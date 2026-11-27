@@ -53,7 +53,7 @@
 升级 `shadcn-admin` 前逐项核对：
 
 1. 记录目标 commit/tag 与当前基线的 diff。
-2. 逐个手工合并定制过的 `src/components/ui` 文件（通用：`scroll-area`、`sonner`、`separator`；逻辑属性：`alert-dialog`、`calendar`、`command`、`dialog`、`dropdown-menu`、`select`、`table`、`sheet`、`sidebar`、`switch`）。
+2. 逐个手工合并定制过的 `src/components/ui` 文件（通用：`badge`、`scroll-area`、`sonner`、`separator`；逻辑属性：`alert-dialog`、`calendar`、`command`、`dialog`、`dropdown-menu`、`select`、`table`、`sheet`、`sidebar`、`switch`）。
 3. 核对 `components.json`、Tailwind v4 主题变量与 `vite.config.ts` 路由插件变化。
 4. 核对 TanStack Router / Query / Table 破坏性变更。
 5. 重跑 `pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build` 并检查 light/dark、移动端侧边栏、DataTable 分页、命令面板与错误页。
