@@ -61,6 +61,7 @@
     "rolesPlaceholder": "Select roles...",
     "rolesSearchPlaceholder": "Search roles...",
     "rolesEmpty": "No roles available",
+    "rolesLoadError": "Failed to load roles",
     "rolesSelectedCount": "{{count}} selected",
     "superAdminProtected": "Only a super administrator can grant or revoke super_admin",
     "selfSuperAdminHint": "Cannot remove your own super_admin role",

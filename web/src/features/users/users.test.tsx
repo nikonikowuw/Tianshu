@@ -9,11 +9,14 @@ import i18n, { changeAppLanguage } from '@/i18n/index'
 import { useAuthStore } from '@/stores/auth-store'
 import { ApiError } from '@/lib/api/error'
 import { Button } from '@/components/ui/button'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { PermissionGuard } from '@/components/shared/permission-guard'
 import { buildUsersQueryParams } from './api'
 import { UserDeleteDialog } from './components/user-delete-dialog'
 import { UserFormSheet } from './components/user-form-sheet'
 import { UserResetPasswordDialog } from './components/user-reset-password-dialog'
+import { UserRowActions } from './components/user-row-actions'
+import { UserToggleStatusDialog } from './components/user-toggle-status-dialog'
 import { UsersTable } from './components/users-table'
 import { usersSearchSchema, type UsersSearch } from './schema'
 import type { RoleOptionsResponse, UserItem, UsersPage } from './types'
@@ -107,12 +110,14 @@ function UsersTableHarness({
   canDelete = true,
   onDelete = vi.fn(),
   onSearchChange,
+  onRawSearchChange,
 }: {
   initialSearch?: Partial<UsersSearch>
   canUpdate?: boolean
   canDelete?: boolean
   onDelete?: (user: UserItem) => void
   onSearchChange?: (next: UsersSearch) => void
+  onRawSearchChange?: (raw: Record<string, unknown>) => void
 }) {
   const [search, setSearch] = useState<UsersSearch>(() =>
     usersSearchSchema.parse(initialSearch)
@@ -128,6 +133,7 @@ function UsersTableHarness({
               : opts.search === true
                 ? prev
                 : opts.search
+          onRawSearchChange?.((next ?? {}) as Record<string, unknown>)
           const parsed = usersSearchSchema.parse(next)
           onSearchChange?.(parsed)
           return parsed
@@ -203,6 +209,7 @@ describe('users feature', () => {
     })
 
     const searchSnapshots: UsersSearch[] = []
+    const rawSearchSnapshots: Record<string, unknown>[] = []
     const client = createClient()
     const screen = await render(
       <QueryClientProvider client={client}>
@@ -210,6 +217,7 @@ describe('users feature', () => {
           <UsersTableHarness
             initialSearch={{ page: 2 }}
             onSearchChange={(s) => searchSnapshots.push(s)}
+            onRawSearchChange={(raw) => rawSearchSnapshots.push(raw)}
           />
         </I18nextProvider>
       </QueryClientProvider>
@@ -217,6 +225,12 @@ describe('users feature', () => {
 
     await expect.element(screen.getByText('Root Admin')).toBeVisible()
     await expect.element(screen.getByText('@alice')).toBeVisible()
+
+    const userHeaderCell = screen
+      .getByRole('button', { name: i18n.t('users:columns.user') })
+      .element()
+      .closest('th')
+    expect(userHeaderCell?.getAttribute('aria-sort')).toBe('none')
 
     getMock.mockImplementation((url: string) => {
       if (url === '/roles/options') {
@@ -237,6 +251,192 @@ describe('users feature', () => {
     expect(
       searchSnapshots.some((s) => s.q === 'nonexistent' && s.page === 1)
     ).toBe(true)
+
+    const clearFiltersBtn = screen.getByRole('button', {
+      name: i18n.t('common:table.clearFilters'),
+    })
+    await expect.element(clearFiltersBtn).toBeVisible()
+
+    const callsBeforeReset = rawSearchSnapshots.length
+    await userEvent.click(clearFiltersBtn)
+    expect(rawSearchSnapshots.length).toBe(callsBeforeReset + 1)
+    const resetRaw = rawSearchSnapshots[rawSearchSnapshots.length - 1]
+    expect(resetRaw.q).toBeUndefined()
+    expect(resetRaw.page).toBeUndefined()
+  })
+
+  it('shows error alert on load failure and retries', async () => {
+    await changeAppLanguage('en-US')
+    getMock.mockImplementation((url: string) => {
+      if (url === '/roles/options') {
+        return Promise.resolve({ data: roleOptionsData })
+      }
+      return Promise.reject(
+        new ApiError({
+          status: 500,
+          code: 'INTERNAL_ERROR',
+          message: 'Server failed to load users',
+        })
+      )
+    })
+
+    const client = createClient()
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <UsersTableHarness />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    await expect
+      .element(
+        screen.getByText(i18n.t('users:error.loadTitle'), { exact: true })
+      )
+      .toBeVisible()
+    await expect
+      .element(screen.getByText('Server failed to load users'))
+      .toBeVisible()
+
+    getMock.mockImplementation((url: string) => {
+      if (url === '/roles/options') {
+        return Promise.resolve({ data: roleOptionsData })
+      }
+      return Promise.resolve({
+        data: { items: sampleUsers, total: 2, page: 1, pageSize: 20 },
+      })
+    })
+
+    await userEvent.click(
+      screen.getByRole('button', { name: i18n.t('users:error.retry') })
+    )
+    await expect.element(screen.getByText('Root Admin')).toBeVisible()
+  })
+
+  it('enforces permissions, self-protection, and super_admin protection in row actions', async () => {
+    await changeAppLanguage('en-US')
+    const client = createClient()
+
+    const noPermScreen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <TooltipProvider>
+            <UserRowActions
+              user={sampleUsers[1]}
+              currentUserId='other-id'
+              actorIsSuperAdmin={true}
+              canUpdate={false}
+              canDelete={false}
+              onEdit={vi.fn()}
+              onResetPassword={vi.fn()}
+              onToggleStatus={vi.fn()}
+              onDelete={vi.fn()}
+            />
+          </TooltipProvider>
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await expect
+      .element(
+        noPermScreen.getByRole('button', {
+          name: i18n.t('users:rowActions.openMenu'),
+        })
+      )
+      .not.toBeInTheDocument()
+    await noPermScreen.unmount()
+
+    const selfScreen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <TooltipProvider>
+            <UserRowActions
+              user={sampleUsers[0]}
+              currentUserId={sampleUsers[0].id}
+              actorIsSuperAdmin={true}
+              canUpdate={true}
+              canDelete={true}
+              onEdit={vi.fn()}
+              onResetPassword={vi.fn()}
+              onToggleStatus={vi.fn()}
+              onDelete={vi.fn()}
+            />
+          </TooltipProvider>
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await userEvent.click(
+      selfScreen.getByRole('button', {
+        name: i18n.t('users:rowActions.openMenu'),
+      })
+    )
+    await expect
+      .element(
+        selfScreen.getByRole('menuitem', {
+          name: i18n.t('users:rowActions.edit'),
+        })
+      )
+      .toBeEnabled()
+    await expect
+      .element(
+        selfScreen.getByRole('menuitem', {
+          name: i18n.t('users:rowActions.disable'),
+        })
+      )
+      .toHaveAttribute('aria-disabled', 'true')
+    await expect
+      .element(
+        selfScreen.getByRole('menuitem', {
+          name: i18n.t('users:rowActions.delete'),
+        })
+      )
+      .toHaveAttribute('aria-disabled', 'true')
+    await selfScreen.unmount()
+
+    const protectedScreen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <TooltipProvider>
+            <UserRowActions
+              user={sampleUsers[0]}
+              currentUserId={sampleUsers[1].id}
+              actorIsSuperAdmin={false}
+              canUpdate={true}
+              canDelete={true}
+              onEdit={vi.fn()}
+              onResetPassword={vi.fn()}
+              onToggleStatus={vi.fn()}
+              onDelete={vi.fn()}
+            />
+          </TooltipProvider>
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await userEvent.click(
+      protectedScreen.getByRole('button', {
+        name: i18n.t('users:rowActions.openMenu'),
+      })
+    )
+    await expect
+      .element(
+        protectedScreen.getByRole('menuitem', {
+          name: i18n.t('users:rowActions.edit'),
+        })
+      )
+      .toHaveAttribute('aria-disabled', 'true')
+    await expect
+      .element(
+        protectedScreen.getByRole('menuitem', {
+          name: i18n.t('users:rowActions.resetPassword'),
+        })
+      )
+      .toHaveAttribute('aria-disabled', 'true')
+    await expect
+      .element(
+        protectedScreen.getByRole('menuitem', {
+          name: i18n.t('users:rowActions.delete'),
+        })
+      )
+      .toHaveAttribute('aria-disabled', 'true')
   })
 
   it('hides create button without users:create permission', async () => {
@@ -283,7 +483,18 @@ describe('users feature', () => {
           status: 422,
           code: 'VALIDATION_FAILED',
           message: 'Validation failed',
-          fieldErrors: { email: 'Email invalid from server' },
+          fieldErrors: {
+            email: 'Email invalid from server',
+            status: 'Status invalid from server',
+          },
+        })
+      )
+      .mockRejectedValueOnce(
+        new ApiError({
+          status: 422,
+          code: 'VALIDATION_FAILED',
+          message: 'Unmapped validation failure',
+          fieldErrors: { unknownField: 'Unknown field error' },
         })
       )
 
@@ -326,6 +537,212 @@ describe('users feature', () => {
     await expect
       .element(screen.getByText('Email invalid from server'))
       .toBeVisible()
+    await expect
+      .element(screen.getByText('Status invalid from server'))
+      .toBeVisible()
+
+    await userEvent.click(submitBtn)
+    await expect
+      .element(screen.getByText('Unmapped validation failure'))
+      .toBeVisible()
+  })
+
+  it('edits user and surfaces role options error with retry', async () => {
+    await changeAppLanguage('en-US')
+    useAuthStore.getState().setSession({
+      accessToken: 'tok',
+      user: {
+        id: '01950000-0000-7000-8000-000000000101',
+        username: 'root',
+        email: 'root@example.com',
+        displayName: 'Root Admin',
+      },
+      roles: ['super_admin'],
+      permissions: ['users:read', 'users:update'],
+    })
+
+    getMock
+      .mockRejectedValueOnce(new Error('role options error'))
+      .mockResolvedValueOnce({ data: roleOptionsData })
+    patchMock.mockResolvedValueOnce({ data: sampleUsers[1] })
+
+    const onOpenChange = vi.fn()
+    const client = createClient()
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <UserFormSheet
+            open={true}
+            mode='edit'
+            user={sampleUsers[1]}
+            onOpenChange={onOpenChange}
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    await expect
+      .element(screen.getByText(i18n.t('users:form.rolesLoadError')))
+      .toBeVisible()
+    await userEvent.click(
+      screen.getByRole('button', { name: i18n.t('common:retry') })
+    )
+    await expect
+      .element(screen.getByText(i18n.t('users:form.rolesLoadError')))
+      .not.toBeInTheDocument()
+
+    const usernameInput = screen.getByPlaceholder(
+      i18n.t('users:form.usernamePlaceholder')
+    )
+    await expect.element(usernameInput).toBeDisabled()
+
+    const displayNameInput = screen.getByPlaceholder(
+      i18n.t('users:form.displayNamePlaceholder')
+    )
+    await userEvent.clear(displayNameInput)
+    await userEvent.fill(displayNameInput, 'Alice Updated')
+    await userEvent.click(
+      screen.getByRole('button', { name: i18n.t('users:form.submitSave') })
+    )
+
+    expect(patchMock).toHaveBeenCalledWith(`/users/${sampleUsers[1].id}`, {
+      email: 'alice@example.com',
+      displayName: 'Alice Updated',
+      status: 'disabled',
+      roleIds: ['01950000-0000-7000-8000-000000000002'],
+    })
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('toggles user status and keeps dialog open on error', async () => {
+    await changeAppLanguage('en-US')
+    patchMock
+      .mockRejectedValueOnce(
+        new ApiError({
+          status: 403,
+          code: 'FORBIDDEN',
+          message: 'Cannot disable user',
+        })
+      )
+      .mockResolvedValueOnce({
+        data: { ...sampleUsers[0], status: 'disabled' },
+      })
+
+    const onOpenChange = vi.fn()
+    const client = createClient()
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <UserToggleStatusDialog
+            user={sampleUsers[0]}
+            open={true}
+            onOpenChange={onOpenChange}
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    const confirmBtn = screen.getByRole('button', {
+      name: i18n.t('users:toggleStatusDialog.disableConfirm'),
+    })
+    await userEvent.click(confirmBtn)
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+
+    await userEvent.click(confirmBtn)
+    expect(patchMock).toHaveBeenLastCalledWith(`/users/${sampleUsers[0].id}`, {
+      status: 'disabled',
+    })
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('clears reset password banner error on cancel and handles delete error', async () => {
+    await changeAppLanguage('en-US')
+    patchMock.mockRejectedValueOnce(
+      new ApiError({
+        status: 500,
+        code: 'INTERNAL_ERROR',
+        message: 'Reset failed banner',
+      })
+    )
+
+    function ResetHarness() {
+      const [open, setOpen] = useState(true)
+      return (
+        <>
+          <button type='button' onClick={() => setOpen(true)}>
+            reopen-reset
+          </button>
+          <UserResetPasswordDialog
+            user={sampleUsers[1]}
+            open={open}
+            onOpenChange={setOpen}
+          />
+        </>
+      )
+    }
+
+    const client = createClient()
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <ResetHarness />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    await userEvent.fill(
+      screen.getByLabelText(i18n.t('users:resetPasswordDialog.newPassword'), {
+        exact: true,
+      }),
+      'newpassword123'
+    )
+    await userEvent.fill(
+      screen.getByLabelText(
+        i18n.t('users:resetPasswordDialog.confirmPassword')
+      ),
+      'newpassword123'
+    )
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: i18n.t('users:resetPasswordDialog.confirm'),
+      })
+    )
+    await expect.element(screen.getByText('Reset failed banner')).toBeVisible()
+
+    await userEvent.click(
+      screen.getByRole('button', { name: i18n.t('common:cancel') })
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'reopen-reset' }))
+    await expect
+      .element(screen.getByText('Reset failed banner'))
+      .not.toBeInTheDocument()
+
+    deleteMock.mockRejectedValueOnce(
+      new ApiError({
+        status: 403,
+        code: 'FORBIDDEN',
+        message: 'Delete failed',
+      })
+    )
+    const onDeleteClose = vi.fn()
+    const delFailScreen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <UserDeleteDialog
+            user={sampleUsers[1]}
+            open={true}
+            onOpenChange={onDeleteClose}
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await userEvent.click(
+      delFailScreen.getByRole('button', {
+        name: i18n.t('users:deleteDialog.confirm'),
+      })
+    )
+    expect(deleteMock).toHaveBeenCalledWith(`/users/${sampleUsers[1].id}`)
+    expect(onDeleteClose).not.toHaveBeenCalledWith(false)
   })
 
   it('resets password and calls deleteUser on confirm', async () => {

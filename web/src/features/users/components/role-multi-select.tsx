@@ -27,6 +27,9 @@ type RoleMultiSelectProps = {
   value: string[]
   onChange: (next: string[]) => void
   disabled?: boolean
+  isLoading?: boolean
+  isError?: boolean
+  onRetry?: () => void
   actorIsSuperAdmin: boolean
   isSelf?: boolean
 }
@@ -39,10 +42,14 @@ export function RoleMultiSelect({
   value,
   onChange,
   disabled,
+  isLoading = false,
+  isError = false,
+  onRetry,
   actorIsSuperAdmin,
   isSelf = false,
 }: RoleMultiSelectProps) {
   const { t } = useTranslation('users')
+  const { t: tCommon } = useTranslation('common')
   const [open, setOpen] = useState(false)
 
   const selectedOptions = useMemo(() => {
@@ -87,7 +94,9 @@ export function RoleMultiSelect({
                 ? t('form.rolesSelectedCount', {
                     count: selectedOptions.length,
                   })
-                : t('form.rolesPlaceholder')}
+                : isLoading
+                  ? tCommon('loading')
+                  : t('form.rolesPlaceholder')}
             </span>
             <ChevronsUpDown className='ms-2 size-4 shrink-0 opacity-50' />
           </Button>
@@ -99,7 +108,26 @@ export function RoleMultiSelect({
           <Command>
             <CommandInput placeholder={t('form.rolesSearchPlaceholder')} />
             <CommandList>
-              <CommandEmpty>{t('form.rolesEmpty')}</CommandEmpty>
+              <CommandEmpty>
+                {isLoading ? (
+                  tCommon('loading')
+                ) : isError ? (
+                  <span className='inline-flex items-center gap-2 text-destructive'>
+                    <span>{t('form.rolesLoadError')}</span>
+                    {onRetry && (
+                      <button
+                        type='button'
+                        className='underline hover:opacity-80'
+                        onClick={onRetry}
+                      >
+                        {tCommon('retry')}
+                      </button>
+                    )}
+                  </span>
+                ) : (
+                  t('form.rolesEmpty')
+                )}
+              </CommandEmpty>
               <CommandGroup>
                 {options.map((role) => {
                   const selected = value.includes(role.id)
@@ -133,6 +161,23 @@ export function RoleMultiSelect({
           </Command>
         </PopoverContent>
       </Popover>
+
+      {isError && (
+        <div className='flex items-center justify-between gap-2 text-xs text-destructive'>
+          <span>{t('form.rolesLoadError')}</span>
+          {onRetry && (
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='h-6 px-2 text-xs'
+              onClick={onRetry}
+            >
+              {tCommon('retry')}
+            </Button>
+          )}
+        </div>
+      )}
 
       {selectedOptions.length > 0 && (
         <div className='flex flex-wrap gap-1.5'>

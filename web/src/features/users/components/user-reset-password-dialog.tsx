@@ -46,6 +46,14 @@ export function UserResetPasswordDialog({
   const { t: tCommon } = useTranslation('common')
   const { t: tValidation } = useTranslation('validation')
   const [bannerError, setBannerError] = useState<string | null>(null)
+  const [prevOpen, setPrevOpen] = useState(open)
+
+  if (open !== prevOpen) {
+    setPrevOpen(open)
+    if (!open) {
+      setBannerError(null)
+    }
+  }
   const mutation = useUpdateUserMutation()
 
   const schema = useMemo(
@@ -67,6 +75,12 @@ export function UserResetPasswordDialog({
     }
   }, [open, form])
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && mutation.isPending) return
+    if (!nextOpen) setBannerError(null)
+    onOpenChange(nextOpen)
+  }
+
   const onSubmit = async (values: ResetPasswordFormValues) => {
     if (!user) return
     setBannerError(null)
@@ -76,7 +90,7 @@ export function UserResetPasswordDialog({
         payload: { password: values.password },
       })
       toast.success(t('toast.passwordReset'))
-      onOpenChange(false)
+      handleOpenChange(false)
     } catch (err) {
       const apiErr = normalizeApiError(err)
       if (apiErr.status === 422 && apiErr.fieldErrors?.password) {
@@ -88,14 +102,7 @@ export function UserResetPasswordDialog({
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen && mutation.isPending) return
-        if (!nextOpen) setBannerError(null)
-        onOpenChange(nextOpen)
-      }}
-    >
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className='sm:max-w-md'>
         <DialogHeader>
           <DialogTitle>{t('resetPasswordDialog.title')}</DialogTitle>
@@ -163,7 +170,7 @@ export function UserResetPasswordDialog({
                 type='button'
                 variant='outline'
                 disabled={mutation.isPending}
-                onClick={() => onOpenChange(false)}
+                onClick={() => handleOpenChange(false)}
               >
                 {tCommon('cancel')}
               </Button>
