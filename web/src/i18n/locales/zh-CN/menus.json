@@ -27,14 +27,20 @@
     "shown": "显示",
     "hidden": "隐藏"
   },
+  "systemBadge": "内置",
   "actions": {
     "openMenu": "打开操作菜单",
+    "expandNode": "展开 {{title}}",
+    "collapseNode": "折叠 {{title}}",
     "addChild": "新增子节点",
     "edit": "编辑节点",
     "moveUp": "上移",
     "moveDown": "下移",
+    "moveUpItem": "上移 {{title}}",
+    "moveDownItem": "下移 {{title}}",
     "delete": "删除节点",
-    "systemImmutableHint": "系统内置菜单不可删除"
+    "systemImmutableHint": "系统内置菜单不可删除",
+    "hasChildrenHint": "请先删除下级子节点后再删除此节点"
   },
   "form": {
     "createTitle": "新增菜单节点",
@@ -56,6 +62,9 @@
     "permissionCode": "关联权限码",
     "permissionPlaceholder": "选择权限码（可选）",
     "noPermission": "不绑定权限码",
+    "permissionsLoading": "正在加载权限码列表...",
+    "permissionsLoadFailed": "权限码列表加载失败",
+    "permissionsRestrictedHint": "当前账号无角色读取权限，已保留现有权限码绑定；可保持当前值或清除绑定。",
     "sortOrder": "排序值",
     "visible": "侧边栏显示",
     "visibleHint": "关闭后不在侧边栏导航中展示",

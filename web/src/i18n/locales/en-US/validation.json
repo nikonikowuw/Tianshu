@@ -15,5 +15,7 @@
   "usernameFormat": "Username may only contain letters, digits, dots, underscores, or hyphens",
   "menuCodeFormat": "Menu code must be 2-64 lowercase letters, digits, underscores, or hyphens starting with a letter",
   "menuTitleMax": "Menu title must be at most 100 characters",
-  "menuPathFormat": "Menu path must start with / and be at most 255 characters"
+  "menuPathFormat": "Menu path must start with / and be at most 255 characters",
+  "menuSortOrderRange": "Sort order must be an integer between 0 and 99999",
+  "menuInvalidParent": "Selected parent node is incompatible with this node type"
 }

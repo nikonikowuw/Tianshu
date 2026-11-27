@@ -30,6 +30,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { MenuItem } from '../types'
 
 type MenuTreeTableProps = {
@@ -73,6 +78,28 @@ export function MenuTreeTable({
       const isExpanded = expandedIds.has(node.id)
       const IconComp = resolveMenuIcon(node.icon)
 
+      const showAddChild = canCreate && node.type !== 'button'
+      const showEdit = canUpdate
+      const showDelete = canDelete
+      const hasPrimaryAction = showAddChild || showEdit
+      const hasActions = hasPrimaryAction || showDelete
+      const deleteDisabledReason = node.isSystem
+        ? t('actions.systemImmutableHint')
+        : hasChildren
+          ? t('actions.hasChildrenHint')
+          : null
+
+      const deleteMenuItem = (
+        <DropdownMenuItem
+          disabled={deleteDisabledReason !== null}
+          onSelect={() => onDelete(node)}
+          className='text-destructive focus:text-destructive'
+        >
+          <Trash2 className='size-4' />
+          {t('actions.delete')}
+        </DropdownMenuItem>
+      )
+
       return (
         <Fragment key={node.id}>
           <TableRow className='group/row'>
@@ -88,7 +115,12 @@ export function MenuTreeTable({
                     size='icon'
                     className='size-6 shrink-0'
                     onClick={() => onToggleExpand(node.id)}
-                    aria-label={node.title}
+                    aria-expanded={isExpanded}
+                    aria-label={
+                      isExpanded
+                        ? t('actions.collapseNode', { title: node.title })
+                        : t('actions.expandNode', { title: node.title })
+                    }
                   >
                     {isExpanded ? (
                       <ChevronDown className='size-3.5' />
@@ -103,6 +135,14 @@ export function MenuTreeTable({
                   <IconComp className='size-4 shrink-0 text-muted-foreground' />
                 )}
                 <span className='font-medium'>{node.title}</span>
+                {node.isSystem && (
+                  <Badge
+                    variant='outline'
+                    className='text-[10px] font-normal text-muted-foreground'
+                  >
+                    {t('systemBadge')}
+                  </Badge>
+                )}
               </div>
             </TableCell>
             <TableCell>
@@ -151,7 +191,9 @@ export function MenuTreeTable({
                       className='size-6'
                       disabled={idx === 0 || isReordering}
                       onClick={() => onMoveSibling(nodes, idx, 'up')}
-                      aria-label={t('actions.moveUp')}
+                      aria-label={t('actions.moveUpItem', {
+                        title: node.title,
+                      })}
                     >
                       <ArrowUp className='size-3.5' />
                     </Button>
@@ -162,7 +204,9 @@ export function MenuTreeTable({
                       className='size-6'
                       disabled={idx === nodes.length - 1 || isReordering}
                       onClick={() => onMoveSibling(nodes, idx, 'down')}
-                      aria-label={t('actions.moveDown')}
+                      aria-label={t('actions.moveDownItem', {
+                        title: node.title,
+                      })}
                     >
                       <ArrowDown className='size-3.5' />
                     </Button>
@@ -186,10 +230,10 @@ export function MenuTreeTable({
             </TableCell>
             <TableCell
               className={cn(
-                'sticky end-0 z-10 w-12 bg-background px-2.5 text-center transition-colors group-hover/row:bg-[color-mix(in_srgb,var(--muted)_50%,var(--background))]'
+                'sticky end-0 z-10 w-12 bg-background px-2.5 text-center transition-colors group-hover/row:bg-[color-mix(in_srgb,var(--muted)_50%,var(--background))] last:pe-2.5 has-[button[data-state=open]]:bg-muted'
               )}
             >
-              {(canCreate || canUpdate || canDelete) && (
+              {hasActions && (
                 <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -203,29 +247,33 @@ export function MenuTreeTable({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align='end' className='w-40'>
-                    {canCreate && node.type !== 'button' && (
+                    {showAddChild && (
                       <DropdownMenuItem onSelect={() => onAddChild(node)}>
                         <Plus className='size-4' />
                         {t('actions.addChild')}
                       </DropdownMenuItem>
                     )}
-                    {canUpdate && (
+                    {showEdit && (
                       <DropdownMenuItem onSelect={() => onEdit(node)}>
                         <Pencil className='size-4' />
                         {t('actions.edit')}
                       </DropdownMenuItem>
                     )}
-                    {canDelete && (
+                    {showDelete && (
                       <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          disabled={node.isSystem || hasChildren}
-                          onSelect={() => onDelete(node)}
-                          className='text-destructive focus:text-destructive'
-                        >
-                          <Trash2 className='size-4' />
-                          {t('actions.delete')}
-                        </DropdownMenuItem>
+                        {hasPrimaryAction && <DropdownMenuSeparator />}
+                        {deleteDisabledReason ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div>{deleteMenuItem}</div>
+                            </TooltipTrigger>
+                            <TooltipContent side='left'>
+                              {deleteDisabledReason}
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          deleteMenuItem
+                        )}
                       </>
                     )}
                   </DropdownMenuContent>
@@ -252,7 +300,7 @@ export function MenuTreeTable({
             <TableHead>{t('columns.sortOrder')}</TableHead>
             <TableHead>{t('columns.visible')}</TableHead>
             <TableHead>{t('columns.status')}</TableHead>
-            <TableHead className='sticky end-0 z-10 w-12 bg-background px-2.5'>
+            <TableHead className='sticky end-0 z-10 w-12 bg-background px-2.5 last:pe-2.5'>
               <span className='sr-only'>{t('actions.openMenu')}</span>
             </TableHead>
           </TableRow>

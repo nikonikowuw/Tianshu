@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { normalizeApiError } from '@/lib/api/error'
+import { formatServerErrorMessage } from '@/lib/handle-server-error'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { useDeleteMenuMutation } from '../queries'
 import type { MenuItem } from '../types'
@@ -27,8 +27,7 @@ export function MenuDeleteDialog({
       toast.success(t('toast.deleted'))
       onOpenChange(false)
     } catch (err) {
-      const apiErr = normalizeApiError(err)
-      toast.error(apiErr.message)
+      toast.error(formatServerErrorMessage(err))
     }
   }
 

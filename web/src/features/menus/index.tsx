@@ -9,8 +9,8 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { normalizeApiError } from '@/lib/api/error'
 import { usePermission } from '@/lib/auth/use-permission'
+import { formatServerErrorMessage } from '@/lib/handle-server-error'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Header } from '@/components/layout/header'
@@ -49,10 +49,12 @@ export function Menus() {
   const items = useMemo(() => data?.items ?? [], [data])
 
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set())
-  const expandedIds = useMemo(() => {
-    const all = collectParentIds(items)
-    return new Set(all.filter((id) => !collapsedIds.has(id)))
-  }, [items, collapsedIds])
+  const allParentIds = useMemo(() => collectParentIds(items), [items])
+  const hasExpandableParents = allParentIds.length > 0
+  const expandedIds = useMemo(
+    () => new Set(allParentIds.filter((id) => !collapsedIds.has(id))),
+    [allParentIds, collapsedIds]
+  )
 
   const [sheetState, setSheetState] = useState<{
     open: boolean
@@ -86,8 +88,8 @@ export function Menus() {
   }, [])
 
   const handleCollapseAll = useCallback(() => {
-    setCollapsedIds(new Set(collectParentIds(items)))
-  }, [items])
+    setCollapsedIds(new Set(allParentIds))
+  }, [allParentIds])
 
   const handleMoveSibling = useCallback(
     async (siblings: MenuItem[], index: number, direction: 'up' | 'down') => {
@@ -108,7 +110,7 @@ export function Menus() {
         await reorderMutation.mutateAsync(payload)
         toast.success(t('toast.reordered'))
       } catch (err) {
-        toast.error(normalizeApiError(err).message)
+        toast.error(formatServerErrorMessage(err))
       }
     },
     [reorderMutation, t]
@@ -139,6 +141,7 @@ export function Menus() {
               type='button'
               variant='outline'
               size='sm'
+              disabled={isLoading || !hasExpandableParents}
               onClick={handleExpandAll}
             >
               <ChevronsUpDown className='size-4' />
@@ -148,6 +151,7 @@ export function Menus() {
               type='button'
               variant='outline'
               size='sm'
+              disabled={isLoading || !hasExpandableParents}
               onClick={handleCollapseAll}
             >
               <ChevronsDownUp className='size-4' />
@@ -177,7 +181,7 @@ export function Menus() {
             <AlertCircle className='size-4' />
             <AlertTitle>{t('error.loadTitle')}</AlertTitle>
             <AlertDescription className='flex items-center justify-between gap-4'>
-              <span>{normalizeApiError(error).message}</span>
+              <span>{formatServerErrorMessage(error)}</span>
               <Button
                 type='button'
                 variant='outline'
@@ -191,36 +195,38 @@ export function Menus() {
           </Alert>
         )}
 
-        <MenuTreeTable
-          items={items}
-          isLoading={isLoading}
-          expandedIds={expandedIds}
-          onToggleExpand={handleToggleExpand}
-          canCreate={canCreate}
-          canUpdate={canUpdate}
-          canDelete={canDelete}
-          isReordering={reorderMutation.isPending}
-          onMoveSibling={(siblings, idx, dir) =>
-            void handleMoveSibling(siblings, idx, dir)
-          }
-          onAddChild={(parent) =>
-            setSheetState({
-              open: true,
-              mode: 'create',
-              menu: null,
-              defaultParentId: parent.id,
-            })
-          }
-          onEdit={(menu) =>
-            setSheetState({
-              open: true,
-              mode: 'edit',
-              menu,
-              defaultParentId: menu.parentId,
-            })
-          }
-          onDelete={setDeletingMenu}
-        />
+        {(!isError || Boolean(data)) && (
+          <MenuTreeTable
+            items={items}
+            isLoading={isLoading}
+            expandedIds={expandedIds}
+            onToggleExpand={handleToggleExpand}
+            canCreate={canCreate}
+            canUpdate={canUpdate}
+            canDelete={canDelete}
+            isReordering={reorderMutation.isPending}
+            onMoveSibling={(siblings, idx, dir) =>
+              void handleMoveSibling(siblings, idx, dir)
+            }
+            onAddChild={(parent) =>
+              setSheetState({
+                open: true,
+                mode: 'create',
+                menu: null,
+                defaultParentId: parent.id,
+              })
+            }
+            onEdit={(menu) =>
+              setSheetState({
+                open: true,
+                mode: 'edit',
+                menu,
+                defaultParentId: menu.parentId,
+              })
+            }
+            onDelete={setDeletingMenu}
+          />
+        )}
       </Main>
 
       <MenuFormSheet
