@@ -64,7 +64,7 @@
 
 | 端点                 | 限制                             |
 | -------------------- | -------------------------------- |
-| `POST /auth/login`   | 5 次/分钟/IP + 10 次/分钟/用户名 |
+| `POST /auth/login`   | 5 次/分钟/IP（`auth.login_rate_limit`，最小 1）+ 10 次/分钟/用户名 |
 | `POST /auth/refresh` | 30 次/分钟/IP                    |
 | `POST /setup/init`   | 5 次/分钟/IP                     |
 | `PUT /profile/password` | 5 次/分钟/用户                |

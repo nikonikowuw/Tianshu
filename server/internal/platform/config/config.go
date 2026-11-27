@@ -109,12 +109,13 @@ func (s S3StorageConfig) Configured() bool {
 		strings.TrimSpace(s.SecretKey) != ""
 }
 
-// AuthConfig defines JWT, refresh token, and expired session retention parameters.
+// AuthConfig defines JWT, refresh token, login rate limit, and expired session retention parameters.
 type AuthConfig struct {
 	JWTSecret            string        `koanf:"jwt_secret"`
 	AccessTokenTTL       time.Duration `koanf:"access_token_ttl"`
 	RefreshTokenTTL      time.Duration `koanf:"refresh_token_ttl"`
 	CookieSecure         bool          `koanf:"cookie_secure"`
+	LoginRateLimit       int           `koanf:"login_rate_limit"`
 	SessionRetentionDays int           `koanf:"session_retention_days"`
 }
 
@@ -185,6 +186,7 @@ func Default() Config {
 			AccessTokenTTL:       15 * time.Minute,
 			RefreshTokenTTL:      7 * 24 * time.Hour,
 			CookieSecure:         false,
+			LoginRateLimit:       5,
 			SessionRetentionDays: 7,
 		},
 		Audit: AuditConfig{
@@ -305,6 +307,9 @@ func (c Config) Validate() error {
 		}
 	}
 
+	if c.Auth.LoginRateLimit < 1 {
+		return errors.New("auth.login_rate_limit must be >= 1")
+	}
 	if c.Auth.SessionRetentionDays < 0 {
 		return errors.New("auth.session_retention_days must be >= 0")
 	}

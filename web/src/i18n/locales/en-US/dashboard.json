@@ -1,0 +1,88 @@
+{
+  "title": "Dashboard",
+  "description": "Live system overview across accounts, access control, storage, and security activity.",
+  "updatedAt": "Live · {{time}}",
+  "rangeLabel": "Activity time range",
+  "rangeDays": "Last {{days}}d",
+  "refresh": "Refresh",
+  "kpi": {
+    "manage": "Manage",
+    "viewSessions": "Sessions",
+    "users": {
+      "title": "Total Users",
+      "newLast7Days": "+{{count}} / 7d",
+      "activeRate": "{{percent}}% active",
+      "breakdown": "{{active}} active · {{disabled}} disabled"
+    },
+    "roles": {
+      "title": "Roles",
+      "unit": "configured",
+      "customRatio": "{{count}} custom",
+      "breakdown": "{{system}} system · {{custom}} custom"
+    },
+    "files": {
+      "title": "Stored Files",
+      "unit": "ready",
+      "breakdown": "{{images}} images · {{documents}} docs"
+    },
+    "sessions": {
+      "title": "Active Sessions",
+      "unit": "online",
+      "failuresBadge": "{{count}} failed",
+      "healthyBadge": "Healthy",
+      "breakdown": "{{logins}} sign-ins in last {{days}}d"
+    }
+  },
+  "trend": {
+    "title": "Activity Trend",
+    "description": "{{total}} audited events · last {{days}}d (UTC)",
+    "seriesFilterLabel": "Filter chart series",
+    "tabs": {
+      "all": "All Events"
+    },
+    "emptyTitle": "No activity in this window",
+    "emptyDesc": "Sign-ins and management operations over the last {{days}} days will appear here.",
+    "series": {
+      "logins": "Sign-ins",
+      "operations": "Operations",
+      "failures": "Failures"
+    }
+  },
+  "recent": {
+    "title": "Recent Activity",
+    "description": "Latest security and admin events",
+    "viewAll": "View all",
+    "anonymous": "Anonymous / System",
+    "statusSuccess": "Success",
+    "statusFailure": "Failed",
+    "emptyTitle": "No recent activity",
+    "emptyDesc": "System setup, sign-ins, and write operations will appear here automatically."
+  },
+  "actions": {
+    "setupInit": "initialized the system",
+    "authLogin": "signed in",
+    "authLogout": "signed out",
+    "authRefresh": "refreshed session",
+    "authRefreshReplay": "triggered token replay alert",
+    "userCreate": "created a user",
+    "userUpdate": "updated a user",
+    "userDelete": "deleted a user",
+    "roleCreate": "created a role",
+    "roleUpdate": "updated a role",
+    "roleDelete": "deleted a role",
+    "menuCreate": "created a menu",
+    "menuUpdate": "updated a menu",
+    "menuReorder": "reordered menus",
+    "menuDelete": "deleted a menu",
+    "fileUpload": "uploaded a file",
+    "fileUploadAvatar": "uploaded an avatar",
+    "fileDelete": "deleted a file",
+    "profileUpdate": "updated profile",
+    "profileChangePassword": "changed password",
+    "profileSessionRevoke": "revoked a session",
+    "profileSessionsRevokeOthers": "revoked other sessions"
+  },
+  "error": {
+    "loadFailed": "Failed to load dashboard overview"
+  }
+}

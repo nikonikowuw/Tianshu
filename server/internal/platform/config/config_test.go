@@ -152,4 +152,14 @@ func TestAuthSessionRetentionValidation(t *testing.T) {
 			t.Fatalf("expected auth.session_retention_days=14 to validate, got %v", err)
 		}
 	})
+
+	t.Run("rejects non-positive login_rate_limit", func(t *testing.T) {
+		for _, limit := range []int{-1, 0} {
+			cfg := config.Default()
+			cfg.Auth.LoginRateLimit = limit
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("expected validation error for auth.login_rate_limit=%d", limit)
+			}
+		}
+	})
 }

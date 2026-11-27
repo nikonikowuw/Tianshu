@@ -14,7 +14,6 @@ const config: KnipConfig = {
   ignoreDependencies: [
     '@radix-ui/*',
     'date-fns',
-    'recharts',
   ],
   ignoreExportsUsedInFile: true,
 }

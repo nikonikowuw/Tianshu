@@ -16,6 +16,7 @@ import (
 	"tianshu/internal/modules/access"
 	"tianshu/internal/modules/audit"
 	"tianshu/internal/modules/auth"
+	"tianshu/internal/modules/dashboard"
 	"tianshu/internal/modules/files"
 	"tianshu/internal/modules/identity"
 	"tianshu/internal/modules/setup"
@@ -32,28 +33,29 @@ import (
 
 // App is the single composition root wiring platform infrastructure, modules, and HTTP server.
 type App struct {
-	cfg             config.Config
-	log             *slog.Logger
-	i18n            *i18n.Bundle
-	hasher          *security.PasswordHasher
-	jwt             *security.JWTManager
-	db              *pgxpool.Pool
-	tx              *database.TxManager
-	cache           cache.Cache
-	storage         *storage.Registry
-	access          *access.Service
-	accessHandler   *access.Handler
-	identity        *identity.Service
-	identityHandler *identity.Handler
-	audit           *audit.Service
-	auditHandler    *audit.Handler
-	files           *files.Service
-	filesHandler    *files.Handler
-	auth            *auth.Service
-	authHandler     *auth.Handler
-	setupHandler    *setup.Handler
-	engine          *gin.Engine
-	server          *http.Server
+	cfg              config.Config
+	log              *slog.Logger
+	i18n             *i18n.Bundle
+	hasher           *security.PasswordHasher
+	jwt              *security.JWTManager
+	db               *pgxpool.Pool
+	tx               *database.TxManager
+	cache            cache.Cache
+	storage          *storage.Registry
+	access           *access.Service
+	accessHandler    *access.Handler
+	identity         *identity.Service
+	identityHandler  *identity.Handler
+	audit            *audit.Service
+	auditHandler     *audit.Handler
+	files            *files.Service
+	filesHandler     *files.Handler
+	auth             *auth.Service
+	authHandler      *auth.Handler
+	dashboardHandler *dashboard.Handler
+	setupHandler     *setup.Handler
+	engine           *gin.Engine
+	server           *http.Server
 }
 
 // Options customizes App assembly (primarily for tests).
@@ -86,6 +88,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 	if err := bundle.RegisterFS("files", files.LocalesFS, "locales"); err != nil {
 		return nil, fmt.Errorf("register files locales: %w", err)
+	}
+	if err := bundle.RegisterFS("dashboard", dashboard.LocalesFS, "locales"); err != nil {
+		return nil, fmt.Errorf("register dashboard locales: %w", err)
 	}
 	if err := bundle.Validate(); err != nil {
 		return nil, fmt.Errorf("validate i18n bundle: %w", err)
@@ -130,17 +135,18 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 
 	var (
-		accessSvc       *access.Service
-		accessHandler   *access.Handler
-		identitySvc     *identity.Service
-		identityHandler *identity.Handler
-		auditSvc        *audit.Service
-		auditHandler    *audit.Handler
-		filesSvc        *files.Service
-		filesHandler    *files.Handler
-		authSvc         *auth.Service
-		authHandler     *auth.Handler
-		setupHandler    *setup.Handler
+		accessSvc        *access.Service
+		accessHandler    *access.Handler
+		identitySvc      *identity.Service
+		identityHandler  *identity.Handler
+		auditSvc         *audit.Service
+		auditHandler     *audit.Handler
+		filesSvc         *files.Service
+		filesHandler     *files.Handler
+		authSvc          *auth.Service
+		authHandler      *auth.Handler
+		dashboardHandler *dashboard.Handler
+		setupHandler     *setup.Handler
 	)
 	if pool != nil {
 		auditSvc = audit.NewService(pool, log)
@@ -231,6 +237,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		)
 		identitySessionMgr.svc = authSvc
 		authHandler = auth.NewHandler(authSvc, cfg.CORS.AllowedOrigins)
+
+		dashboardSvc := dashboard.NewService(pool)
+		dashboardHandler = dashboard.NewHandler(dashboardSvc)
 	}
 
 	engine, err := httpserver.NewEngine(httpserver.Options{
@@ -249,27 +258,28 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 
 	application := &App{
-		cfg:             cfg,
-		log:             log,
-		i18n:            bundle,
-		hasher:          hasher,
-		jwt:             jwtMgr,
-		db:              pool,
-		tx:              tx,
-		cache:           memCache,
-		storage:         storeReg,
-		access:          accessSvc,
-		accessHandler:   accessHandler,
-		identity:        identitySvc,
-		identityHandler: identityHandler,
-		audit:           auditSvc,
-		auditHandler:    auditHandler,
-		files:           filesSvc,
-		filesHandler:    filesHandler,
-		auth:            authSvc,
-		authHandler:     authHandler,
-		setupHandler:    setupHandler,
-		engine:          engine,
+		cfg:              cfg,
+		log:              log,
+		i18n:             bundle,
+		hasher:           hasher,
+		jwt:              jwtMgr,
+		db:               pool,
+		tx:               tx,
+		cache:            memCache,
+		storage:          storeReg,
+		access:           accessSvc,
+		accessHandler:    accessHandler,
+		identity:         identitySvc,
+		identityHandler:  identityHandler,
+		audit:            auditSvc,
+		auditHandler:     auditHandler,
+		files:            filesSvc,
+		filesHandler:     filesHandler,
+		auth:             authSvc,
+		authHandler:      authHandler,
+		dashboardHandler: dashboardHandler,
+		setupHandler:     setupHandler,
+		engine:           engine,
 	}
 	application.registerRoutes()
 

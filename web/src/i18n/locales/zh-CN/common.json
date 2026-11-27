@@ -38,12 +38,6 @@
     "dark": "深色",
     "system": "跟随系统"
   },
-  "dashboard": {
-    "title": "仪表盘",
-    "description": "Tianshu 基础框架已就绪，业务模块将按垂直切片逐步接入。",
-    "readyCardTitle": "系统底座就绪",
-    "readyCardDesc": "Go 单二进制嵌入前端、双语 i18n、RouterContext 权限守卫与统一 API 客户端均已装配完成。"
-  },
   "password": {
     "show": "显示密码",
     "hide": "隐藏密码",

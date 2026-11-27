@@ -1,0 +1,1 @@
+DASHBOARD_INVALID_DAYS = "Range days must be 7, 14, or 30"
