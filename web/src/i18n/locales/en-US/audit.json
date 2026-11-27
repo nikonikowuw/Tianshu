@@ -36,7 +36,11 @@
     "roleDelete": "Delete Role (role.delete)",
     "fileUpload": "Upload File (file.upload)",
     "fileUploadAvatar": "Upload Avatar (file.upload_avatar)",
-    "fileDelete": "Delete File (file.delete)"
+    "fileDelete": "Delete File (file.delete)",
+    "profileUpdate": "Update Profile (profile.update)",
+    "profileChangePassword": "Change Password (profile.change_password)",
+    "profileSessionRevoke": "Revoke Session (profile.session_revoke)",
+    "profileSessionsRevokeOthers": "Revoke Other Sessions (profile.sessions_revoke_others)"
   },
   "resources": {
     "system": "System (system)",

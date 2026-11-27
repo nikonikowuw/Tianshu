@@ -1,4 +1,4 @@
-import { apiClient } from '@/lib/api/client'
+import { apiClient, resolveApiUrl } from '@/lib/api/client'
 import type { Paginated } from '@/lib/api/types'
 import type {
   FileDisposition,
@@ -10,18 +10,7 @@ import type {
 
 const UPLOAD_TIMEOUT_MS = 60_000
 
-export function resolveApiFileUrl(url: string): string {
-  if (!url.startsWith('/')) return url
-  const baseURL = apiClient.defaults.baseURL
-  if (baseURL && /^https?:\/\//i.test(baseURL)) {
-    try {
-      return `${new URL(baseURL).origin}${url}`
-    } catch {
-      return url
-    }
-  }
-  return url
-}
+export const resolveApiFileUrl = resolveApiUrl
 
 function buildFilesSearchParams(params: FilesListParams): URLSearchParams {
   const sp = new URLSearchParams()

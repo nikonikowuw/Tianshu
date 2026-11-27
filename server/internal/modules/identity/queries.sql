@@ -20,17 +20,30 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
 RETURNING id, username, email, display_name, status, created_at, updated_at;
 
 -- name: GetUserForAuthByIdentifier :one
-SELECT id, username, email, password_hash, display_name, status
+SELECT id, username, email, password_hash, display_name, avatar_file_id, status
 FROM users
 WHERE deleted_at IS NULL
   AND (lower(username) = $1 OR lower(email) = $1)
 LIMIT 1;
 
 -- name: GetUserByID :one
-SELECT id, username, email, display_name, status, created_at, updated_at
+SELECT id, username, email, display_name, avatar_file_id, status, created_at, updated_at
 FROM users
 WHERE id = $1
   AND deleted_at IS NULL;
+
+-- name: GetUserPasswordHashByID :one
+SELECT id, username, status, password_hash
+FROM users
+WHERE id = $1
+  AND deleted_at IS NULL;
+
+-- name: GetUserPasswordHashByIDForUpdate :one
+SELECT id, username, status, password_hash
+FROM users
+WHERE id = $1
+  AND deleted_at IS NULL
+FOR UPDATE;
 
 -- name: UpdateUserLastLogin :exec
 UPDATE users
@@ -103,6 +116,7 @@ SELECT
     u.username,
     u.email,
     u.display_name,
+    u.avatar_file_id,
     u.status,
     u.last_login_at,
     u.created_by,
@@ -123,6 +137,7 @@ SELECT
     username,
     email,
     display_name,
+    avatar_file_id,
     status,
     last_login_at,
     created_by,
@@ -144,6 +159,25 @@ SET email = $2,
 WHERE id = $1
   AND deleted_at IS NULL
 RETURNING id;
+
+-- name: UpdateOwnProfile :one
+UPDATE users
+SET email = $2,
+    display_name = $3,
+    avatar_file_id = $4,
+    updated_by = $5,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id;
+
+-- name: UpdateOwnPasswordHash :exec
+UPDATE users
+SET password_hash = $2,
+    updated_by = $3,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL;
 
 -- name: UpdateUserPasswordByAdmin :exec
 UPDATE users

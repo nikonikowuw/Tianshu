@@ -7,7 +7,8 @@ export type AuthUser = {
   username: string
   email: string
   displayName: string
-  avatarUrl?: string
+  avatarFileId?: string | null
+  avatarUrl?: string | null
 }
 
 type AuthSession = {
@@ -24,6 +25,7 @@ type AuthStoreState = {
   roles: string[]
   permissions: string[]
   setSession: (session: AuthSession) => void
+  updateUser: (patch: Partial<AuthUser>) => void
   setAccessToken: (token: string) => void
   clearSession: (options?: { broadcast?: boolean }) => void
   hasPermission: (code: string) => boolean
@@ -57,6 +59,9 @@ export const useAuthStore = create<AuthStoreState>((set, get) => ({
       roles: [...session.roles],
       permissions: [...session.permissions],
     }),
+
+  updateUser: (patch) =>
+    set((state) => (state.user ? { user: { ...state.user, ...patch } } : {})),
 
   setAccessToken: (token) => set({ accessToken: token }),
 

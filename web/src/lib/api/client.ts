@@ -17,6 +17,7 @@ type ApiClientHooks = {
   getAccessToken: () => string
   refreshAccessToken: () => Promise<string | null>
   onAccountDisabled: () => void
+  onSessionExpired?: () => void
   onForbiddenRefresh?: () => Promise<void>
 }
 
@@ -39,11 +40,31 @@ export const apiClient = axios.create({
   },
 })
 
+export function resolveApiUrl(
+  url: string,
+  baseURL: string | undefined = apiClient.defaults.baseURL
+): string {
+  if (!url.startsWith('/')) return url
+  if (baseURL && /^https?:\/\//i.test(baseURL)) {
+    try {
+      return `${new URL(baseURL).origin}${url}`
+    } catch {
+      return url
+    }
+  }
+  return url
+}
+
 function isPublicEndpoint(url?: string): boolean {
   if (!url) return false
   return PUBLIC_PATHS.some(
     (prefix) => url === prefix || url.startsWith(`${prefix}?`)
   )
+}
+
+function isLogoutEndpoint(url?: string): boolean {
+  if (!url) return false
+  return url === '/auth/logout' || url.startsWith('/auth/logout?')
 }
 
 apiClient.interceptors.request.use((config) => {
@@ -65,11 +86,13 @@ apiClient.interceptors.response.use(
 
     if (axios.isAxiosError(rawError) && rawError.config) {
       const original = rawError.config as RetriableConfig
+      const skipGlobalAuthSideEffects =
+        isPublicEndpoint(original.url) || isLogoutEndpoint(original.url)
 
       if (
         normalized.status === 401 &&
         !original._retried &&
-        !isPublicEndpoint(original.url)
+        !skipGlobalAuthSideEffects
       ) {
         original._retried = true
         const nextToken = await hooks.refreshAccessToken()
@@ -77,11 +100,12 @@ apiClient.interceptors.response.use(
           original.headers.Authorization = `Bearer ${nextToken}`
           return apiClient.request(original)
         }
+        hooks.onSessionExpired?.()
       }
 
-      // Public auth endpoints own their 401/403 feedback inline: a global
+      // Public auth endpoints (and logout) own their 401/403 feedback inline: a global
       // logout/redirect here would race the form banner and duplicate the toast.
-      if (normalized.status === 403 && !isPublicEndpoint(original.url)) {
+      if (normalized.status === 403 && !skipGlobalAuthSideEffects) {
         if (normalized.code === 'AUTH_ACCOUNT_DISABLED') {
           hooks.onAccountDisabled()
         } else if (

@@ -174,9 +174,13 @@ function SidebarMenuCollapsedDropdown({
 }
 
 function checkIsActive(href: string, item: NavItem, mainNav = false) {
+  const pathname = href.split('?')[0]
   return (
-    href === item.url || // /endpint?search=param
-    href.split('?')[0] === item.url || // endpoint
+    href === item.url || // /endpoint?search=param
+    pathname === item.url || // endpoint
+    (typeof item.url === 'string' &&
+      item.url !== '/' &&
+      pathname.startsWith(`${item.url}/`)) || // nested route like /settings/security
     !!item?.items?.filter((i) => i.url === href).length || // if child nav is active
     (mainNav &&
       href.split('/')[1] !== '' &&

@@ -78,6 +78,32 @@ func (q *Queries) DeleteFileRow(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const getFileByIDForShare = `-- name: GetFileByIDForShare :one
+SELECT id, uploader_id, storage_driver, object_key, original_name, mime_type, size_bytes, sha256, status, created_at, updated_at
+FROM files
+WHERE id = $1
+FOR SHARE
+`
+
+func (q *Queries) GetFileByIDForShare(ctx context.Context, id uuid.UUID) (File, error) {
+	row := q.db.QueryRow(ctx, getFileByIDForShare, id)
+	var i File
+	err := row.Scan(
+		&i.ID,
+		&i.UploaderID,
+		&i.StorageDriver,
+		&i.ObjectKey,
+		&i.OriginalName,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.Sha256,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getFileByIDForUpdate = `-- name: GetFileByIDForUpdate :one
 SELECT id, uploader_id, storage_driver, object_key, original_name, mime_type, size_bytes, sha256, status, created_at, updated_at
 FROM files

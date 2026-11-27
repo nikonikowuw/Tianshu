@@ -23,8 +23,8 @@ import { Input } from '@/components/ui/input'
 import { AuthShell } from '@/components/layout/auth-shell'
 import { AuthAlert, RateLimitAlert } from '@/components/shared/auth-alert'
 import { PasswordInput } from '@/components/shared/password-input'
+import { PasswordStrength } from '@/components/shared/password-strength-meter'
 import { useInitSetupMutation } from './api'
-import { PasswordStrength } from './password-strength-meter'
 
 type SetupWizardProps = {
   onSuccess?: () => void

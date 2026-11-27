@@ -1,12 +1,18 @@
 package auth
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type authUserResponse struct {
-	ID          string `json:"id"`
-	Username    string `json:"username"`
-	Email       string `json:"email"`
-	DisplayName string `json:"displayName"`
+	ID           string  `json:"id"`
+	Username     string  `json:"username"`
+	Email        string  `json:"email"`
+	DisplayName  string  `json:"displayName"`
+	AvatarFileID *string `json:"avatarFileId"`
+	AvatarURL    *string `json:"avatarUrl"`
 }
 
 type loginResponse struct {
@@ -29,11 +35,18 @@ type meResponse struct {
 }
 
 func toAuthUserResponse(u User) authUserResponse {
+	var avatarFileID *string
+	if u.AvatarFileID != nil && *u.AvatarFileID != uuid.Nil {
+		s := u.AvatarFileID.String()
+		avatarFileID = &s
+	}
 	return authUserResponse{
-		ID:          u.ID.String(),
-		Username:    u.Username,
-		Email:       u.Email,
-		DisplayName: u.DisplayName,
+		ID:           u.ID.String(),
+		Username:     u.Username,
+		Email:        u.Email,
+		DisplayName:  u.DisplayName,
+		AvatarFileID: avatarFileID,
+		AvatarURL:    u.AvatarURL,
 	}
 }
 

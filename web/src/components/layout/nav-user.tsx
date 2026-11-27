@@ -1,11 +1,20 @@
 import { useTranslation } from 'react-i18next'
-import { ChevronsUpDown, LogOut } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import {
+  ChevronsUpDown,
+  KeyRound,
+  LogOut,
+  MonitorSmartphone,
+  Palette,
+  UserCog,
+} from 'lucide-react'
 import { getDisplayNameInitials } from '@/lib/utils'
 import useDialogState from '@/hooks/use-dialog-state'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -23,11 +32,12 @@ import { type LayoutUser } from './types'
 type NavUserProps = {
   user: LayoutUser
   onSignOut: () => Promise<void> | void
+  onAvatarError?: () => void
 }
 
-export function NavUser({ user, onSignOut }: NavUserProps) {
+export function NavUser({ user, onSignOut, onAvatarError }: NavUserProps) {
   const { t } = useTranslation('common')
-  const { isMobile } = useSidebar()
+  const { isMobile, setOpenMobile } = useSidebar()
   const [open, setOpen] = useDialogState()
 
   const handleConfirmSignOut = () => {
@@ -43,11 +53,18 @@ export function NavUser({ user, onSignOut }: NavUserProps) {
             <DropdownMenuTrigger asChild>
               <SidebarMenuButton
                 size='lg'
+                data-testid='nav-user-trigger'
                 className='data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground'
               >
                 <Avatar className='size-8 rounded-lg'>
                   {user.avatar && (
-                    <AvatarImage src={user.avatar} alt={user.name} />
+                    <AvatarImage
+                      src={user.avatar}
+                      alt={user.name}
+                      onLoadingStatusChange={(status) => {
+                        if (status === 'error') onAvatarError?.()
+                      }}
+                    />
                   )}
                   <AvatarFallback className='rounded-lg'>
                     {getDisplayNameInitials(user.name)}
@@ -70,7 +87,13 @@ export function NavUser({ user, onSignOut }: NavUserProps) {
                 <div className='flex items-center gap-2 px-1 py-1.5 text-start text-sm'>
                   <Avatar className='size-8 rounded-lg'>
                     {user.avatar && (
-                      <AvatarImage src={user.avatar} alt={user.name} />
+                      <AvatarImage
+                        src={user.avatar}
+                        alt={user.name}
+                        onLoadingStatusChange={(status) => {
+                          if (status === 'error') onAvatarError?.()
+                        }}
+                      />
                     )}
                     <AvatarFallback className='rounded-lg'>
                       {getDisplayNameInitials(user.name)}
@@ -82,6 +105,42 @@ export function NavUser({ user, onSignOut }: NavUserProps) {
                   </div>
                 </div>
               </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem asChild>
+                  <Link to='/settings' onClick={() => setOpenMobile(false)}>
+                    <UserCog />
+                    {t('nav.profile')}
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link
+                    to='/settings/security'
+                    onClick={() => setOpenMobile(false)}
+                  >
+                    <KeyRound />
+                    {t('nav.security')}
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link
+                    to='/settings/sessions'
+                    onClick={() => setOpenMobile(false)}
+                  >
+                    <MonitorSmartphone />
+                    {t('nav.sessions')}
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link
+                    to='/settings/appearance'
+                    onClick={() => setOpenMobile(false)}
+                  >
+                    <Palette />
+                    {t('nav.appearance')}
+                  </Link>
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant='destructive'

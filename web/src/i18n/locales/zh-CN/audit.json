@@ -36,7 +36,11 @@
     "roleDelete": "删除角色 (role.delete)",
     "fileUpload": "上传文件 (file.upload)",
     "fileUploadAvatar": "上传头像 (file.upload_avatar)",
-    "fileDelete": "删除文件 (file.delete)"
+    "fileDelete": "删除文件 (file.delete)",
+    "profileUpdate": "更新个人资料 (profile.update)",
+    "profileChangePassword": "修改密码 (profile.change_password)",
+    "profileSessionRevoke": "下线活跃会话 (profile.session_revoke)",
+    "profileSessionsRevokeOthers": "下线其他全部会话 (profile.sessions_revoke_others)"
   },
   "resources": {
     "system": "系统 (system)",

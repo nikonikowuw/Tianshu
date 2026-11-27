@@ -173,6 +173,41 @@ func (s *Service) UploadAvatar(ctx context.Context, input UploadInput) (File, er
 	return s.persistPreparedUpload(ctx, prepared, "avatars", auditActionUploadAvatar, input.UploaderID, input.Meta)
 }
 
+// ValidateAndLockAvatarFile acquires a FOR SHARE row lock on fileID within the caller's
+// transaction and verifies that it is a ready avatar image uploaded by ownerID.
+func (s *Service) ValidateAndLockAvatarFile(ctx context.Context, fileID, ownerID uuid.UUID) error {
+	if fileID == uuid.Nil || ownerID == uuid.Nil {
+		return errFileNotFound()
+	}
+	rec, err := s.store.GetFileByIDForShare(ctx, fileID)
+	if errors.Is(err, errRecordNotFound) {
+		return errFileNotFound()
+	}
+	if err != nil {
+		return apperr.Internal(fmt.Errorf("lock avatar file %s: %w", fileID, err))
+	}
+	if rec.Status != StatusReady ||
+		!isAllowedImageMIME(rec.MIMEType) ||
+		!strings.HasPrefix(rec.ObjectKey, "avatars/") ||
+		rec.UploaderID == nil ||
+		*rec.UploaderID != ownerID {
+		return errFileNotFound()
+	}
+	return nil
+}
+
+// SignAvatarURL mints a short-lived inline signed URL path for a ready avatar file.
+func (s *Service) SignAvatarURL(ctx context.Context, fileID uuid.UUID) (string, error) {
+	if fileID == uuid.Nil {
+		return "", nil
+	}
+	res, err := s.CreateSignedURL(ctx, fileID, DispositionInline)
+	if err != nil {
+		return "", err
+	}
+	return res.URL, nil
+}
+
 func (s *Service) persistPreparedUpload(
 	ctx context.Context,
 	prepared *preparedUpload,

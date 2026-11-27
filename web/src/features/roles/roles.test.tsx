@@ -10,6 +10,7 @@ import { ApiError } from '@/lib/api/error'
 import { Button } from '@/components/ui/button'
 import { PermissionGuard } from '@/components/shared/permission-guard'
 import { buildRolesQueryParams } from './api'
+import { buildPermissionTree } from './components/permission-tree-builder'
 import { RoleDeleteDialog } from './components/role-delete-dialog'
 import { RoleFormSheet, type RoleSheetMode } from './components/role-form-sheet'
 import { RolesTable } from './components/roles-table'
@@ -626,5 +627,55 @@ describe('roles feature', () => {
     expect(container.textContent?.includes('没有符合筛选条件的角色')).toBe(
       false
     )
+  })
+
+  it('prunes permissionless menu subtrees like default-accessible Settings from permission tree', () => {
+    const tree = buildPermissionTree(
+      [
+        {
+          id: 'dir-general',
+          type: 'directory',
+          code: 'dir_general',
+          title: '通用',
+          icon: '',
+          permissionCode: '',
+          children: [
+            {
+              id: 'menu-dashboard',
+              type: 'menu',
+              code: 'menu_dashboard',
+              title: '仪表盘',
+              icon: 'LayoutDashboard',
+              permissionCode: 'dashboard:read',
+              children: [],
+            },
+          ],
+        },
+        {
+          id: 'dir-other',
+          type: 'directory',
+          code: 'dir_other',
+          title: '其他',
+          icon: '',
+          permissionCode: '',
+          children: [
+            {
+              id: 'menu-settings',
+              type: 'menu',
+              code: 'menu_settings',
+              title: '个人设置',
+              icon: 'Settings',
+              permissionCode: '',
+              children: [],
+            },
+          ],
+        },
+      ],
+      catalogZh.groups,
+      '其他权限'
+    )
+
+    expect(tree.some((n) => n.id === 'dir-general')).toBe(true)
+    expect(tree.some((n) => n.id === 'dir-other')).toBe(false)
   })
 })

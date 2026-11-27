@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -24,9 +25,31 @@ type RoleManager interface {
 	ReplaceUserRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error
 }
 
-// SessionRevoker revokes active user sessions owned by the auth module.
-type SessionRevoker interface {
+// UserSession is the safe session projection consumed by identity without importing auth.
+type UserSession struct {
+	ID         uuid.UUID
+	IPAddress  string
+	UserAgent  string
+	IsCurrent  bool
+	LastUsedAt time.Time
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+}
+
+// SessionManager lists, validates, and revokes active user sessions owned by the auth module.
+type SessionManager interface {
 	RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) error
+	ListActiveUserSessions(ctx context.Context, userID uuid.UUID) ([]UserSession, error)
+	IsSessionActive(ctx context.Context, userID, sessionID uuid.UUID) (bool, error)
+	LockActiveSessionForShare(ctx context.Context, userID, sessionID uuid.UUID) (bool, error)
+	RevokeUserSession(ctx context.Context, userID, sessionID uuid.UUID) (bool, error)
+	RevokeOtherUserSessions(ctx context.Context, userID, keepSessionID uuid.UUID) (int64, error)
+}
+
+// AvatarFileManager validates/locks avatar files and mints short-lived inline URLs owned by the files module.
+type AvatarFileManager interface {
+	ValidateAndLockAvatarFile(ctx context.Context, fileID, ownerID uuid.UUID) error
+	SignAvatarURL(ctx context.Context, fileID uuid.UUID) (string, error)
 }
 
 // TxRunner executes fn inside a database transaction propagated via ctx.

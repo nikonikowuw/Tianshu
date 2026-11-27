@@ -1,9 +1,9 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
-import { apiClient } from '@/lib/api/client'
+import { apiClient, resolveApiUrl } from '@/lib/api/client'
 import { AuthenticatedLayout } from '@/components/layout/authenticated-layout'
 import {
   buildNavGroups,
@@ -19,6 +19,7 @@ export function AuthenticatedShell() {
   const user = useAuthStore((s) => s.user)
   const permissions = useAuthStore((s) => s.permissions)
   const status = useAuthStore((s) => s.status)
+  const lastRetriedAvatarRef = useRef<string | null>(null)
 
   const { data: userMenusData } = useQuery({
     queryKey: ['menus', 'user', i18n.language],
@@ -47,6 +48,16 @@ export function AuthenticatedShell() {
     await navigate({ to: '/sign-in', replace: true })
   }
 
+  const avatarSrc = user?.avatarUrl ? resolveApiUrl(user.avatarUrl) : undefined
+
+  const handleAvatarError = useCallback(() => {
+    if (!avatarSrc || lastRetriedAvatarRef.current === avatarSrc) return
+    lastRetriedAvatarRef.current = avatarSrc
+    void authGateway.syncProfile().catch(() => {
+      // Fallback initials remain visible if refreshing the signed URL fails.
+    })
+  }, [avatarSrc])
+
   return (
     <AuthenticatedLayout
       appName={t('appName')}
@@ -55,9 +66,10 @@ export function AuthenticatedShell() {
       user={{
         name: user?.displayName || user?.username || 'User',
         email: user?.email ?? '',
-        avatar: user?.avatarUrl,
+        avatar: avatarSrc,
       }}
       onSignOut={handleSignOut}
+      onAvatarError={handleAvatarError}
     />
   )
 }

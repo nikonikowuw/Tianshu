@@ -1,6 +1,6 @@
 # Backend Spec
 
-适用范围：`server/`（Go 服务）。当前已完成 `internal/platform/*`（含 Local/S3 多驱动存储与路由注册表）、`internal/shared/*`、`internal/webui`、`migrations/00001`–`00004`、`internal/app`、`access`（权限种子、RBAC 校验、`/roles` CRUD 与动态菜单树）、`identity`（用户 CRUD 与超管/自我保护）、`setup`（首次初始化向导）、`auth`（登录/Refresh 轮换与重放检测/软冷却/JWT 中间件）、`audit`（不可变审计落库、敏感字段脱敏、分页筛选与保留期清理）与 `files`（内容嗅探上传、头像纯 Go 重编码去 EXIF、短时签名 URL 与双写补偿 Janitor）；个人中心与 `dashboard` 尚未实现。
+适用范围：`server/`（Go 服务）。当前已完成 `internal/platform/*`（含 Local/S3 多驱动存储与路由注册表）、`internal/shared/*`、`internal/webui`、`migrations/00001`–`00004`、`internal/app`、`access`（权限种子、RBAC 校验、`/roles` CRUD 与动态菜单树）、`identity`（用户 CRUD、超管/自我保护与 `/profile` 资料/头像/改密/活跃会话管理）、`setup`（首次初始化向导）、`auth`（登录/Refresh 轮换与重放检测/软冷却/JWT 中间件/过期会话清理 Janitor）、`audit`（不可变审计落库、敏感字段脱敏、分页筛选与保留期清理）与 `files`（内容嗅探上传、头像纯 Go 重编码去 EXIF、短时签名 URL、头像 `FOR SHARE` 锁校验与双写补偿 Janitor）；`dashboard` 统计聚合尚未实现。
 
 | 文档 | 内容 | 何时读 |
 | --- | --- | --- |

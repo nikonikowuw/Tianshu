@@ -12,7 +12,10 @@
     scrollbar-color: var(--border) transparent;
   }
   html {
-    @apply overflow-x-hidden;
+    @apply overflow-x-clip;
+  }
+  html:has([data-slot='sidebar-wrapper']) {
+    scrollbar-gutter: stable;
   }
   body {
     @apply min-h-svh w-full bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar;

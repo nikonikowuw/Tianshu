@@ -18,6 +18,10 @@ const ACTION_LABEL_KEY: Record<string, string> = {
   'file.upload': 'actions.fileUpload',
   'file.upload_avatar': 'actions.fileUploadAvatar',
   'file.delete': 'actions.fileDelete',
+  'profile.update': 'actions.profileUpdate',
+  'profile.change_password': 'actions.profileChangePassword',
+  'profile.session_revoke': 'actions.profileSessionRevoke',
+  'profile.sessions_revoke_others': 'actions.profileSessionsRevokeOthers',
 }
 
 const RESOURCE_LABEL_KEY: Record<string, string> = {

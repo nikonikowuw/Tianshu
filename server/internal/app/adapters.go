@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 
@@ -11,6 +12,7 @@ import (
 	"tianshu/internal/modules/files"
 	"tianshu/internal/modules/identity"
 	"tianshu/internal/modules/setup"
+	"tianshu/internal/shared/apperr"
 )
 
 // setupAuditAdapter bridges audit.Service into setup.AuditRecorder.
@@ -98,11 +100,12 @@ func (a *authIdentityAdapter) GetAuthCredentials(ctx context.Context, identifier
 	}
 	return auth.UserCredentials{
 		User: auth.User{
-			ID:          creds.ID,
-			Username:    creds.Username,
-			Email:       creds.Email,
-			DisplayName: creds.DisplayName,
-			Status:      creds.Status,
+			ID:           creds.ID,
+			Username:     creds.Username,
+			Email:        creds.Email,
+			DisplayName:  creds.DisplayName,
+			AvatarFileID: creds.AvatarFileID,
+			Status:       creds.Status,
 		},
 		PasswordHash: creds.PasswordHash,
 	}, nil
@@ -114,11 +117,12 @@ func (a *authIdentityAdapter) GetByID(ctx context.Context, userID uuid.UUID) (au
 		return auth.User{}, err
 	}
 	return auth.User{
-		ID:          u.ID,
-		Username:    u.Username,
-		Email:       u.Email,
-		DisplayName: u.DisplayName,
-		Status:      u.Status,
+		ID:           u.ID,
+		Username:     u.Username,
+		Email:        u.Email,
+		DisplayName:  u.DisplayName,
+		AvatarFileID: u.AvatarFileID,
+		Status:       u.Status,
 	}, nil
 }
 
@@ -237,18 +241,103 @@ func toIdentityRoleRefs(in []access.RoleRef) []identity.RoleRef {
 	return out
 }
 
-// identitySessionAdapter bridges auth.Service into identity.SessionRevoker using late binding to break construction order cycles.
+// identitySessionAdapter bridges auth.Service into identity.SessionManager using late binding to break construction order cycles.
 type identitySessionAdapter struct {
 	svc *auth.Service
 }
 
-var _ identity.SessionRevoker = (*identitySessionAdapter)(nil)
+var _ identity.SessionManager = (*identitySessionAdapter)(nil)
 
 func (a *identitySessionAdapter) RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) error {
 	if a.svc == nil {
-		return nil
+		return apperr.Internal(errors.New("identity session adapter: auth service not initialized"))
 	}
 	return a.svc.RevokeAllUserSessions(ctx, userID)
+}
+
+func (a *identitySessionAdapter) ListActiveUserSessions(ctx context.Context, userID uuid.UUID) ([]identity.UserSession, error) {
+	if a.svc == nil {
+		return nil, apperr.Internal(errors.New("identity session adapter: auth service not initialized"))
+	}
+	sessions, err := a.svc.ListActiveUserSessions(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]identity.UserSession, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, identity.UserSession{
+			ID:         s.ID,
+			IPAddress:  s.IPAddress,
+			UserAgent:  s.UserAgent,
+			LastUsedAt: s.LastUsedAt,
+			CreatedAt:  s.CreatedAt,
+			ExpiresAt:  s.ExpiresAt,
+		})
+	}
+	return out, nil
+}
+
+func (a *identitySessionAdapter) IsSessionActive(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	if a.svc == nil {
+		return false, apperr.Internal(errors.New("identity session adapter: auth service not initialized"))
+	}
+	return a.svc.IsSessionActive(ctx, userID, sessionID)
+}
+
+func (a *identitySessionAdapter) LockActiveSessionForShare(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	if a.svc == nil {
+		return false, apperr.Internal(errors.New("identity session adapter: auth service not initialized"))
+	}
+	return a.svc.LockActiveSessionForShare(ctx, userID, sessionID)
+}
+
+func (a *identitySessionAdapter) RevokeUserSession(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	if a.svc == nil {
+		return false, apperr.Internal(errors.New("identity session adapter: auth service not initialized"))
+	}
+	return a.svc.RevokeUserSession(ctx, userID, sessionID)
+}
+
+func (a *identitySessionAdapter) RevokeOtherUserSessions(ctx context.Context, userID, keepSessionID uuid.UUID) (int64, error) {
+	if a.svc == nil {
+		return 0, apperr.Internal(errors.New("identity session adapter: auth service not initialized"))
+	}
+	return a.svc.RevokeOtherUserSessions(ctx, userID, keepSessionID)
+}
+
+// identityFilesAdapter bridges files.Service into identity.AvatarFileManager using late binding.
+type identityFilesAdapter struct {
+	svc *files.Service
+}
+
+var _ identity.AvatarFileManager = (*identityFilesAdapter)(nil)
+
+func (a *identityFilesAdapter) ValidateAndLockAvatarFile(ctx context.Context, fileID, ownerID uuid.UUID) error {
+	if a.svc == nil {
+		return apperr.Internal(errors.New("identity files adapter: files service not initialized"))
+	}
+	return a.svc.ValidateAndLockAvatarFile(ctx, fileID, ownerID)
+}
+
+func (a *identityFilesAdapter) SignAvatarURL(ctx context.Context, fileID uuid.UUID) (string, error) {
+	if a.svc == nil {
+		return "", apperr.Internal(errors.New("identity files adapter: files service not initialized"))
+	}
+	return a.svc.SignAvatarURL(ctx, fileID)
+}
+
+// authAvatarSignerAdapter bridges files.Service into auth.AvatarURLSigner.
+type authAvatarSignerAdapter struct {
+	svc *files.Service
+}
+
+var _ auth.AvatarURLSigner = (*authAvatarSignerAdapter)(nil)
+
+func (a *authAvatarSignerAdapter) SignAvatarURL(ctx context.Context, fileID uuid.UUID) (string, error) {
+	if a.svc == nil {
+		return "", apperr.Internal(errors.New("auth avatar signer adapter: files service not initialized"))
+	}
+	return a.svc.SignAvatarURL(ctx, fileID)
 }
 
 // identityAuditAdapter bridges audit.Service into identity.AuditRecorder.

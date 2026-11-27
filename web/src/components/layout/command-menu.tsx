@@ -1,6 +1,16 @@
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRight, Laptop, Moon, Sun } from 'lucide-react'
+import {
+  ArrowRight,
+  KeyRound,
+  Laptop,
+  MonitorSmartphone,
+  Moon,
+  Palette,
+  Sun,
+  UserCog,
+} from 'lucide-react'
 import { useSearch } from '@/context/search-provider'
 import { useTheme } from '@/context/theme-provider'
 import {
@@ -20,6 +30,7 @@ type CommandMenuProps = {
 }
 
 export function CommandMenu({ navGroups }: CommandMenuProps) {
+  const { t } = useTranslation('common')
   const navigate = useNavigate()
   const { setTheme } = useTheme()
   const { open, setOpen } = useSearch()
@@ -34,10 +45,10 @@ export function CommandMenu({ navGroups }: CommandMenuProps) {
 
   return (
     <CommandDialog modal open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder='Type a command or search...' />
+      <CommandInput placeholder={t('command.placeholder')} />
       <CommandList>
         <ScrollArea type='hover' className='h-72 pe-1'>
-          <CommandEmpty>No results found.</CommandEmpty>
+          <CommandEmpty>{t('command.noResults')}</CommandEmpty>
           {navGroups.map((group) => (
             <CommandGroup key={group.title} heading={group.title}>
               {group.items.map((navItem, i) => {
@@ -76,17 +87,54 @@ export function CommandMenu({ navGroups }: CommandMenuProps) {
             </CommandGroup>
           ))}
           <CommandSeparator />
-          <CommandGroup heading='Theme'>
+          <CommandGroup heading={t('nav.settings')}>
+            <CommandItem
+              value={`${t('nav.settings')} ${t('nav.profile')}`}
+              onSelect={() => runCommand(() => navigate({ to: '/settings' }))}
+            >
+              <UserCog />
+              <span>{t('nav.profile')}</span>
+            </CommandItem>
+            <CommandItem
+              value={`${t('nav.settings')} ${t('nav.security')}`}
+              onSelect={() =>
+                runCommand(() => navigate({ to: '/settings/security' }))
+              }
+            >
+              <KeyRound />
+              <span>{t('nav.security')}</span>
+            </CommandItem>
+            <CommandItem
+              value={`${t('nav.settings')} ${t('nav.sessions')}`}
+              onSelect={() =>
+                runCommand(() => navigate({ to: '/settings/sessions' }))
+              }
+            >
+              <MonitorSmartphone />
+              <span>{t('nav.sessions')}</span>
+            </CommandItem>
+            <CommandItem
+              value={`${t('nav.settings')} ${t('nav.appearance')}`}
+              onSelect={() =>
+                runCommand(() => navigate({ to: '/settings/appearance' }))
+              }
+            >
+              <Palette />
+              <span>{t('nav.appearance')}</span>
+            </CommandItem>
+          </CommandGroup>
+          <CommandSeparator />
+          <CommandGroup heading={t('command.theme')}>
             <CommandItem onSelect={() => runCommand(() => setTheme('light'))}>
-              <Sun /> <span>Light</span>
+              <Sun /> <span>{t('command.light')}</span>
             </CommandItem>
             <CommandItem onSelect={() => runCommand(() => setTheme('dark'))}>
               <Moon className='scale-90' />
-              <span>Dark</span>
+              <span>{t('command.dark')}</span>
             </CommandItem>
             <CommandItem onSelect={() => runCommand(() => setTheme('system'))}>
               <Laptop />
-              <span>System</span>
+              <span>{t('command.system')}</span>
             </CommandItem>
           </CommandGroup>
         </ScrollArea>

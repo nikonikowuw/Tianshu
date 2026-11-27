@@ -149,20 +149,21 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateU
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, username, email, display_name, status, created_at, updated_at
+SELECT id, username, email, display_name, avatar_file_id, status, created_at, updated_at
 FROM users
 WHERE id = $1
   AND deleted_at IS NULL
 `
 
 type GetUserByIDRow struct {
-	ID          uuid.UUID
-	Username    string
-	Email       string
-	DisplayName string
-	Status      string
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
+	ID           uuid.UUID
+	Username     string
+	Email        string
+	DisplayName  string
+	AvatarFileID uuid.NullUUID
+	Status       string
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow, error) {
@@ -173,6 +174,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow
 		&i.Username,
 		&i.Email,
 		&i.DisplayName,
+		&i.AvatarFileID,
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -186,6 +188,7 @@ SELECT
     username,
     email,
     display_name,
+    avatar_file_id,
     status,
     last_login_at,
     created_by,
@@ -199,16 +202,17 @@ FOR UPDATE
 `
 
 type GetUserByIDForUpdateRow struct {
-	ID          uuid.UUID
-	Username    string
-	Email       string
-	DisplayName string
-	Status      string
-	LastLoginAt pgtype.Timestamptz
-	CreatedBy   uuid.NullUUID
-	UpdatedBy   uuid.NullUUID
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
+	ID           uuid.UUID
+	Username     string
+	Email        string
+	DisplayName  string
+	AvatarFileID uuid.NullUUID
+	Status       string
+	LastLoginAt  pgtype.Timestamptz
+	CreatedBy    uuid.NullUUID
+	UpdatedBy    uuid.NullUUID
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 func (q *Queries) GetUserByIDForUpdate(ctx context.Context, id uuid.UUID) (GetUserByIDForUpdateRow, error) {
@@ -219,6 +223,7 @@ func (q *Queries) GetUserByIDForUpdate(ctx context.Context, id uuid.UUID) (GetUs
 		&i.Username,
 		&i.Email,
 		&i.DisplayName,
+		&i.AvatarFileID,
 		&i.Status,
 		&i.LastLoginAt,
 		&i.CreatedBy,
@@ -235,6 +240,7 @@ SELECT
     u.username,
     u.email,
     u.display_name,
+    u.avatar_file_id,
     u.status,
     u.last_login_at,
     u.created_by,
@@ -255,6 +261,7 @@ type GetUserDetailByIDRow struct {
 	Username          string
 	Email             string
 	DisplayName       string
+	AvatarFileID      uuid.NullUUID
 	Status            string
 	LastLoginAt       pgtype.Timestamptz
 	CreatedBy         uuid.NullUUID
@@ -273,6 +280,7 @@ func (q *Queries) GetUserDetailByID(ctx context.Context, id uuid.UUID) (GetUserD
 		&i.Username,
 		&i.Email,
 		&i.DisplayName,
+		&i.AvatarFileID,
 		&i.Status,
 		&i.LastLoginAt,
 		&i.CreatedBy,
@@ -286,7 +294,7 @@ func (q *Queries) GetUserDetailByID(ctx context.Context, id uuid.UUID) (GetUserD
 }
 
 const getUserForAuthByIdentifier = `-- name: GetUserForAuthByIdentifier :one
-SELECT id, username, email, password_hash, display_name, status
+SELECT id, username, email, password_hash, display_name, avatar_file_id, status
 FROM users
 WHERE deleted_at IS NULL
   AND (lower(username) = $1 OR lower(email) = $1)
@@ -299,6 +307,7 @@ type GetUserForAuthByIdentifierRow struct {
 	Email        string
 	PasswordHash string
 	DisplayName  string
+	AvatarFileID uuid.NullUUID
 	Status       string
 }
 
@@ -311,7 +320,61 @@ func (q *Queries) GetUserForAuthByIdentifier(ctx context.Context, username strin
 		&i.Email,
 		&i.PasswordHash,
 		&i.DisplayName,
+		&i.AvatarFileID,
 		&i.Status,
+	)
+	return i, err
+}
+
+const getUserPasswordHashByID = `-- name: GetUserPasswordHashByID :one
+SELECT id, username, status, password_hash
+FROM users
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+type GetUserPasswordHashByIDRow struct {
+	ID           uuid.UUID
+	Username     string
+	Status       string
+	PasswordHash string
+}
+
+func (q *Queries) GetUserPasswordHashByID(ctx context.Context, id uuid.UUID) (GetUserPasswordHashByIDRow, error) {
+	row := q.db.QueryRow(ctx, getUserPasswordHashByID, id)
+	var i GetUserPasswordHashByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Status,
+		&i.PasswordHash,
+	)
+	return i, err
+}
+
+const getUserPasswordHashByIDForUpdate = `-- name: GetUserPasswordHashByIDForUpdate :one
+SELECT id, username, status, password_hash
+FROM users
+WHERE id = $1
+  AND deleted_at IS NULL
+FOR UPDATE
+`
+
+type GetUserPasswordHashByIDForUpdateRow struct {
+	ID           uuid.UUID
+	Username     string
+	Status       string
+	PasswordHash string
+}
+
+func (q *Queries) GetUserPasswordHashByIDForUpdate(ctx context.Context, id uuid.UUID) (GetUserPasswordHashByIDForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getUserPasswordHashByIDForUpdate, id)
+	var i GetUserPasswordHashByIDForUpdateRow
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Status,
+		&i.PasswordHash,
 	)
 	return i, err
 }
@@ -472,6 +535,59 @@ type SoftDeleteUserParams struct {
 func (q *Queries) SoftDeleteUser(ctx context.Context, arg SoftDeleteUserParams) error {
 	_, err := q.db.Exec(ctx, softDeleteUser, arg.ID, arg.UpdatedBy)
 	return err
+}
+
+const updateOwnPasswordHash = `-- name: UpdateOwnPasswordHash :exec
+UPDATE users
+SET password_hash = $2,
+    updated_by = $3,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+type UpdateOwnPasswordHashParams struct {
+	ID           uuid.UUID
+	PasswordHash string
+	UpdatedBy    uuid.NullUUID
+}
+
+func (q *Queries) UpdateOwnPasswordHash(ctx context.Context, arg UpdateOwnPasswordHashParams) error {
+	_, err := q.db.Exec(ctx, updateOwnPasswordHash, arg.ID, arg.PasswordHash, arg.UpdatedBy)
+	return err
+}
+
+const updateOwnProfile = `-- name: UpdateOwnProfile :one
+UPDATE users
+SET email = $2,
+    display_name = $3,
+    avatar_file_id = $4,
+    updated_by = $5,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id
+`
+
+type UpdateOwnProfileParams struct {
+	ID           uuid.UUID
+	Email        string
+	DisplayName  string
+	AvatarFileID uuid.NullUUID
+	UpdatedBy    uuid.NullUUID
+}
+
+func (q *Queries) UpdateOwnProfile(ctx context.Context, arg UpdateOwnProfileParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, updateOwnProfile,
+		arg.ID,
+		arg.Email,
+		arg.DisplayName,
+		arg.AvatarFileID,
+		arg.UpdatedBy,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const updateUserLastLogin = `-- name: UpdateUserLastLogin :exec

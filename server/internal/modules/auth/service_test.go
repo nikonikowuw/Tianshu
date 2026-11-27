@@ -132,6 +132,87 @@ func (f *fakeAuthStore) RevokeAllUserSessions(_ context.Context, userID uuid.UUI
 	return nil
 }
 
+func (f *fakeAuthStore) ListActiveUserSessions(_ context.Context, userID uuid.UUID) ([]ActiveSession, error) {
+	now := f.now().UTC()
+	out := make([]ActiveSession, 0)
+	for _, s := range f.sessions {
+		if s.UserID == userID && s.RevokedAt == nil && s.ExpiresAt.After(now) {
+			out = append(out, ActiveSession{
+				ID:         s.ID,
+				IPAddress:  s.IPAddress,
+				UserAgent:  s.UserAgent,
+				LastUsedAt: s.LastUsedAt,
+				CreatedAt:  s.CreatedAt,
+				ExpiresAt:  s.ExpiresAt,
+			})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeAuthStore) IsUserSessionActive(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	now := f.now().UTC()
+	s, ok := f.sessions[sessionID]
+	return ok && s.UserID == userID && s.RevokedAt == nil && s.ExpiresAt.After(now), nil
+}
+
+func (f *fakeAuthStore) LockActiveUserSessionForShare(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	return f.IsUserSessionActive(ctx, userID, sessionID)
+}
+
+func (f *fakeAuthStore) RevokeUserSessionByID(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	now := f.now().UTC()
+	s, ok := f.sessions[sessionID]
+	if !ok || s.UserID != userID || s.RevokedAt != nil || !s.ExpiresAt.After(now) {
+		return false, nil
+	}
+	s.RevokedAt = &now
+	f.sessions[sessionID] = s
+	return true, nil
+}
+
+func (f *fakeAuthStore) RevokeOtherUserSessions(_ context.Context, userID, keepSessionID uuid.UUID) (int64, error) {
+	now := f.now().UTC()
+	var count int64
+	for id, s := range f.sessions {
+		if s.UserID == userID && s.ID != keepSessionID && s.RevokedAt == nil && s.ExpiresAt.After(now) {
+			t := now
+			s.RevokedAt = &t
+			f.sessions[id] = s
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (f *fakeAuthStore) DeleteExpiredRefreshTokenHistoryBatch(_ context.Context, cutoff time.Time, limit int32) (int64, error) {
+	var deleted int64
+	for k, h := range f.history {
+		if deleted >= int64(limit) {
+			break
+		}
+		if h.ExpiresAt.Before(cutoff) {
+			delete(f.history, k)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func (f *fakeAuthStore) DeleteExpiredUserSessionsBatch(_ context.Context, cutoff time.Time, limit int32) (int64, error) {
+	var deleted int64
+	for id, s := range f.sessions {
+		if deleted >= int64(limit) {
+			break
+		}
+		if s.ExpiresAt.Before(cutoff) {
+			delete(f.sessions, id)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
 type fakeIdentityProvider struct {
 	users map[uuid.UUID]UserCredentials
 }
@@ -262,17 +343,19 @@ func newTestAuthHarnessWithAudit(t *testing.T) (*Service, *fakeAuthStore, *fakeI
 			RefreshTokenTTL: 7 * 24 * time.Hour,
 		},
 		st,
-		idProvider,
-		&fakeAccessProvider{access: UserAccess{
-			Roles:       []string{"super_admin"},
-			Permissions: []string{"dashboard:read", "users:read"},
-		}},
-		hasher,
-		jwtMgr,
-		fakeTx{st: st},
-		mem,
-		auditRec,
-		logger.New("test", "error", io.Discard),
+		ServiceDeps{
+			Identity: idProvider,
+			Access: &fakeAccessProvider{access: UserAccess{
+				Roles:       []string{"super_admin"},
+				Permissions: []string{"dashboard:read", "users:read"},
+			}},
+			Hasher: hasher,
+			JWT:    jwtMgr,
+			Tx:     fakeTx{st: st},
+			Cache:  mem,
+			Audit:  auditRec,
+			Log:    logger.New("test", "error", io.Discard),
+		},
 	)
 	svc.now = nowFn
 	return svc, st, idProvider, &now, auditRec
@@ -478,5 +561,150 @@ func TestAuthLocalesComplete(t *testing.T) {
 	}
 	if err := bundle.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+type fakeAvatarSigner struct {
+	urls map[uuid.UUID]string
+	err  error
+}
+
+func (f fakeAvatarSigner) SignAvatarURL(_ context.Context, fileID uuid.UUID) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.urls[fileID], nil
+}
+
+func TestActiveSessionsRevokePurgeAndAvatarURL(t *testing.T) {
+	svc, st, idProv, clock := newTestAuthHarness(t)
+
+	var adminID uuid.UUID
+	avatarID := uuid.Must(uuid.NewV7())
+	for id, u := range idProv.users {
+		adminID = id
+		u.User.AvatarFileID = &avatarID
+		idProv.users[id] = u
+	}
+	svc.avatarSigner = fakeAvatarSigner{
+		urls: map[uuid.UUID]string{
+			avatarID: "/api/v1/files/signed/avatar-token",
+		},
+	}
+
+	login1, err := svc.Login(t.Context(), LoginInput{
+		Identifier: "admin",
+		Password:   "correct-password-123",
+		ClientIP:   "10.0.0.1",
+		UserAgent:  "BrowserA/1.0",
+	})
+	if err != nil {
+		t.Fatalf("Login(1) error = %v", err)
+	}
+	if login1.User.AvatarURL == nil || *login1.User.AvatarURL != "/api/v1/files/signed/avatar-token" {
+		t.Fatalf("Login(1) AvatarURL = %v, want signed URL", login1.User.AvatarURL)
+	}
+	claims1, err := svc.JWTManager().Verify(login1.AccessToken)
+	if err != nil {
+		t.Fatalf("Verify(1): %v", err)
+	}
+
+	meRes, err := svc.Me(t.Context(), adminID)
+	if err != nil {
+		t.Fatalf("Me() error = %v", err)
+	}
+	if meRes.User.AvatarURL == nil || *meRes.User.AvatarURL != "/api/v1/files/signed/avatar-token" {
+		t.Fatalf("Me() AvatarURL = %v, want signed URL", meRes.User.AvatarURL)
+	}
+
+	login2, err := svc.Login(t.Context(), LoginInput{
+		Identifier: "admin",
+		Password:   "correct-password-123",
+		ClientIP:   "10.0.0.2",
+		UserAgent:  "BrowserB/2.0",
+	})
+	if err != nil {
+		t.Fatalf("Login(2) error = %v", err)
+	}
+	claims2, err := svc.JWTManager().Verify(login2.AccessToken)
+	if err != nil {
+		t.Fatalf("Verify(2): %v", err)
+	}
+
+	login3, err := svc.Login(t.Context(), LoginInput{
+		Identifier: "admin",
+		Password:   "correct-password-123",
+		ClientIP:   "10.0.0.3",
+		UserAgent:  "BrowserC/3.0",
+	})
+	if err != nil {
+		t.Fatalf("Login(3) error = %v", err)
+	}
+
+	sessions, err := svc.ListActiveUserSessions(t.Context(), adminID)
+	if err != nil {
+		t.Fatalf("ListActiveUserSessions: %v", err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("active sessions = %d, want 3", len(sessions))
+	}
+
+	// Cross-user revocation must return false and leave session untouched.
+	ok, err := svc.RevokeUserSession(t.Context(), uuid.Must(uuid.NewV7()), claims2.SessionID)
+	if err != nil || ok {
+		t.Fatalf("cross-user RevokeUserSession = (%v, %v), want (false, nil)", ok, err)
+	}
+
+	// Revoking session 2 immediately invalidates session 2 refresh token.
+	ok, err = svc.RevokeUserSession(t.Context(), adminID, claims2.SessionID)
+	if err != nil || !ok {
+		t.Fatalf("RevokeUserSession(2) = (%v, %v), want (true, nil)", ok, err)
+	}
+	if _, err := svc.Refresh(t.Context(), RefreshInput{RefreshToken: login2.RefreshToken}); err == nil {
+		t.Fatal("expected revoked session 2 refresh to fail")
+	}
+
+	// RevokeOtherUserSessions keeps session 1 and revokes session 3.
+	revokedOthers, err := svc.RevokeOtherUserSessions(t.Context(), adminID, claims1.SessionID)
+	if err != nil || revokedOthers != 1 {
+		t.Fatalf("RevokeOtherUserSessions = (%d, %v), want (1, nil)", revokedOthers, err)
+	}
+	if _, err := svc.Refresh(t.Context(), RefreshInput{RefreshToken: login3.RefreshToken}); err == nil {
+		t.Fatal("expected session 3 refresh to fail after RevokeOtherUserSessions")
+	}
+	if _, err := svc.Refresh(t.Context(), RefreshInput{RefreshToken: login1.RefreshToken}); err != nil {
+		t.Fatalf("expected session 1 refresh to stay valid, got %v", err)
+	}
+
+	// PurgeExpiredSessions removes only records expired past retention.
+	expiredID := uuid.Must(uuid.NewV7())
+	st.sessions[expiredID] = sessionRecord{
+		ID:               expiredID,
+		UserID:           adminID,
+		RefreshTokenHash: "old-hash",
+		ExpiresAt:        clock.Add(-10 * 24 * time.Hour),
+		CreatedAt:        clock.Add(-17 * 24 * time.Hour),
+		LastUsedAt:       clock.Add(-17 * 24 * time.Hour),
+	}
+	st.history["old-hist-hash"] = refreshHistoryRecord{
+		TokenHash:  "old-hist-hash",
+		SessionID:  expiredID,
+		ReplacedAt: clock.Add(-11 * 24 * time.Hour),
+		ExpiresAt:  clock.Add(-10 * 24 * time.Hour),
+	}
+	// Retention <= 0 disables cleanup without deleting any rows.
+	if deleted, err := svc.PurgeExpiredSessions(t.Context(), 0); err != nil || deleted != 0 {
+		t.Fatalf("PurgeExpiredSessions(0) = (%d, %v), want (0, nil)", deleted, err)
+	}
+	if _, exists := st.sessions[expiredID]; !exists {
+		t.Fatal("expected expired session to remain when retention is 0")
+	}
+
+	deleted, err := svc.PurgeExpiredSessions(t.Context(), 7*24*time.Hour)
+	if err != nil || deleted != 2 {
+		t.Fatalf("PurgeExpiredSessions = (%d, %v), want (2, nil)", deleted, err)
+	}
+	if _, exists := st.sessions[expiredID]; exists {
+		t.Fatal("expected expired session to be purged")
 	}
 }
