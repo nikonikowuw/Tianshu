@@ -112,7 +112,7 @@
 - 列：`id`、`actor_id`、`actor_username`、`action`、`resource`、`resource_id`、`status`、`ip_address`、`user_agent`、`request_id`、`metadata jsonb not null default '{}'`、`created_at`。
 - `actor_id` 可空；不要 `ON DELETE CASCADE`。建议 `ON DELETE SET NULL` 或干脆无 FK，保留 `actor_username` 快照。
 - `resource_id` 用 `text`，兼容 UUID/外部 key。
-- 索引：`idx_audit_logs_created_at`（DESC）、`idx_audit_logs_actor_id_created_at`、`idx_audit_logs_action_created_at`、`idx_audit_logs_resource`、`idx_audit_logs_request_id`。
+- 索引：`idx_audit_logs_created_at_id`（`(created_at DESC, id DESC)`，支撑默认倒序/正序分页与保留期清理无额外排序索引扫描）、`idx_audit_logs_actor_id_created_at`、`idx_audit_logs_action_created_at`、`idx_audit_logs_resource`、`idx_audit_logs_request_id`。
 - 只允许 INSERT/SELECT；不提供 UPDATE/DELETE API。清理按保留策略走 janitor，不走业务接口。
 - metadata 禁止写入密码、token、Cookie、密钥；写入前 redact。
 
@@ -153,7 +153,7 @@
 - `role_permissions`：`permission_code`。
 - `user_sessions`：`user_id`、`expires_at`、`revoked_at`。
 - `refresh_token_history`：`session_id`、`expires_at`。
-- `audit_logs`：`created_at DESC`、`actor_id + created_at`、`action + created_at`、`resource + resource_id`、`request_id`。
+- `audit_logs`：`(created_at DESC, id DESC)`、`actor_id + created_at`、`action + created_at`、`resource + resource_id`、`request_id`。
 - `files`：`uploader_id + created_at`、`sha256`、`status`。
 
 - 搜索字段（用户名/邮箱/文件名）按查询模式加 `pg_trgm`/全文索引；不要对所有列盲目加索引。
@@ -180,6 +180,6 @@
 ## 9. 清理与保留
 
 - `user_sessions` / `refresh_token_history`：默认保留过期后 **7 天**（`auth.session_retention_days`，`0` 表示不自动清理），由 janitor 按批次（5000 行）删除 `expires_at < now() - retention` 的记录；已吊销但尚未超过保留期的会话继续保留至过期后，以保持刷新令牌重放检测覆盖完整生命周期。
-- `audit_logs`：默认保留 **180 天**（`audit.retention_days`，`0` 表示不自动清理），MVP 由 janitor 按批次（如 5000 行）删除；MVP 不分区，单表达千万级或按月归档时再迁移为按 `created_at` 月分区。
+- `audit_logs`：默认保留 **180 天**（`audit.retention_days`，`0` 表示不自动清理），MVP 由 janitor 按批次（如 5000 行）经 `FOR UPDATE SKIP LOCKED` 无锁竞争删除；MVP 不分区，单表达千万级或按月归档时再迁移为按 `created_at` 月分区。
 - `files`：清理 `pending` 超时记录与孤儿对象；删除失败进入补偿队列/重试。
 - 软删除表：查询默认排除 `deleted_at is not null`；`users` 唯一索引采用 `WHERE deleted_at IS NULL` 部分唯一索引，其余软删除表按业务场景明确是否排除已删除行。

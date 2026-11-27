@@ -247,3 +247,217 @@ func TestAuditPostgresIntegration(t *testing.T) {
 		t.Fatalf("remaining after purge = %+v, want only alice_admin", remaining)
 	}
 }
+
+func TestAuditHotPathTieBreakerAndSkipLockedPurge(t *testing.T) {
+	pool := openIsolatedTestPool(t)
+	svc := audit.NewService(pool)
+
+	// 1. Verify migration 00005 replaced idx_audit_logs_created_at with idx_audit_logs_created_at_id.
+	var hasComposite, hasLegacy bool
+	if err := pool.QueryRow(t.Context(), `
+		SELECT
+			EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'audit_logs' AND indexname = 'idx_audit_logs_created_at_id'),
+			EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'audit_logs' AND indexname = 'idx_audit_logs_created_at')
+	`).Scan(&hasComposite, &hasLegacy); err != nil {
+		t.Fatalf("inspect pg_indexes: %v", err)
+	}
+	if !hasComposite || hasLegacy {
+		t.Fatalf("audit_logs indexes: hasComposite=%v hasLegacy=%v, want true/false", hasComposite, hasLegacy)
+	}
+
+	// Verify hot-path query uses idx_audit_logs_created_at_id with zero Sort node.
+	explainTx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin explain tx: %v", err)
+	}
+	defer func() { _ = explainTx.Rollback(t.Context()) }()
+	if _, err := explainTx.Exec(t.Context(), "SET LOCAL enable_seqscan = off"); err != nil {
+		t.Fatalf("disable seqscan for explain: %v", err)
+	}
+	planRows, err := explainTx.Query(t.Context(), "EXPLAIN SELECT id FROM audit_logs ORDER BY created_at DESC, id DESC LIMIT 20 OFFSET 0")
+	if err != nil {
+		t.Fatalf("explain hot-path query: %v", err)
+	}
+	var planLines []string
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			planRows.Close()
+			t.Fatalf("scan explain line: %v", err)
+		}
+		planLines = append(planLines, line)
+	}
+	planRows.Close()
+	if err := planRows.Err(); err != nil {
+		t.Fatalf("explain rows err: %v", err)
+	}
+	plan := strings.Join(planLines, "\n")
+	if !strings.Contains(plan, "idx_audit_logs_created_at_id") || strings.Contains(plan, "Sort") {
+		t.Fatalf("expected zero-sort index scan on idx_audit_logs_created_at_id, got plan:\n%s", plan)
+	}
+	_ = explainTx.Rollback(t.Context())
+
+	// 2. Seed deterministic rows:
+	//    - idOld1, idOld2: expired (>180 days ago) for SKIP LOCKED concurrency verification
+	//    - idTieLow, idTieHigh: identical action & created_at to verify deterministic tie-breaker
+	//    - idNewest: most recent row
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	idOld1 := uuid.MustParse("01900000-0000-7000-8000-000000000001")
+	idOld2 := uuid.MustParse("01900000-0000-7000-8000-000000000002")
+	idTieLow := uuid.MustParse("01900000-0000-7000-8000-000000000010")
+	idTieHigh := uuid.MustParse("01900000-0000-7000-8000-000000000011")
+	idNewest := uuid.MustParse("01900000-0000-7000-8000-000000000020")
+
+	tOld1 := now.AddDate(0, 0, -201)
+	tOld2 := now.AddDate(0, 0, -200)
+	tTie := now.Add(-2 * time.Hour)
+	tNewest := now.Add(-1 * time.Hour)
+
+	seedRows := []struct {
+		id        uuid.UUID
+		action    string
+		createdAt time.Time
+	}{
+		{idOld1, "auth.login", tOld1},
+		{idOld2, "auth.login", tOld2},
+		{idTieLow, "role.update", tTie},
+		{idTieHigh, "role.update", tTie},
+		{idNewest, "user.create", tNewest},
+	}
+	for _, r := range seedRows {
+		if _, err := pool.Exec(t.Context(), `
+			INSERT INTO audit_logs (id, actor_username, action, resource, status, created_at)
+			VALUES ($1, 'tester', $2, 'system', 'success', $3)
+		`, r.id, r.action, r.createdAt); err != nil {
+			t.Fatalf("seed row %s: %v", r.id, err)
+		}
+	}
+
+	assertAuditIDs := func(t *testing.T, label string, got pagination.Result[audit.Entry], want []uuid.UUID) {
+		t.Helper()
+		if got.Total != int64(len(want)) || len(got.Items) != len(want) {
+			t.Fatalf("%s: total=%d len=%d, want %d", label, got.Total, len(got.Items), len(want))
+		}
+		for i, wantID := range want {
+			if got.Items[i].ID != wantID {
+				t.Fatalf("%s[%d] = %s, want %s", label, i, got.Items[i].ID, wantID)
+			}
+		}
+	}
+
+	// 3. Verify unfiltered hot-path DESC & ASC ordering (including identical created_at UUID tie-breaker).
+	descRes, err := svc.List(t.Context(), audit.ListFilter{
+		Pagination: pagination.Params{Page: 1, PageSize: 20},
+		Sort:       audit.SortCreatedAt,
+		Order:      audit.OrderDesc,
+	})
+	if err != nil {
+		t.Fatalf("List(unfiltered DESC) error = %v", err)
+	}
+	assertAuditIDs(t, "unfiltered DESC", descRes, []uuid.UUID{idNewest, idTieHigh, idTieLow, idOld2, idOld1})
+
+	ascRes, err := svc.List(t.Context(), audit.ListFilter{
+		Pagination: pagination.Params{Page: 1, PageSize: 20},
+		Sort:       audit.SortCreatedAt,
+		Order:      audit.OrderAsc,
+	})
+	if err != nil {
+		t.Fatalf("List(unfiltered ASC) error = %v", err)
+	}
+	assertAuditIDs(t, "unfiltered ASC", ascRes, []uuid.UUID{idOld1, idOld2, idTieLow, idTieHigh, idNewest})
+
+	// 4. Verify time-range-only hot-path (both DESC and ASC) and single-bound fallback.
+	fromWindow := tTie.Add(-time.Minute)
+	toWindow := tNewest.Add(time.Minute)
+	rangeDesc, err := svc.List(t.Context(), audit.ListFilter{
+		Pagination: pagination.Params{Page: 1, PageSize: 20},
+		From:       &fromWindow,
+		To:         &toWindow,
+		Sort:       audit.SortCreatedAt,
+		Order:      audit.OrderDesc,
+	})
+	if err != nil {
+		t.Fatalf("List(timeRange DESC) error = %v", err)
+	}
+	assertAuditIDs(t, "timeRange DESC", rangeDesc, []uuid.UUID{idNewest, idTieHigh, idTieLow})
+
+	rangeAsc, err := svc.List(t.Context(), audit.ListFilter{
+		Pagination: pagination.Params{Page: 1, PageSize: 20},
+		From:       &fromWindow,
+		To:         &toWindow,
+		Sort:       audit.SortCreatedAt,
+		Order:      audit.OrderAsc,
+	})
+	if err != nil {
+		t.Fatalf("List(timeRange ASC) error = %v", err)
+	}
+	assertAuditIDs(t, "timeRange ASC", rangeAsc, []uuid.UUID{idTieLow, idTieHigh, idNewest})
+
+	fromOnlyRes, err := svc.List(t.Context(), audit.ListFilter{
+		Pagination: pagination.Params{Page: 1, PageSize: 20},
+		From:       &fromWindow,
+	})
+	if err != nil {
+		t.Fatalf("List(from-only) error = %v", err)
+	}
+	assertAuditIDs(t, "from-only DESC", fromOnlyRes, []uuid.UUID{idNewest, idTieHigh, idTieLow})
+
+	// 5. Verify general ListAuditLogs tie-breaker for BOTH created_at ASC (id ASC) and
+	//    non-created_at sorts (action ASC / action DESC -> created_at DESC, id DESC).
+	generalCreatedAsc, err := svc.List(t.Context(), audit.ListFilter{
+		Pagination: pagination.Params{Page: 1, PageSize: 20},
+		Actions:    []string{"role.update"},
+		Sort:       audit.SortCreatedAt,
+		Order:      audit.OrderAsc,
+	})
+	if err != nil {
+		t.Fatalf("List(general created_at ASC) error = %v", err)
+	}
+	assertAuditIDs(t, "general created_at ASC", generalCreatedAsc, []uuid.UUID{idTieLow, idTieHigh})
+
+	for _, order := range []string{audit.OrderAsc, audit.OrderDesc} {
+		byAction, err := svc.List(t.Context(), audit.ListFilter{
+			Pagination: pagination.Params{Page: 1, PageSize: 20},
+			Actions:    []string{"role.update"},
+			Sort:       audit.SortAction,
+			Order:      order,
+		})
+		if err != nil {
+			t.Fatalf("List(action %s) error = %v", order, err)
+		}
+		assertAuditIDs(t, "general action "+order, byAction, []uuid.UUID{idTieHigh, idTieLow})
+	}
+
+	// 6. Verify FOR UPDATE SKIP LOCKED skips rows locked by another transaction instead of blocking.
+	lockTx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin lock tx: %v", err)
+	}
+	defer func() { _ = lockTx.Rollback(t.Context()) }()
+	var lockedID uuid.UUID
+	if err := lockTx.QueryRow(t.Context(), "SELECT id FROM audit_logs WHERE id = $1 FOR UPDATE", idOld1).Scan(&lockedID); err != nil {
+		t.Fatalf("lock oldest expired row: %v", err)
+	}
+
+	purgeCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	deletedWhileLocked, err := svc.PurgeExpired(purgeCtx, 180)
+	if err != nil {
+		t.Fatalf("PurgeExpired(while locked) error = %v", err)
+	}
+	if deletedWhileLocked != 1 {
+		t.Fatalf("PurgeExpired(while locked) deleted = %d, want 1 (skipping locked idOld1)", deletedWhileLocked)
+	}
+
+	if err := lockTx.Rollback(t.Context()); err != nil {
+		t.Fatalf("rollback lock tx: %v", err)
+	}
+
+	deletedAfterUnlock, err := svc.PurgeExpired(t.Context(), 180)
+	if err != nil {
+		t.Fatalf("PurgeExpired(after unlock) error = %v", err)
+	}
+	if deletedAfterUnlock != 1 {
+		t.Fatalf("PurgeExpired(after unlock) deleted = %d, want 1 (now-unlocked idOld1)", deletedAfterUnlock)
+	}
+}

@@ -65,15 +65,49 @@ func (q *Queries) CountAuditLogs(ctx context.Context, arg CountAuditLogsParams) 
 	return column_1, err
 }
 
+const countAuditLogsAll = `-- name: CountAuditLogsAll :one
+SELECT count(*)::bigint
+FROM audit_logs
+`
+
+func (q *Queries) CountAuditLogsAll(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditLogsAll)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countAuditLogsByTimeRange = `-- name: CountAuditLogsByTimeRange :one
+SELECT count(*)::bigint
+FROM audit_logs
+WHERE created_at >= $1::timestamptz
+  AND created_at <= $2::timestamptz
+`
+
+type CountAuditLogsByTimeRangeParams struct {
+	FromAt pgtype.Timestamptz
+	ToAt   pgtype.Timestamptz
+}
+
+func (q *Queries) CountAuditLogsByTimeRange(ctx context.Context, arg CountAuditLogsByTimeRangeParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditLogsByTimeRange, arg.FromAt, arg.ToAt)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const deleteExpiredAuditLogsBatch = `-- name: DeleteExpiredAuditLogsBatch :execrows
-DELETE FROM audit_logs
-WHERE id IN (
+WITH batch AS (
     SELECT al.id
     FROM audit_logs AS al
     WHERE al.created_at < $1
     ORDER BY al.created_at ASC, al.id ASC
     LIMIT $2
+    FOR UPDATE SKIP LOCKED
 )
+DELETE FROM audit_logs AS target
+USING batch
+WHERE target.id = batch.id
 `
 
 type DeleteExpiredAuditLogsBatchParams struct {
@@ -177,8 +211,8 @@ ORDER BY
     CASE WHEN $12::text = 'resource' AND $13::text = 'desc' THEN resource END DESC,
     CASE WHEN $12::text = 'status' AND $13::text = 'asc' THEN status END ASC,
     CASE WHEN $12::text = 'status' AND $13::text = 'desc' THEN status END DESC,
+    CASE WHEN $12::text = 'created_at' AND $13::text = 'asc' THEN id END ASC,
     created_at DESC,
-    CASE WHEN $13::text = 'asc' THEN id END ASC,
     id DESC
 LIMIT $15 OFFSET $14
 `
@@ -219,6 +253,252 @@ func (q *Queries) ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([
 		arg.PageOffset,
 		arg.PageLimit,
 	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActorID,
+			&i.ActorUsername,
+			&i.Action,
+			&i.Resource,
+			&i.ResourceID,
+			&i.Status,
+			&i.IpAddress,
+			&i.UserAgent,
+			&i.RequestID,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogsByTimeRangeOldest = `-- name: ListAuditLogsByTimeRangeOldest :many
+SELECT
+    id,
+    actor_id,
+    actor_username,
+    action,
+    resource,
+    resource_id,
+    status,
+    ip_address,
+    user_agent,
+    request_id,
+    metadata,
+    created_at
+FROM audit_logs
+WHERE created_at >= $1::timestamptz
+  AND created_at <= $2::timestamptz
+ORDER BY created_at ASC, id ASC
+LIMIT $4 OFFSET $3
+`
+
+type ListAuditLogsByTimeRangeOldestParams struct {
+	FromAt     pgtype.Timestamptz
+	ToAt       pgtype.Timestamptz
+	PageOffset int32
+	PageLimit  int32
+}
+
+func (q *Queries) ListAuditLogsByTimeRangeOldest(ctx context.Context, arg ListAuditLogsByTimeRangeOldestParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditLogsByTimeRangeOldest,
+		arg.FromAt,
+		arg.ToAt,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActorID,
+			&i.ActorUsername,
+			&i.Action,
+			&i.Resource,
+			&i.ResourceID,
+			&i.Status,
+			&i.IpAddress,
+			&i.UserAgent,
+			&i.RequestID,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogsByTimeRangeRecent = `-- name: ListAuditLogsByTimeRangeRecent :many
+SELECT
+    id,
+    actor_id,
+    actor_username,
+    action,
+    resource,
+    resource_id,
+    status,
+    ip_address,
+    user_agent,
+    request_id,
+    metadata,
+    created_at
+FROM audit_logs
+WHERE created_at >= $1::timestamptz
+  AND created_at <= $2::timestamptz
+ORDER BY created_at DESC, id DESC
+LIMIT $4 OFFSET $3
+`
+
+type ListAuditLogsByTimeRangeRecentParams struct {
+	FromAt     pgtype.Timestamptz
+	ToAt       pgtype.Timestamptz
+	PageOffset int32
+	PageLimit  int32
+}
+
+func (q *Queries) ListAuditLogsByTimeRangeRecent(ctx context.Context, arg ListAuditLogsByTimeRangeRecentParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditLogsByTimeRangeRecent,
+		arg.FromAt,
+		arg.ToAt,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActorID,
+			&i.ActorUsername,
+			&i.Action,
+			&i.Resource,
+			&i.ResourceID,
+			&i.Status,
+			&i.IpAddress,
+			&i.UserAgent,
+			&i.RequestID,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogsOldest = `-- name: ListAuditLogsOldest :many
+SELECT
+    id,
+    actor_id,
+    actor_username,
+    action,
+    resource,
+    resource_id,
+    status,
+    ip_address,
+    user_agent,
+    request_id,
+    metadata,
+    created_at
+FROM audit_logs
+ORDER BY created_at ASC, id ASC
+LIMIT $2 OFFSET $1
+`
+
+type ListAuditLogsOldestParams struct {
+	PageOffset int32
+	PageLimit  int32
+}
+
+func (q *Queries) ListAuditLogsOldest(ctx context.Context, arg ListAuditLogsOldestParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditLogsOldest, arg.PageOffset, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActorID,
+			&i.ActorUsername,
+			&i.Action,
+			&i.Resource,
+			&i.ResourceID,
+			&i.Status,
+			&i.IpAddress,
+			&i.UserAgent,
+			&i.RequestID,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditLogsRecent = `-- name: ListAuditLogsRecent :many
+SELECT
+    id,
+    actor_id,
+    actor_username,
+    action,
+    resource,
+    resource_id,
+    status,
+    ip_address,
+    user_agent,
+    request_id,
+    metadata,
+    created_at
+FROM audit_logs
+ORDER BY created_at DESC, id DESC
+LIMIT $2 OFFSET $1
+`
+
+type ListAuditLogsRecentParams struct {
+	PageOffset int32
+	PageLimit  int32
+}
+
+func (q *Queries) ListAuditLogsRecent(ctx context.Context, arg ListAuditLogsRecentParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditLogsRecent, arg.PageOffset, arg.PageLimit)
 	if err != nil {
 		return nil, err
 	}

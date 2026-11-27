@@ -62,11 +62,24 @@ func (s *pgStore) InsertAuditLog(ctx context.Context, entry Entry) error {
 }
 
 func (s *pgStore) CountAuditLogs(ctx context.Context, filter ListFilter) (int64, error) {
+	q := s.queries(ctx)
+	if !hasSecondaryFilters(filter) {
+		if filter.From == nil && filter.To == nil {
+			return q.CountAuditLogsAll(ctx)
+		}
+		if filter.From != nil && filter.To != nil {
+			return q.CountAuditLogsByTimeRange(ctx, dbgen.CountAuditLogsByTimeRangeParams{
+				FromAt: pgtype.Timestamptz{Time: filter.From.UTC(), Valid: true},
+				ToAt:   pgtype.Timestamptz{Time: filter.To.UTC(), Valid: true},
+			})
+		}
+	}
+
 	actorID, hasActorID := resolveActorUUID(filter.ActorID)
 	fromAt, hasFrom := resolveTimestamp(filter.From)
 	toAt, hasTo := resolveTimestamp(filter.To)
 
-	return s.queries(ctx).CountAuditLogs(ctx, dbgen.CountAuditLogsParams{
+	return q.CountAuditLogs(ctx, dbgen.CountAuditLogsParams{
 		Q:          escapeILIKE(filter.Q),
 		Actor:      escapeILIKE(filter.Actor),
 		HasActorID: hasActorID,
@@ -82,11 +95,19 @@ func (s *pgStore) CountAuditLogs(ctx context.Context, filter ListFilter) (int64,
 }
 
 func (s *pgStore) ListAuditLogs(ctx context.Context, filter ListFilter) ([]Entry, error) {
+	q := s.queries(ctx)
+	if rows, handled, err := listAuditLogsHotPath(ctx, q, filter); handled {
+		if err != nil {
+			return nil, err
+		}
+		return mapAuditLogRows(rows), nil
+	}
+
 	actorID, hasActorID := resolveActorUUID(filter.ActorID)
 	fromAt, hasFrom := resolveTimestamp(filter.From)
 	toAt, hasTo := resolveTimestamp(filter.To)
 
-	rows, err := s.queries(ctx).ListAuditLogs(ctx, dbgen.ListAuditLogsParams{
+	rows, err := q.ListAuditLogs(ctx, dbgen.ListAuditLogsParams{
 		Q:          escapeILIKE(filter.Q),
 		Actor:      escapeILIKE(filter.Actor),
 		HasActorID: hasActorID,
@@ -107,11 +128,70 @@ func (s *pgStore) ListAuditLogs(ctx context.Context, filter ListFilter) ([]Entry
 		return nil, err
 	}
 
+	return mapAuditLogRows(rows), nil
+}
+
+func listAuditLogsHotPath(ctx context.Context, q *dbgen.Queries, filter ListFilter) ([]dbgen.AuditLog, bool, error) {
+	if hasSecondaryFilters(filter) || filter.Sort != SortCreatedAt {
+		return nil, false, nil
+	}
+	limit := filter.Pagination.Limit()
+	offset := filter.Pagination.Offset()
+
+	if filter.From == nil && filter.To == nil {
+		if filter.Order == OrderAsc {
+			rows, err := q.ListAuditLogsOldest(ctx, dbgen.ListAuditLogsOldestParams{
+				PageLimit:  limit,
+				PageOffset: offset,
+			})
+			return rows, true, err
+		}
+		rows, err := q.ListAuditLogsRecent(ctx, dbgen.ListAuditLogsRecentParams{
+			PageLimit:  limit,
+			PageOffset: offset,
+		})
+		return rows, true, err
+	}
+
+	if filter.From != nil && filter.To != nil {
+		fromTS := pgtype.Timestamptz{Time: filter.From.UTC(), Valid: true}
+		toTS := pgtype.Timestamptz{Time: filter.To.UTC(), Valid: true}
+		if filter.Order == OrderAsc {
+			rows, err := q.ListAuditLogsByTimeRangeOldest(ctx, dbgen.ListAuditLogsByTimeRangeOldestParams{
+				FromAt:     fromTS,
+				ToAt:       toTS,
+				PageLimit:  limit,
+				PageOffset: offset,
+			})
+			return rows, true, err
+		}
+		rows, err := q.ListAuditLogsByTimeRangeRecent(ctx, dbgen.ListAuditLogsByTimeRangeRecentParams{
+			FromAt:     fromTS,
+			ToAt:       toTS,
+			PageLimit:  limit,
+			PageOffset: offset,
+		})
+		return rows, true, err
+	}
+
+	return nil, false, nil
+}
+
+func hasSecondaryFilters(filter ListFilter) bool {
+	return filter.Q != "" ||
+		filter.Actor != "" ||
+		filter.ActorID != nil ||
+		len(filter.Actions) > 0 ||
+		len(filter.Resources) > 0 ||
+		len(filter.Statuses) > 0
+}
+
+func mapAuditLogRows(rows []dbgen.AuditLog) []Entry {
 	items := make([]Entry, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, mapAuditLogRow(row))
 	}
-	return items, nil
+	return items
 }
 
 func (s *pgStore) DeleteExpiredBatch(ctx context.Context, cutoff time.Time, limit int32) (int64, error) {
