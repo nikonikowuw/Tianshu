@@ -13,7 +13,7 @@ func (h *Handler) RegisterPublicRoutes(rg *gin.RouterGroup) {
 	g := rg.Group("/auth")
 	g.POST("/login",
 		httpserver.RateLimitMiddleware(httpserver.RateLimitConfig{
-			Limit:  5,
+			Limit:  h.service.LoginRateLimit(),
 			Window: time.Minute,
 		}),
 		h.login,

@@ -1,0 +1,90 @@
+{
+  "title": "仪表盘",
+  "description": "实时掌握账号规模、权限角色、文件存储与近期安全活动趋势。",
+  "updatedAt": "实时 · {{time}}",
+  "rangeLabel": "统计时间范围",
+  "rangeDays": "近 {{days}} 天",
+  "refresh": "刷新",
+  "kpi": {
+    "manage": "管理",
+    "manageModule": "管理{{module}}",
+    "viewSessions": "会话",
+    "users": {
+      "title": "用户总数",
+      "newLast7Days": "近 7 天 +{{count}}",
+      "activeRate": "活跃率 {{percent}}%",
+      "breakdown": "{{active}} 正常 · {{disabled}} 禁用"
+    },
+    "roles": {
+      "title": "角色数量",
+      "unit": "个角色",
+      "customRatio": "{{count}} 自定义",
+      "breakdown": "{{system}} 系统内置 · {{custom}} 自定义"
+    },
+    "files": {
+      "title": "文件存储",
+      "unit": "个就绪文件",
+      "breakdown": "{{images}} 图片 · {{documents}} 文档"
+    },
+    "sessions": {
+      "title": "活跃会话",
+      "unit": "台在线",
+      "failuresBadge": "{{count}} 次失败",
+      "healthyBadge": "运行正常",
+      "auditRatioLabel": "{{success}} 条成功 · {{failures}} 条失败审计事件",
+      "breakdown": "近 {{days}} 天 {{logins}} 次登录"
+    }
+  },
+  "trend": {
+    "title": "操作与登录趋势",
+    "description": "近 {{days}} 天共记录 {{total}} 条审计事件（按 UTC 日统计）",
+    "seriesFilterLabel": "筛选趋势维度",
+    "tabs": {
+      "all": "全部事件"
+    },
+    "emptyTitle": "当前时间窗口暂无活动",
+    "emptyDesc": "近 {{days}} 天内产生的登录与管理操作将自动汇总展示于此。",
+    "series": {
+      "logins": "成功登录",
+      "operations": "管理操作",
+      "failures": "失败事件"
+    }
+  },
+  "recent": {
+    "title": "近期审计动态",
+    "description": "最新记录的登录与关键写操作轨迹",
+    "viewAll": "查看全部",
+    "anonymous": "匿名 / 系统",
+    "statusSuccess": "成功",
+    "statusFailure": "失败",
+    "emptyTitle": "暂无近期动态",
+    "emptyDesc": "系统初始化、登录或管理操作产生后将自动展示于此。"
+  },
+  "actions": {
+    "setupInit": "完成了系统初始化",
+    "authLogin": "登录了系统",
+    "authLogout": "退出了登录",
+    "authRefresh": "刷新了访问令牌",
+    "authRefreshReplay": "触发了令牌重放告警",
+    "userCreate": "创建了用户",
+    "userUpdate": "更新了用户",
+    "userDelete": "删除了用户",
+    "roleCreate": "创建了角色",
+    "roleUpdate": "更新了角色",
+    "roleDelete": "删除了角色",
+    "menuCreate": "新增了菜单",
+    "menuUpdate": "更新了菜单",
+    "menuReorder": "调整了菜单排序",
+    "menuDelete": "删除了菜单",
+    "fileUpload": "上传了文件",
+    "fileUploadAvatar": "上传了头像",
+    "fileDelete": "删除了文件",
+    "profileUpdate": "更新了个人资料",
+    "profileChangePassword": "修改了登录密码",
+    "profileSessionRevoke": "下线了活跃会话",
+    "profileSessionsRevokeOthers": "下线了其他全部会话"
+  },
+  "error": {
+    "loadFailed": "加载仪表盘数据失败"
+  }
+}

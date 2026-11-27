@@ -71,6 +71,12 @@ func (a *App) registerRoutes() {
 				RequireDelete: access.RequirePermission(a.access, access.PermFilesDelete),
 			})
 		}
+		if a.dashboardHandler != nil && a.access != nil {
+			a.dashboardHandler.RegisterRoutes(
+				authedV1,
+				access.RequirePermission(a.access, access.PermDashboardRead),
+			)
+		}
 	}
 
 	spaHandler := webui.Handler()

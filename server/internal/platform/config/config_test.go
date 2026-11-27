@@ -153,3 +153,33 @@ func TestAuthSessionRetentionValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestAuthLoginRateLimitConfig(t *testing.T) {
+	t.Run("rejects non-positive login_rate_limit", func(t *testing.T) {
+		for _, limit := range []int{-1, 0} {
+			cfg := config.Default()
+			cfg.Auth.LoginRateLimit = limit
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("expected validation error for auth.login_rate_limit=%d", limit)
+			}
+		}
+	})
+
+	t.Run("supports env override for positive login_rate_limit", func(t *testing.T) {
+		t.Setenv("TIANSHU_AUTH__LOGIN_RATE_LIMIT", "30")
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.Auth.LoginRateLimit != 30 {
+			t.Fatalf("Auth.LoginRateLimit = %d, want 30", cfg.Auth.LoginRateLimit)
+		}
+	})
+
+	t.Run("rejects zero login_rate_limit via env override", func(t *testing.T) {
+		t.Setenv("TIANSHU_AUTH__LOGIN_RATE_LIMIT", "0")
+		if _, err := config.Load(); err == nil {
+			t.Fatal("expected Load() validation error for TIANSHU_AUTH__LOGIN_RATE_LIMIT=0")
+		}
+	})
+}

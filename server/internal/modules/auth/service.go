@@ -98,6 +98,14 @@ func (s *Service) CookieSecure() bool {
 	return s.cfg.CookieSecure
 }
 
+// LoginRateLimit returns the per-IP per-minute login rate limit (defaults to 5).
+func (s *Service) LoginRateLimit() int {
+	if s.cfg.LoginRateLimit < 1 {
+		return 5
+	}
+	return s.cfg.LoginRateLimit
+}
+
 // Login authenticates a user by username or email, enforces soft cooldown, creates a session, and issues tokens.
 func (s *Service) Login(ctx context.Context, input LoginInput) (LoginResult, error) {
 	identifier := strings.ToLower(strings.TrimSpace(input.Identifier))

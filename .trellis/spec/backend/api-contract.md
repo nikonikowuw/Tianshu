@@ -262,7 +262,20 @@
 - `DELETE /api/v1/profile/sessions/:id`：吊销指定活跃会话（仅限本人）；目标为当前会话返 `409 PROFILE_CURRENT_SESSION_REVOKE_FORBIDDEN`；不存在/已失效/非本人返 `404 PROFILE_SESSION_NOT_FOUND`；写 `profile.session_revoke` 审计；返回 `204`。
 - `DELETE /api/v1/profile/sessions`：一键吊销除当前会话外的所有其他活跃会话，实际吊销 `N > 0` 条时写 `profile.sessions_revoke_others` 审计，返回 `200 { "revokedSessions": N }`。
 
-## 15. 暂不纳入 v1
+## 15. Dashboard 端点契约
+
+- `GET /api/v1/dashboard/summary`（`dashboard:read`）：只读聚合系统核心统计与近期动态，支持可选查询参数 `days`（默认 `7`，白名单 `7` / `14` / `30`；非法值返 `422 VALIDATION_FAILED` + 字段错误 `days: DASHBOARD_INVALID_DAYS`）。
+- 响应 `200`（裸 DTO，无信封）：
+  - `generatedAt`（RFC3339 UTC）、`rangeDays`（`7` / `14` / `30`）；
+  - `users`：`{ total, active, disabled, newLast7Days }`（均排除软删除用户）；
+  - `roles`：`{ total, system, custom }`；
+  - `files`：`{ total, totalSizeBytes, images, documents }`（仅统计 `status = 'ready'`，按 `image/%` 区分图片与文档）；
+  - `sessions`：`{ active }`（未吊销、未过期且所属用户未删除且为 `active`）；
+  - `audit`：`{ totalInRange, loginsInRange, failuresInRange }`；
+  - `activityTrend`：按 UTC 日期升序连续补零的 `rangeDays` 项 `[{ date, logins, operations, failures }]`（`logins` 为成功登录、`operations` 为非登录成功操作、`failures` 为失败事件，三者互斥无重复计数）；
+  - `recentActivity`：最新 8 条脱敏审计摘要 `[{ id, actorUsername, action, resource, resourceId, status, ipAddress, createdAt }]`（不暴露 `metadata` 与 `userAgent`，空切片序列化为 `[]`）。
+
+## 16. 暂不纳入 v1
 
 - 通用 `Idempotency-Key` 重放表：Setup 用数据库咨询锁/唯一约束保证幂等；文件上传用 SHA-256 去重作为后续增强。
 - GraphQL、gRPC 对外接口、批量导入接口。

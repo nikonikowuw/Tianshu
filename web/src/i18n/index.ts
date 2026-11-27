@@ -3,6 +3,7 @@ import { initReactI18next } from 'react-i18next'
 import enAudit from './locales/en-US/audit.json'
 import enAuth from './locales/en-US/auth.json'
 import enCommon from './locales/en-US/common.json'
+import enDashboard from './locales/en-US/dashboard.json'
 import enErrors from './locales/en-US/errors.json'
 import enFiles from './locales/en-US/files.json'
 import enMenus from './locales/en-US/menus.json'
@@ -13,6 +14,7 @@ import enValidation from './locales/en-US/validation.json'
 import zhAudit from './locales/zh-CN/audit.json'
 import zhAuth from './locales/zh-CN/auth.json'
 import zhCommon from './locales/zh-CN/common.json'
+import zhDashboard from './locales/zh-CN/dashboard.json'
 import zhErrors from './locales/zh-CN/errors.json'
 import zhFiles from './locales/zh-CN/files.json'
 import zhMenus from './locales/zh-CN/menus.json'
@@ -49,6 +51,7 @@ void i18n.use(initReactI18next).init({
   ns: [
     'common',
     'auth',
+    'dashboard',
     'audit',
     'roles',
     'users',
@@ -62,6 +65,7 @@ void i18n.use(initReactI18next).init({
     'zh-CN': {
       common: zhCommon,
       auth: zhAuth,
+      dashboard: zhDashboard,
       audit: zhAudit,
       roles: zhRoles,
       users: zhUsers,
@@ -74,6 +78,7 @@ void i18n.use(initReactI18next).init({
     'en-US': {
       common: enCommon,
       auth: enAuth,
+      dashboard: enDashboard,
       audit: enAudit,
       roles: enRoles,
       users: enUsers,

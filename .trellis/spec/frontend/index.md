@@ -2,7 +2,7 @@
 
 适用范围：`web/`（Vite + React 19 + TypeScript + TanStack Router/Query/Table + Tailwind CSS v4 + shadcn/ui + Zustand）。
 
-当前已完成 `web/` 基础框架底座、`/setup` 首次初始化向导、`/sign-in` 完整登录鉴权闭环（含路由守卫、内存 Access Token、单飞静默刷新与跨标签登出）、`/users` 用户管理页、`/roles` 角色与权限矩阵页、`/menus` 动态菜单树管理页、`/audit-logs` 审计日志只读检索页、`/files` 文件上传与存储管理页（拖拽队列上传、服务端驱动 `DataTable`、图片短时签名预览 `Sheet` 与删除确认）以及 `/settings` 个人中心与系统设置（个人资料与头像上传/移除、改密与他端下线、活跃设备会话管理、外观/布局/双语偏好）；仪表盘统计页将随 `dashboard` 后端模块接入。具体页面字段与业务功能归属 [docs/prd/prd.md](../../../docs/prd/prd.md)；后端 HTTP、安全与单二进制 embed 契约见 [backend/index.md](../backend/index.md)。
+当前已完成 `web/` 基础框架底座、`/setup` 首次初始化向导、`/sign-in` 完整登录鉴权闭环（含路由守卫、内存 Access Token、单飞静默刷新与跨标签登出）、`/` 仪表盘概览页（实时 KPI 统计卡片、Recharts 7/14/30 天活动趋势图、近期审计动态与按权限控制的快捷入口）、`/users` 用户管理页、`/roles` 角色与权限矩阵页、`/menus` 动态菜单树管理页、`/audit-logs` 审计日志只读检索页、`/files` 文件上传与存储管理页（拖拽队列上传、服务端驱动 `DataTable`、图片短时签名预览 `Sheet` 与删除确认）以及 `/settings` 个人中心与系统设置（个人资料与头像上传/移除、改密与他端下线、活跃设备会话管理、外观/布局/双语偏好）。具体页面字段与业务功能归属 [docs/prd/prd.md](../../../docs/prd/prd.md)；后端 HTTP、安全与单二进制 embed 契约见 [backend/index.md](../backend/index.md)。
 
 | 文档                                     | 内容                                                                       | 何时读                              |
 | ---------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------- |

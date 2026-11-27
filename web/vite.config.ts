@@ -65,6 +65,7 @@ export default defineConfig({
       'react-day-picker',
       'react-hook-form',
       'react-i18next',
+      'recharts',
       'sonner',
       'zod',
     ],
