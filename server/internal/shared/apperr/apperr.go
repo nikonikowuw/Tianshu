@@ -1,8 +1,11 @@
 package apperr
 
 import (
+	"cmp"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
 )
 
 // Common baseline error codes shared across modules and HTTP middleware.
@@ -40,6 +43,9 @@ func (e *Error) Error() string {
 		return ""
 	}
 	if e.Cause != nil {
+		if e.Code == "" {
+			return e.Cause.Error()
+		}
 		return e.Code + ": " + e.Cause.Error()
 	}
 	return e.Code
@@ -72,8 +78,12 @@ func Wrap(status int, code string, cause error) *Error {
 
 // WithParams attaches template parameters used by the i18n renderer.
 func (e *Error) WithParams(params map[string]any) *Error {
+	if e == nil {
+		return nil
+	}
 	clone := *e
-	clone.Params = params
+	clone.Params = maps.Clone(params)
+	clone.Fields = slices.Clone(e.Fields)
 	return &clone
 }
 
@@ -85,15 +95,33 @@ func BadRequest(code string, cause error) *Error {
 	return Wrap(http.StatusBadRequest, code, cause)
 }
 
-// Validation creates a 422 error carrying field-level validation issues.
+// Validation creates a 422 error carrying field-level validation issues sorted and deduplicated by field.
 func Validation(fields []FieldError) *Error {
-	copied := make([]FieldError, len(fields))
-	copy(copied, fields)
 	return &Error{
 		Status: http.StatusUnprocessableEntity,
 		Code:   CodeValidationFailed,
-		Fields: copied,
+		Fields: normalizeFieldErrors(fields),
 	}
+}
+
+func normalizeFieldErrors(in []FieldError) []FieldError {
+	if len(in) == 0 {
+		return nil
+	}
+	byField := make(map[string]FieldError, len(in))
+	for _, fe := range in {
+		if _, exists := byField[fe.Field]; !exists {
+			byField[fe.Field] = fe
+		}
+	}
+	out := make([]FieldError, 0, len(byField))
+	for _, fe := range byField {
+		out = append(out, fe)
+	}
+	slices.SortFunc(out, func(a, b FieldError) int {
+		return cmp.Compare(a.Field, b.Field)
+	})
+	return out
 }
 
 // Unauthorized creates a 401 authentication error.
@@ -128,6 +156,14 @@ func Conflict(code string) *Error {
 	return New(http.StatusConflict, code)
 }
 
+// TooLarge creates a 413 payload-too-large error.
+func TooLarge(code string) *Error {
+	if code == "" {
+		code = CodeTooLarge
+	}
+	return New(http.StatusRequestEntityTooLarge, code)
+}
+
 // RateLimited creates a 429 rate-limit error.
 func RateLimited() *Error {
 	return New(http.StatusTooManyRequests, CodeRateLimited)
@@ -138,10 +174,18 @@ func Internal(cause error) *Error {
 	return Wrap(http.StatusInternalServerError, CodeInternal, cause)
 }
 
-// As extracts *apperr.Error from any error chain.
+// Unavailable creates a 503 service-unavailable error wrapping an optional cause.
+func Unavailable(code string, cause error) *Error {
+	if code == "" {
+		code = CodeUnavailable
+	}
+	return Wrap(http.StatusServiceUnavailable, code, cause)
+}
+
+// As extracts a non-nil *apperr.Error from any error chain.
 func As(err error) (*Error, bool) {
 	var target *Error
-	if errors.As(err, &target) {
+	if errors.As(err, &target) && target != nil {
 		return target, true
 	}
 	return nil, false

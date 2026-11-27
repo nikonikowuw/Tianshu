@@ -155,7 +155,7 @@ func (s *Service) CreateInitialAdmin(ctx context.Context, input CreateInitialAdm
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "password", Message: ErrCodeInvalidPassword})
 	}
 	if len(fieldErrs) > 0 {
-		return User{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return User{}, apperr.Validation(fieldErrs)
 	}
 
 	hash, err := s.hasher.Hash(input.Password)
@@ -673,7 +673,7 @@ func (s *Service) GetProfile(ctx context.Context, userID, currentSessionID uuid.
 func (s *Service) UpdateProfile(ctx context.Context, input UpdateProfileInput) (Profile, error) {
 	nextEmail, nextDisplay, fieldErrs := validateOptionalEmailAndDisplay(input.Email, input.DisplayName)
 	if len(fieldErrs) > 0 {
-		return Profile{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return Profile{}, apperr.Validation(fieldErrs)
 	}
 
 	var updated UserDetail
@@ -993,7 +993,7 @@ func (s *Service) validateCreateUserInput(ctx context.Context, input CreateUserI
 	}
 
 	if len(fieldErrs) > 0 {
-		return validatedCreateUser{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return validatedCreateUser{}, apperr.Validation(fieldErrs)
 	}
 	return validatedCreateUser{
 		username:    username,
@@ -1055,7 +1055,7 @@ func (s *Service) validateUpdateUserInput(ctx context.Context, input UpdateUserI
 	}
 
 	if len(fieldErrs) > 0 {
-		return validatedUpdateUser{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return validatedUpdateUser{}, apperr.Validation(fieldErrs)
 	}
 	return validatedUpdateUser{
 		email:       nextEmail,
@@ -1300,7 +1300,7 @@ func validateChangePasswordInput(input ChangePasswordInput) error {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "newPassword", Message: ErrCodeInvalidPassword})
 	}
 	if len(fieldErrs) > 0 {
-		return apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return apperr.Validation(fieldErrs)
 	}
 	return nil
 }
@@ -1692,22 +1692,5 @@ func dedupeUUIDs(in []uuid.UUID) []uuid.UUID {
 			out = append(out, id)
 		}
 	}
-	return out
-}
-
-func sortAndDedupeFieldErrors(in []apperr.FieldError) []apperr.FieldError {
-	byField := make(map[string]apperr.FieldError, len(in))
-	for _, fe := range in {
-		if _, exists := byField[fe.Field]; !exists {
-			byField[fe.Field] = fe
-		}
-	}
-	out := make([]apperr.FieldError, 0, len(byField))
-	for _, fe := range byField {
-		out = append(out, fe)
-	}
-	slices.SortFunc(out, func(a, b apperr.FieldError) int {
-		return cmp.Compare(a.Field, b.Field)
-	})
 	return out
 }

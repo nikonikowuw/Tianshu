@@ -1,8 +1,6 @@
 package files
 
 import (
-	"net/http"
-
 	"tianshu/internal/shared/apperr"
 )
 
@@ -35,7 +33,7 @@ func errFileTypeNotAllowed() *apperr.Error {
 }
 
 func errFileTooLarge() *apperr.Error {
-	return apperr.New(http.StatusRequestEntityTooLarge, ErrCodeTooLarge)
+	return apperr.TooLarge(ErrCodeTooLarge)
 }
 
 func errEmptyFile() *apperr.Error {
@@ -55,7 +53,7 @@ func errInvalidSignedURL() *apperr.Error {
 }
 
 func errStorageUnavailable(cause error) *apperr.Error {
-	return apperr.Wrap(http.StatusServiceUnavailable, ErrCodeStorageUnavailable, cause)
+	return apperr.Unavailable(ErrCodeStorageUnavailable, cause)
 }
 
 func errMissingFile() *apperr.Error {

@@ -184,7 +184,7 @@ func (h *Handler) createSignedURL(c *gin.Context) {
 		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
-				_ = c.Error(apperr.New(http.StatusRequestEntityTooLarge, apperr.CodeTooLarge))
+				_ = c.Error(apperr.TooLarge(apperr.CodeTooLarge))
 				return
 			}
 			_ = c.Error(err)

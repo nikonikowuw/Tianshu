@@ -127,7 +127,7 @@ func bindListUsersRequest(c *gin.Context) (UserListFilter, error) {
 	}
 
 	if len(fieldErrs) > 0 {
-		return UserListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return UserListFilter{}, apperr.Validation(fieldErrs)
 	}
 
 	return UserListFilter{

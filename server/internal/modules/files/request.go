@@ -1,8 +1,6 @@
 package files
 
 import (
-	"cmp"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -50,7 +48,7 @@ func parseListFilter(c *gin.Context) (ListFilter, error) {
 	normalized, filterErrs := validateAndNormalizeFilterFields(raw)
 	fieldErrs = append(fieldErrs, filterErrs...)
 	if len(fieldErrs) > 0 {
-		return ListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return ListFilter{}, apperr.Validation(fieldErrs)
 	}
 	return normalized, nil
 }
@@ -161,22 +159,5 @@ func normalizeMultiValues(rawValues []string) []string {
 		seen[norm] = struct{}{}
 		out = append(out, norm)
 	}
-	return out
-}
-
-func sortAndDedupeFieldErrors(in []apperr.FieldError) []apperr.FieldError {
-	byField := make(map[string]apperr.FieldError, len(in))
-	for _, fe := range in {
-		if _, exists := byField[fe.Field]; !exists {
-			byField[fe.Field] = fe
-		}
-	}
-	out := make([]apperr.FieldError, 0, len(byField))
-	for _, fe := range byField {
-		out = append(out, fe)
-	}
-	slices.SortFunc(out, func(a, b apperr.FieldError) int {
-		return cmp.Compare(a.Field, b.Field)
-	})
 	return out
 }

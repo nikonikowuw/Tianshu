@@ -91,6 +91,7 @@
 
 | code                        | HTTP | 说明                           |
 | --------------------------- | ---- | ------------------------------ |
+| `BAD_REQUEST`               | 400  | 请求格式无效或无法解析         |
 | `VALIDATION_FAILED`         | 422  | 字段校验失败                   |
 | `AUTH_UNAUTHORIZED`         | 401  | 未登录或认证凭证无效           |
 | `AUTH_INVALID_CREDENTIALS`  | 401  | 用户名/邮箱或密码错误          |
@@ -99,6 +100,9 @@
 | `AUTH_ORIGIN_REJECTED`      | 403  | Cookie 认证端点请求来源不在允许范围内 |
 | `AUTH_TOKEN_EXPIRED`        | 401  | Access Token 过期              |
 | `AUTH_REFRESH_REUSED`       | 401  | Refresh Token 重放，会话已吊销 |
+| `RESOURCE_NOT_FOUND`        | 404  | 请求的资源不存在               |
+| `RESOURCE_CONFLICT`         | 409  | 资源状态或唯一性冲突           |
+| `PAYLOAD_TOO_LARGE`         | 413  | 上传或请求体超过大小限制       |
 | `SETUP_ALREADY_INITIALIZED` | 409  | Setup 已完成                   |
 | `USERS_EMAIL_CONFLICT`           | 409  | 邮箱冲突                       |
 | `USERS_USERNAME_CONFLICT`        | 409  | 用户名冲突                     |
@@ -134,6 +138,7 @@
 | `FILES_STORAGE_UNAVAILABLE` | 503  | 对应存储驱动当前未配置/不可用  |
 | `RATE_LIMITED`              | 429  | 限流                           |
 | `INTERNAL_ERROR`            | 500  | 未预期错误                     |
+| `SERVICE_UNAVAILABLE`       | 503  | 服务暂不可用                   |
 
 错误码一旦发布不得改名；废弃用新码 + 迁移期兼容，不静默改变语义。
 

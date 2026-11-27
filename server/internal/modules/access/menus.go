@@ -116,7 +116,7 @@ func (s *Service) CreateMenu(ctx context.Context, input CreateMenuInput) (Menu, 
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "permissionCode", Message: ErrCodeInvalidPermissionCode})
 	}
 	if len(fieldErrs) > 0 {
-		return Menu{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return Menu{}, apperr.Validation(fieldErrs)
 	}
 
 	menuID, err := uuid.NewV7()
@@ -213,7 +213,7 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 		}
 	}
 	if len(fieldErrs) > 0 {
-		return Menu{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return Menu{}, apperr.Validation(fieldErrs)
 	}
 
 	var updated Menu
