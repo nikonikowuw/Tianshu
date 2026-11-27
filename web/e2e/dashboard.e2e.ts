@@ -50,18 +50,38 @@ test('aggregates live database metrics on dashboard and enforces dashboard:read 
     const initialUsers = Number(initialUsersText.replaceAll(',', '').trim())
     expect(initialUsers).toBeGreaterThanOrEqual(1)
 
-    // Switch time range to 14d and 30d and back to 7d.
-    await page.getByTestId('dashboard-range-14').click()
+    // Switch time range to 14d and 30d (verifying live backend 200 responses) and back to 7d.
+    await Promise.all([
+      page.waitForResponse(
+        (res) =>
+          res.url().includes('/api/v1/dashboard/summary') &&
+          res.url().includes('days=14') &&
+          res.status() === 200
+      ),
+      page.getByTestId('dashboard-range-14').click(),
+    ])
     await expect(page.getByTestId('dashboard-range-14')).toHaveAttribute(
       'aria-pressed',
       'true'
     )
-    await page.getByTestId('dashboard-range-30').click()
+    await Promise.all([
+      page.waitForResponse(
+        (res) =>
+          res.url().includes('/api/v1/dashboard/summary') &&
+          res.url().includes('days=30') &&
+          res.status() === 200
+      ),
+      page.getByTestId('dashboard-range-30').click(),
+    ])
     await expect(page.getByTestId('dashboard-range-30')).toHaveAttribute(
       'aria-pressed',
       'true'
     )
     await page.getByTestId('dashboard-range-7').click()
+    await expect(page.getByTestId('dashboard-range-7')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
 
     // 2. Create a user without dashboard:read via the real API, then verify live count increments.
     const loginRes = await request.post('/api/v1/auth/login', {

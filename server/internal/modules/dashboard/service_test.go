@@ -156,7 +156,8 @@ func TestSummaryRangeValidationAndEmptyRecent(t *testing.T) {
 			svc := newServiceWithStore(st)
 			svc.now = func() time.Time { return fixedNow }
 
-			res, err := svc.Summary(t.Context(), SummaryInput{Days: days})
+			d := days
+			res, err := svc.Summary(t.Context(), SummaryInput{Days: &d})
 			if err != nil {
 				t.Fatalf("Summary(days=%d) error = %v", days, err)
 			}
@@ -169,10 +170,11 @@ func TestSummaryRangeValidationAndEmptyRecent(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects unsupported days with 422", func(t *testing.T) {
+	t.Run("rejects unsupported days including zero with 422", func(t *testing.T) {
 		svc := newServiceWithStore(&fakeStore{})
-		for _, days := range []int{-7, 1, 10, 15, 90} {
-			_, err := svc.Summary(t.Context(), SummaryInput{Days: days})
+		for _, days := range []int{-7, 0, 1, 10, 15, 90} {
+			d := days
+			_, err := svc.Summary(t.Context(), SummaryInput{Days: &d})
 			appErr, ok := apperr.As(err)
 			if !ok || appErr.Code != apperr.CodeValidationFailed || len(appErr.Fields) != 1 || appErr.Fields[0].Field != "days" || appErr.Fields[0].Message != ErrCodeInvalidDays {
 				t.Fatalf("Summary(days=%d) err = %v, want validation error %s on days", days, err, ErrCodeInvalidDays)
@@ -198,7 +200,8 @@ func TestSummaryPropagatesStoreErrorsAsInternal(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := newServiceWithStore(tc.store)
-			_, err := svc.Summary(t.Context(), SummaryInput{Days: 7})
+			days := 7
+			_, err := svc.Summary(t.Context(), SummaryInput{Days: &days})
 			appErr, ok := apperr.As(err)
 			if !ok || appErr.Code != apperr.CodeInternal {
 				t.Fatalf("Summary() err = %v, want INTERNAL_ERROR", err)

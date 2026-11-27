@@ -132,6 +132,9 @@ export function KpiCards({ summary }: KpiCardsProps) {
           {canReadUsers && (
             <Link
               to='/users'
+              aria-label={t('kpi.manageModule', {
+                module: t('kpi.users.title'),
+              })}
               className='inline-flex shrink-0 items-center gap-0.5 font-medium text-foreground transition-colors hover:text-primary'
             >
               {t('kpi.manage')}
@@ -193,6 +196,9 @@ export function KpiCards({ summary }: KpiCardsProps) {
           {canReadRoles && (
             <Link
               to='/roles'
+              aria-label={t('kpi.manageModule', {
+                module: t('kpi.roles.title'),
+              })}
               className='inline-flex shrink-0 items-center gap-0.5 font-medium text-foreground transition-colors hover:text-primary'
             >
               {t('kpi.manage')}
@@ -253,6 +259,9 @@ export function KpiCards({ summary }: KpiCardsProps) {
           {canReadFiles && (
             <Link
               to='/files'
+              aria-label={t('kpi.manageModule', {
+                module: t('kpi.files.title'),
+              })}
               className='inline-flex shrink-0 items-center gap-0.5 font-medium text-foreground transition-colors hover:text-primary'
             >
               {t('kpi.manage')}
@@ -307,9 +316,9 @@ export function KpiCards({ summary }: KpiCardsProps) {
             secondaryPct={failureEventsPct}
             primaryClassName='bg-success transition-all'
             secondaryClassName='bg-destructive transition-all'
-            label={t('kpi.sessions.breakdown', {
-              logins: formatCount(summary.audit.loginsInRange, locale),
-              days: summary.rangeDays,
+            label={t('kpi.sessions.auditRatioLabel', {
+              success: formatCount(successEvents, locale),
+              failures: formatCount(summary.audit.failuresInRange, locale),
             })}
           />
         </CardContent>

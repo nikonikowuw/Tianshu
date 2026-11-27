@@ -7,6 +7,7 @@
   "refresh": "Refresh",
   "kpi": {
     "manage": "Manage",
+    "manageModule": "Manage {{module}}",
     "viewSessions": "Sessions",
     "users": {
       "title": "Total Users",
@@ -30,6 +31,7 @@
       "unit": "online",
       "failuresBadge": "{{count}} failed",
       "healthyBadge": "Healthy",
+      "auditRatioLabel": "{{success}} succeeded · {{failures}} failed events",
       "breakdown": "{{logins}} sign-ins in last {{days}}d"
     }
   },

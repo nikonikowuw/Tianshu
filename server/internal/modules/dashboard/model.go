@@ -7,8 +7,9 @@ import (
 )
 
 // SummaryInput configures a dashboard summary query.
+// A nil Days means "use default (7)"; a non-nil value must match the allowed whitelist.
 type SummaryInput struct {
-	Days int
+	Days *int
 }
 
 // Summary aggregates read-only system statistics, trends, and recent activity.

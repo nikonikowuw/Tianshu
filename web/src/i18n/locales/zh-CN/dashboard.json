@@ -7,6 +7,7 @@
   "refresh": "刷新",
   "kpi": {
     "manage": "管理",
+    "manageModule": "管理{{module}}",
     "viewSessions": "会话",
     "users": {
       "title": "用户总数",
@@ -30,6 +31,7 @@
       "unit": "台在线",
       "failuresBadge": "{{count}} 次失败",
       "healthyBadge": "运行正常",
+      "auditRatioLabel": "{{success}} 条成功 · {{failures}} 条失败审计事件",
       "breakdown": "近 {{days}} 天 {{logins}} 次登录"
     }
   },

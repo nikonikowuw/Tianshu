@@ -81,11 +81,12 @@ func (q *Queries) GetRoleStats(ctx context.Context) (GetRoleStatsRow, error) {
 
 const getUserStats = `-- name: GetUserStats :one
 SELECT
-    count(*) FILTER (WHERE deleted_at IS NULL)::bigint AS total_users,
-    count(*) FILTER (WHERE deleted_at IS NULL AND status = 'active')::bigint AS active_users,
-    count(*) FILTER (WHERE deleted_at IS NULL AND status = 'disabled')::bigint AS disabled_users,
-    count(*) FILTER (WHERE deleted_at IS NULL AND created_at >= $1::timestamptz)::bigint AS new_users_last_7_days
+    count(*)::bigint AS total_users,
+    count(*) FILTER (WHERE status = 'active')::bigint AS active_users,
+    count(*) FILTER (WHERE status = 'disabled')::bigint AS disabled_users,
+    count(*) FILTER (WHERE created_at >= $1::timestamptz)::bigint AS new_users_last_7_days
 FROM users
+WHERE deleted_at IS NULL
 `
 
 type GetUserStatsRow struct {

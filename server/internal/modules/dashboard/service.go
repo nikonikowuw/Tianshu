@@ -38,9 +38,9 @@ func newServiceWithStore(st store) *Service {
 
 // Summary aggregates user, role, file, session, trend, and recent activity metrics.
 func (s *Service) Summary(ctx context.Context, input SummaryInput) (Summary, error) {
-	days := input.Days
-	if days == 0 {
-		days = defaultRangeDays
+	days := defaultRangeDays
+	if input.Days != nil {
+		days = *input.Days
 	}
 	if !isAllowedRangeDays(days) {
 		return Summary{}, invalidDaysError()

@@ -18,5 +18,5 @@ func (q summaryQuery) toInput() (SummaryInput, error) {
 	if err != nil {
 		return SummaryInput{}, invalidDaysError()
 	}
-	return SummaryInput{Days: days}, nil
+	return SummaryInput{Days: &days}, nil
 }

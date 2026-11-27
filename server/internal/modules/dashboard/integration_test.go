@@ -76,6 +76,21 @@ func TestDashboardSummaryPostgresAggregation(t *testing.T) {
 	pool := openDashboardTestPool(t)
 	ctx := t.Context()
 	now := time.Now().UTC()
+	svc := dashboard.NewService(pool)
+
+	// Verify empty database returns zero counts, non-nil empty recentActivity, and 7 zero-filled trend points.
+	emptySummary, err := svc.Summary(ctx, dashboard.SummaryInput{})
+	if err != nil {
+		t.Fatalf("Summary(empty DB) error = %v", err)
+	}
+	if emptySummary.Users.Total != 0 || emptySummary.Roles.Total != 0 ||
+		emptySummary.Files.Total != 0 || emptySummary.Files.TotalSizeBytes != 0 ||
+		emptySummary.Sessions.Active != 0 || emptySummary.Audit.TotalInRange != 0 {
+		t.Fatalf("expected all-zero summary on empty DB, got %+v", emptySummary)
+	}
+	if len(emptySummary.ActivityTrend) != 7 || emptySummary.RecentActivity == nil || len(emptySummary.RecentActivity) != 0 {
+		t.Fatalf("unexpected empty slices on empty DB: trend=%d recent=%#v", len(emptySummary.ActivityTrend), emptySummary.RecentActivity)
+	}
 
 	activeUser1 := uuid.Must(uuid.NewV7())
 	activeUser2 := uuid.Must(uuid.NewV7())
@@ -109,16 +124,18 @@ func TestDashboardSummaryPostgresAggregation(t *testing.T) {
 			($5, $6, 'local', 'general/d.png', 'd.png', 'image/png', 99999, 'sha5', 'deleting')
 	`, uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), activeUser1)
 
-	// Insert sessions: 1 valid active session, 1 revoked, 1 expired, 1 belonging to disabled user (all 3 excluded).
+	// Insert sessions: 1 valid active session, 1 revoked, 1 expired, 1 belonging to disabled user,
+	// and 1 belonging to soft-deleted active user (all 4 invalid/non-active sessions must be excluded).
 	mustExec(t, pool, `
 		INSERT INTO user_sessions (id, user_id, refresh_token_hash, expires_at, revoked_at)
 		VALUES
-			($1, $5, 'tok-active', $7, NULL),
-			($2, $5, 'tok-revoked', $7, $8),
-			($3, $5, 'tok-expired', $9, NULL),
-			($4, $6, 'tok-disabled', $7, NULL)
-	`, uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()),
-		activeUser1, disabledUser, now.Add(24*time.Hour), now.Add(-1*time.Hour), now.Add(-1*time.Hour))
+			($1, $6, 'tok-active', $9, NULL),
+			($2, $6, 'tok-revoked', $9, $10),
+			($3, $6, 'tok-expired', $11, NULL),
+			($4, $7, 'tok-disabled', $9, NULL),
+			($5, $8, 'tok-deleted', $9, NULL)
+	`, uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()),
+		activeUser1, disabledUser, deletedUser, now.Add(24*time.Hour), now.Add(-1*time.Hour), now.Add(-1*time.Hour))
 
 	// Insert 10 audit logs across today, 3 days ago, and 10 days ago to test 7d vs 14d windows & recentLimit=8.
 	today := time.Date(now.Year(), now.Month(), now.Day(), 1, 0, 0, 0, time.UTC)
@@ -150,9 +167,8 @@ func TestDashboardSummaryPostgresAggregation(t *testing.T) {
 		`, uuid.Must(uuid.NewV7()), ev.actor, ev.action, ev.resource, ev.status, ev.createdAt)
 	}
 
-	svc := dashboard.NewService(pool)
-
-	summary7, err := svc.Summary(ctx, dashboard.SummaryInput{Days: 7})
+	days7 := 7
+	summary7, err := svc.Summary(ctx, dashboard.SummaryInput{Days: &days7})
 	if err != nil {
 		t.Fatalf("Summary(7) error = %v", err)
 	}
@@ -182,7 +198,8 @@ func TestDashboardSummaryPostgresAggregation(t *testing.T) {
 	}
 
 	// 14-day window includes the two 10-day-old events.
-	summary14, err := svc.Summary(ctx, dashboard.SummaryInput{Days: 14})
+	days14 := 14
+	summary14, err := svc.Summary(ctx, dashboard.SummaryInput{Days: &days14})
 	if err != nil {
 		t.Fatalf("Summary(14) error = %v", err)
 	}

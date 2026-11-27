@@ -209,3 +209,72 @@ func TestAuthLoginSoftCooldownSetsRetryAfterHeader(t *testing.T) {
 		t.Fatalf("Retry-After = %q, want positive integer seconds", raw)
 	}
 }
+
+func TestAuthLoginRateLimitConfigurable(t *testing.T) {
+	svc, _, _, _ := newTestAuthHarness(t)
+
+	// Defensive fallback to 5 when unconfigured or non-positive.
+	for _, invalid := range []int{-3, 0} {
+		svc.cfg.LoginRateLimit = invalid
+		if got := svc.LoginRateLimit(); got != 5 {
+			t.Fatalf("LoginRateLimit(%d) = %d, want 5", invalid, got)
+		}
+	}
+
+	// Configured positive threshold is enforced by RegisterPublicRoutes.
+	svc.cfg.LoginRateLimit = 2
+	if got := svc.LoginRateLimit(); got != 2 {
+		t.Fatalf("LoginRateLimit(2) = %d, want 2", got)
+	}
+
+	bundle, err := i18n.NewBundle()
+	if err != nil {
+		t.Fatalf("NewBundle() error = %v", err)
+	}
+	if err := bundle.RegisterFS("auth", LocalesFS, "locales"); err != nil {
+		t.Fatalf("RegisterFS() error = %v", err)
+	}
+	engine, err := httpserver.NewEngine(httpserver.Options{
+		Env:    "test",
+		Logger: logger.New("test", "error", io.Discard),
+		I18n:   bundle,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	NewHandler(svc, nil).RegisterPublicRoutes(engine.Group("/api/v1"))
+
+	const clientAddr = "198.51.100.88:42000"
+	postLogin := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"identifier":"admin","password":"wrong-password-123"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = clientAddr
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for i := range 2 {
+		if rec := postLogin(); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status = %d, want 401 (body=%s)", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := postLogin()
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("3rd attempt status = %d, want 429 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var errResp struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("unmarshal 429: %v", err)
+	}
+	if errResp.Code != "RATE_LIMITED" {
+		t.Fatalf("429 code = %q, want RATE_LIMITED", errResp.Code)
+	}
+	retryAfter, err := strconv.Atoi(rec.Header().Get("Retry-After"))
+	if err != nil || retryAfter <= 0 {
+		t.Fatalf("Retry-After = %q, want positive integer seconds", rec.Header().Get("Retry-After"))
+	}
+}

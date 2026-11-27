@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"tianshu/internal/modules/dashboard/internal/dbgen"
+	"tianshu/internal/platform/database"
 )
 
 type store interface {
@@ -19,20 +20,22 @@ type store interface {
 	ListRecentAuditActivity(ctx context.Context, limit int32) ([]RecentActivityItem, error)
 }
 
+var _ store = (*pgStore)(nil)
+
 type pgStore struct {
 	pool *pgxpool.Pool
 }
 
-func newStore(pool *pgxpool.Pool) store {
+func newStore(pool *pgxpool.Pool) *pgStore {
 	return &pgStore{pool: pool}
 }
 
-func (s *pgStore) queries() *dbgen.Queries {
-	return dbgen.New(s.pool)
+func (s *pgStore) queries(ctx context.Context) *dbgen.Queries {
+	return dbgen.New(database.Executor(ctx, s.pool))
 }
 
 func (s *pgStore) GetUserStats(ctx context.Context, since time.Time) (UserStats, error) {
-	row, err := s.queries().GetUserStats(ctx, pgtype.Timestamptz{
+	row, err := s.queries(ctx).GetUserStats(ctx, pgtype.Timestamptz{
 		Time:  since.UTC(),
 		Valid: true,
 	})
@@ -48,7 +51,7 @@ func (s *pgStore) GetUserStats(ctx context.Context, since time.Time) (UserStats,
 }
 
 func (s *pgStore) GetRoleStats(ctx context.Context) (RoleStats, error) {
-	row, err := s.queries().GetRoleStats(ctx)
+	row, err := s.queries(ctx).GetRoleStats(ctx)
 	if err != nil {
 		return RoleStats{}, err
 	}
@@ -60,7 +63,7 @@ func (s *pgStore) GetRoleStats(ctx context.Context) (RoleStats, error) {
 }
 
 func (s *pgStore) GetFileStats(ctx context.Context) (FileStats, error) {
-	row, err := s.queries().GetFileStats(ctx)
+	row, err := s.queries(ctx).GetFileStats(ctx)
 	if err != nil {
 		return FileStats{}, err
 	}
@@ -73,14 +76,14 @@ func (s *pgStore) GetFileStats(ctx context.Context) (FileStats, error) {
 }
 
 func (s *pgStore) CountActiveSessions(ctx context.Context, now time.Time) (int64, error) {
-	return s.queries().CountActiveSessions(ctx, pgtype.Timestamptz{
+	return s.queries(ctx).CountActiveSessions(ctx, pgtype.Timestamptz{
 		Time:  now.UTC(),
 		Valid: true,
 	})
 }
 
 func (s *pgStore) ListDailyAuditActivity(ctx context.Context, startAt, endAt time.Time) ([]DailyActivityPoint, error) {
-	rows, err := s.queries().ListDailyAuditActivity(ctx, dbgen.ListDailyAuditActivityParams{
+	rows, err := s.queries(ctx).ListDailyAuditActivity(ctx, dbgen.ListDailyAuditActivityParams{
 		StartAt: pgtype.Timestamptz{Time: startAt.UTC(), Valid: true},
 		EndAt:   pgtype.Timestamptz{Time: endAt.UTC(), Valid: true},
 	})
@@ -100,7 +103,7 @@ func (s *pgStore) ListDailyAuditActivity(ctx context.Context, startAt, endAt tim
 }
 
 func (s *pgStore) ListRecentAuditActivity(ctx context.Context, limit int32) ([]RecentActivityItem, error) {
-	rows, err := s.queries().ListRecentAuditActivity(ctx, limit)
+	rows, err := s.queries(ctx).ListRecentAuditActivity(ctx, limit)
 	if err != nil {
 		return nil, err
 	}

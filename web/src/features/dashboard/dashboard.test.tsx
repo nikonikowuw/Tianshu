@@ -210,9 +210,14 @@ describe('Dashboard page', () => {
     await expect
       .element(screen.getByTestId('dashboard-trend-chart'))
       .toBeVisible()
+    const recentItems = screen.getByTestId('dashboard-recent-item')
+    await expect.element(recentItems.first()).toBeVisible()
     await expect
-      .element(screen.getByTestId('dashboard-recent-item').first())
-      .toBeVisible()
+      .element(recentItems.nth(1))
+      .toHaveTextContent(i18n.t('dashboard:recent.anonymous'))
+    await expect
+      .element(recentItems.nth(1))
+      .toHaveTextContent(i18n.t('dashboard:recent.statusFailure'))
     await expect
       .element(screen.getByTestId('dashboard-view-all-audit'))
       .toBeVisible()
@@ -260,10 +265,18 @@ describe('Dashboard page', () => {
       .element(screen.getByTestId('dashboard-kpi-users-value'))
       .toHaveTextContent('12')
 
-    const manageLinks = screen.getByRole('link', {
-      name: i18n.t('dashboard:kpi.manage'),
-    })
-    await expect.element(manageLinks).not.toBeInTheDocument()
+    for (const moduleKey of [
+      'dashboard:kpi.users.title',
+      'dashboard:kpi.roles.title',
+      'dashboard:kpi.files.title',
+    ] as const) {
+      const manageLink = screen.getByRole('link', {
+        name: i18n.t('dashboard:kpi.manageModule', {
+          module: i18n.t(moduleKey),
+        }),
+      })
+      await expect.element(manageLink).not.toBeInTheDocument()
+    }
     await expect
       .element(screen.getByTestId('dashboard-view-all-audit'))
       .not.toBeInTheDocument()

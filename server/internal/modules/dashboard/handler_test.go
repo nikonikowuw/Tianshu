@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -152,7 +153,21 @@ func TestDashboardHTTPRoutesContract(t *testing.T) {
 		}
 	})
 
-	t.Run("accepts days=14 and localizes 422 validation errors on invalid days", func(t *testing.T) {
+	t.Run("accepts empty days default, days=14, and localizes 422 validation errors including days=0", func(t *testing.T) {
+		reqEmpty := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary?days=", nil)
+		reqEmpty.Header.Set("X-Test-User", "allowed")
+		recEmpty := httptest.NewRecorder()
+		engine.ServeHTTP(recEmpty, reqEmpty)
+		if recEmpty.Code != http.StatusOK {
+			t.Fatalf("days= empty status = %d, want 200; body=%s", recEmpty.Code, recEmpty.Body.String())
+		}
+		var emptyBody struct {
+			RangeDays int `json:"rangeDays"`
+		}
+		if err := json.Unmarshal(recEmpty.Body.Bytes(), &emptyBody); err != nil || emptyBody.RangeDays != 7 {
+			t.Fatalf("days= empty rangeDays = %d (err=%v), want 7", emptyBody.RangeDays, err)
+		}
+
 		req14 := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary?days=14", nil)
 		req14.Header.Set("X-Test-User", "allowed")
 		rec14 := httptest.NewRecorder()
@@ -165,6 +180,8 @@ func TestDashboardHTTPRoutesContract(t *testing.T) {
 			query string
 			lang  string
 		}{
+			{query: "?days=0", lang: "en-US"},
+			{query: "?days=0", lang: "zh-CN"},
 			{query: "?days=abc", lang: "en-US"},
 			{query: "?days=10", lang: "zh-CN"},
 		} {
@@ -197,6 +214,79 @@ func TestDashboardHTTPRoutesContract(t *testing.T) {
 			if errResp.Errors[0].Message != wantMsg {
 				t.Fatalf("lang=%s message = %q, want %q", tc.lang, errResp.Errors[0].Message, wantMsg)
 			}
+		}
+	})
+
+	t.Run("serializes non-empty recentActivity DTO with RFC3339 UTC timestamp and redacted fields", func(t *testing.T) {
+		eventID := uuid.Must(uuid.NewV7())
+		eventTime := time.Date(2026, 11, 27, 7, 45, 0, 0, time.UTC)
+		st.recent = []RecentActivityItem{
+			{
+				ID:            eventID,
+				ActorUsername: "alice",
+				Action:        "role.update",
+				Resource:      "role",
+				ResourceID:    "role-42",
+				Status:        "success",
+				IPAddress:     "10.0.0.5",
+				CreatedAt:     eventTime,
+			},
+		}
+		t.Cleanup(func() { st.recent = nil })
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary", nil)
+		req.Header.Set("X-Test-User", "allowed")
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+		}
+		raw := rec.Body.String()
+		if strings.Contains(raw, `"metadata"`) || strings.Contains(raw, `"userAgent"`) {
+			t.Fatalf("recentActivity must not leak sensitive audit fields: %s", raw)
+		}
+
+		var body struct {
+			RecentActivity []recentActivityResponse `json:"recentActivity"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("unmarshal recentActivity: %v", err)
+		}
+		if len(body.RecentActivity) != 1 {
+			t.Fatalf("len(recentActivity) = %d, want 1", len(body.RecentActivity))
+		}
+		got := body.RecentActivity[0]
+		if got.ID != eventID.String() || got.ActorUsername != "alice" || got.Action != "role.update" ||
+			got.Resource != "role" || got.ResourceID != "role-42" || got.Status != "success" ||
+			got.IPAddress != "10.0.0.5" || got.CreatedAt != "2026-11-27T07:45:00Z" {
+			t.Fatalf("unexpected recentActivity DTO: %+v", got)
+		}
+	})
+
+	t.Run("masks internal store errors behind 500 INTERNAL_ERROR without leaking cause", func(t *testing.T) {
+		st.userErr = errors.New("sensitive postgres credential detail")
+		t.Cleanup(func() { st.userErr = nil })
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary", nil)
+		req.Header.Set("X-Test-User", "allowed")
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "sensitive postgres credential detail") {
+			t.Fatalf("500 response leaked internal error cause: %s", rec.Body.String())
+		}
+		var errResp struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+			t.Fatalf("unmarshal 500: %v", err)
+		}
+		if errResp.Code != apperr.CodeInternal {
+			t.Fatalf("code = %q, want %q", errResp.Code, apperr.CodeInternal)
 		}
 	})
 }

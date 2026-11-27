@@ -1,10 +1,11 @@
 -- name: GetUserStats :one
 SELECT
-    count(*) FILTER (WHERE deleted_at IS NULL)::bigint AS total_users,
-    count(*) FILTER (WHERE deleted_at IS NULL AND status = 'active')::bigint AS active_users,
-    count(*) FILTER (WHERE deleted_at IS NULL AND status = 'disabled')::bigint AS disabled_users,
-    count(*) FILTER (WHERE deleted_at IS NULL AND created_at >= @since::timestamptz)::bigint AS new_users_last_7_days
-FROM users;
+    count(*)::bigint AS total_users,
+    count(*) FILTER (WHERE status = 'active')::bigint AS active_users,
+    count(*) FILTER (WHERE status = 'disabled')::bigint AS disabled_users,
+    count(*) FILTER (WHERE created_at >= @since::timestamptz)::bigint AS new_users_last_7_days
+FROM users
+WHERE deleted_at IS NULL;
 
 -- name: GetRoleStats :one
 SELECT
