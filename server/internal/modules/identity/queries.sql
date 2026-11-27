@@ -139,9 +139,6 @@ SELECT
     display_name,
     avatar_file_id,
     status,
-    last_login_at,
-    created_by,
-    updated_by,
     created_at,
     updated_at
 FROM users
@@ -171,15 +168,7 @@ WHERE id = $1
   AND deleted_at IS NULL
 RETURNING id;
 
--- name: UpdateOwnPasswordHash :exec
-UPDATE users
-SET password_hash = $2,
-    updated_by = $3,
-    updated_at = now()
-WHERE id = $1
-  AND deleted_at IS NULL;
-
--- name: UpdateUserPasswordByAdmin :exec
+-- name: UpdateUserPasswordWithActor :exec
 UPDATE users
 SET password_hash = $2,
     updated_by = $3,

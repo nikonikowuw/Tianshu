@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/mail"
 	"regexp"
 	"slices"
@@ -16,14 +17,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"tianshu/internal/platform/database"
-	"tianshu/internal/platform/i18n"
 	"tianshu/internal/platform/security"
 	"tianshu/internal/shared/apperr"
 	"tianshu/internal/shared/pagination"
 )
 
 const (
-	// usersSuperAdminGuardKey serializes concurrent mutations that could remove the last active super_admin.
+	// usersSuperAdminGuardKey serializes concurrent mutations that could remove the last active super_admin
+	// or concurrently demote/disable an administrator performing user mutations.
 	usersSuperAdminGuardKey = int64(0x7469616e73687502)
 
 	superAdminRoleCode                  = "super_admin"
@@ -47,12 +48,6 @@ const (
 
 var usernamePattern = regexp.MustCompile(`^[a-z0-9._-]+$`)
 
-// PasswordHasher hashes and verifies user passwords.
-type PasswordHasher interface {
-	Hash(password string) (string, error)
-	Verify(password, encodedHash string) (matched bool, needsRehash bool, err error)
-}
-
 // ServiceDeps holds optional cross-cutting dependencies for identity.Service.
 type ServiceDeps struct {
 	Tx       TxRunner
@@ -60,7 +55,6 @@ type ServiceDeps struct {
 	Sessions SessionManager
 	Files    AvatarFileManager
 	Audit    AuditRecorder
-	I18n     *i18n.Bundle
 	Log      *slog.Logger
 }
 
@@ -73,7 +67,6 @@ type Service struct {
 	sessions SessionManager
 	files    AvatarFileManager
 	audit    AuditRecorder
-	i18n     *i18n.Bundle
 	log      *slog.Logger
 }
 
@@ -103,7 +96,6 @@ func newServiceWithStore(s store, hasher PasswordHasher, deps ...ServiceDeps) *S
 		sessions: d.Sessions,
 		files:    d.Files,
 		audit:    d.Audit,
-		i18n:     d.I18n,
 		log:      log,
 	}
 }
@@ -149,24 +141,18 @@ func (s *Service) CreateInitialAdmin(ctx context.Context, input CreateInitialAdm
 	var fieldErrs []apperr.FieldError
 	username, ok := normalizeUsername(input.Username)
 	if !ok {
-		fieldErrs = append(fieldErrs, apperr.FieldError{
-			Field:   "username",
-			Message: ErrCodeInvalidUsername,
-		})
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "username", Message: ErrCodeInvalidUsername})
 	}
 	email, ok := normalizeEmail(input.Email)
 	if !ok {
-		fieldErrs = append(fieldErrs, apperr.FieldError{
-			Field:   "email",
-			Message: ErrCodeInvalidEmail,
-		})
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "email", Message: ErrCodeInvalidEmail})
 	}
 	displayName, ok := normalizeDisplayName(input.DisplayName, username)
 	if !ok {
-		fieldErrs = append(fieldErrs, apperr.FieldError{
-			Field:   "displayName",
-			Message: ErrCodeInvalidDisplay,
-		})
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "displayName", Message: ErrCodeInvalidDisplay})
+	}
+	if err := security.ValidatePasswordLength(input.Password); errors.Is(err, security.ErrInvalidPasswordLength) {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "password", Message: ErrCodeInvalidPassword})
 	}
 	if len(fieldErrs) > 0 {
 		return User{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
@@ -174,7 +160,7 @@ func (s *Service) CreateInitialAdmin(ctx context.Context, input CreateInitialAdm
 
 	hash, err := s.hasher.Hash(input.Password)
 	if errors.Is(err, security.ErrInvalidPasswordLength) {
-		return User{}, invalidPasswordError()
+		return User{}, apperr.Validation([]apperr.FieldError{{Field: "password", Message: ErrCodeInvalidPassword}})
 	}
 	if err != nil {
 		return User{}, apperr.Internal(fmt.Errorf("hash initial admin password: %w", err))
@@ -208,6 +194,9 @@ func (s *Service) CreateInitialAdmin(ctx context.Context, input CreateInitialAdm
 // GetAuthCredentials looks up an active/disabled (non-deleted) user by normalized username or email.
 func (s *Service) GetAuthCredentials(ctx context.Context, identifier string) (AuthCredentials, error) {
 	normalized := strings.ToLower(strings.TrimSpace(identifier))
+	if normalized == "" || !isValidText(normalized) {
+		return AuthCredentials{}, userNotFoundError()
+	}
 	creds, err := s.store.GetUserForAuthByIdentifier(ctx, normalized)
 	if errors.Is(err, errUserNotFound) {
 		return AuthCredentials{}, userNotFoundError()
@@ -248,6 +237,14 @@ func (s *Service) UpdatePasswordHash(ctx context.Context, id uuid.UUID, newHash 
 
 // ListUsers returns a paginated list of non-deleted users with their roles and audit actors.
 func (s *Service) ListUsers(ctx context.Context, filter UserListFilter) (pagination.Result[UserDetail], error) {
+	q := strings.TrimSpace(filter.Q)
+	if !isValidText(q) {
+		return pagination.Result[UserDetail]{}, apperr.Validation([]apperr.FieldError{{
+			Field:   "q",
+			Message: "VALIDATION_DEFAULT",
+		}})
+	}
+
 	pageParams := pagination.Normalize(filter.Pagination.Page, filter.Pagination.PageSize)
 
 	var (
@@ -258,7 +255,7 @@ func (s *Service) ListUsers(ctx context.Context, filter UserListFilter) (paginat
 		filterIDs = true
 		ids, err := s.roles.ListUserIDsByRoleIDs(ctx, dedupeUUIDs(filter.RoleIDs))
 		if err != nil {
-			return pagination.Result[UserDetail]{}, err
+			return pagination.Result[UserDetail]{}, wrapAppErr(err)
 		}
 		if len(ids) == 0 {
 			return pagination.NewResult(make([]UserDetail, 0), 0, pageParams), nil
@@ -267,14 +264,14 @@ func (s *Service) ListUsers(ctx context.Context, filter UserListFilter) (paginat
 	}
 
 	query := listUsersQuery{
-		Q:         strings.TrimSpace(filter.Q),
+		Q:         q,
 		Statuses:  normalizeStatusesFilter(filter.Statuses),
 		FilterIDs: filterIDs,
 		IDs:       userIDs,
 		Sort:      normalizeUserSort(filter.Sort),
 		Order:     normalizeUserOrder(filter.Order),
-		Offset:    int32(pageParams.Offset()),
-		Limit:     int32(pageParams.Limit()),
+		Offset:    pageParams.Offset(),
+		Limit:     pageParams.Limit(),
 	}
 
 	total, err := s.store.CountUsersFiltered(ctx, query)
@@ -313,49 +310,17 @@ func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (UserDetail, error)
 
 // CreateUser creates a new user account, assigns initial roles, and records an audit entry.
 func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (UserDetail, error) {
-	var fieldErrs []apperr.FieldError
-	username, ok := normalizeUsername(input.Username)
-	if !ok {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "username", Message: ErrCodeInvalidUsername})
-	}
-	email, ok := normalizeEmail(input.Email)
-	if !ok {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "email", Message: ErrCodeInvalidEmail})
-	}
-	displayName, ok := normalizeDisplayName(input.DisplayName, username)
-	if !ok {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "displayName", Message: ErrCodeInvalidDisplay})
-	}
-	status := strings.TrimSpace(input.Status)
-	if status == "" {
-		status = StatusActive
-	}
-	if status != StatusActive && status != StatusDisabled {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "status", Message: ErrCodeInvalidStatus})
+	validated, err := s.validateCreateUserInput(ctx, input)
+	if err != nil {
+		return UserDetail{}, err
 	}
 
-	hash, hashErr := s.hasher.Hash(input.Password)
-	if errors.Is(hashErr, security.ErrInvalidPasswordLength) {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "password", Message: ErrCodeInvalidPassword})
-	} else if hashErr != nil {
-		return UserDetail{}, apperr.Internal(fmt.Errorf("hash user password: %w", hashErr))
+	needsSuperAdmin := hasRoleCode(validated.roles, superAdminRoleCode)
+	// Fast pre-checks before expensive 64 MiB Argon2id hashing; re-verified authoritatively inside tx.
+	if _, err := s.verifyActiveActor(ctx, input.ActorID, input.ActorSessionID, false); err != nil {
+		return UserDetail{}, err
 	}
-
-	roleIDs := dedupeUUIDs(input.RoleIDs)
-	resolvedRoles, roleErr := s.resolveValidatedRoles(ctx, roleIDs)
-	if roleErr != nil {
-		if appErr, isApp := apperr.As(roleErr); isApp && appErr.Code == ErrCodeInvalidRole {
-			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "roleIds", Message: ErrCodeInvalidRole})
-		} else {
-			return UserDetail{}, roleErr
-		}
-	}
-
-	if len(fieldErrs) > 0 {
-		return UserDetail{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
-	}
-
-	if hasRoleCode(resolvedRoles, superAdminRoleCode) {
+	if needsSuperAdmin {
 		isSuper, err := s.actorIsSuperAdmin(ctx, input.ActorID)
 		if err != nil {
 			return UserDetail{}, err
@@ -365,6 +330,14 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (UserDe
 		}
 	}
 
+	hash, hashErr := s.hasher.Hash(input.Password)
+	if errors.Is(hashErr, security.ErrInvalidPasswordLength) {
+		return UserDetail{}, apperr.Validation([]apperr.FieldError{{Field: "password", Message: ErrCodeInvalidPassword}})
+	}
+	if hashErr != nil {
+		return UserDetail{}, apperr.Internal(fmt.Errorf("hash user password: %w", hashErr))
+	}
+
 	userID, err := uuid.NewV7()
 	if err != nil {
 		return UserDetail{}, apperr.Internal(fmt.Errorf("generate user uuid: %w", err))
@@ -372,13 +345,31 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (UserDe
 
 	var created UserDetail
 	err = s.withinTx(ctx, func(txCtx context.Context) error {
+		if err := database.AcquireAdvisoryXactLock(txCtx, usersSuperAdminGuardKey); err != nil {
+			return apperr.Internal(err)
+		}
+
+		actorUsername, err := s.verifyActiveActor(txCtx, input.ActorID, input.ActorSessionID, true)
+		if err != nil {
+			return err
+		}
+		if needsSuperAdmin {
+			isSuper, err := s.actorIsSuperAdmin(txCtx, input.ActorID)
+			if err != nil {
+				return err
+			}
+			if !isSuper {
+				return superAdminProtectedError()
+			}
+		}
+
 		user, createErr := s.store.CreateUser(txCtx, createUserRecord{
 			ID:           userID,
-			Username:     username,
-			Email:        email,
+			Username:     validated.username,
+			Email:        validated.email,
 			PasswordHash: hash,
-			DisplayName:  displayName,
-			Status:       status,
+			DisplayName:  validated.displayName,
+			Status:       validated.status,
 			CreatedBy:    ptrToNullUUID(input.ActorID),
 			UpdatedBy:    ptrToNullUUID(input.ActorID),
 		})
@@ -389,12 +380,12 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (UserDe
 			return emailExistsError()
 		}
 		if createErr != nil {
-			return apperr.Internal(fmt.Errorf("create user %s: %w", username, createErr))
+			return apperr.Internal(fmt.Errorf("create user %s: %w", validated.username, createErr))
 		}
 
-		if len(roleIDs) > 0 && s.roles != nil {
-			if err := s.roles.ReplaceUserRoles(txCtx, user.ID, roleIDs); err != nil {
-				return err
+		if len(validated.roleIDs) > 0 && s.roles != nil {
+			if err := s.roles.ReplaceUserRoles(txCtx, user.ID, validated.roleIDs); err != nil {
+				return wrapAppErr(err)
 			}
 		}
 
@@ -402,13 +393,23 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (UserDe
 		if detailErr != nil {
 			return apperr.Internal(fmt.Errorf("load created user %s: %w", user.ID, detailErr))
 		}
-		detail.Roles = nonNilRoleRefs(resolvedRoles)
+		detail.Roles = nonNilRoleRefs(validated.roles)
 		created = detail
 
-		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditActionCreate, user.ID.String(), map[string]any{
-			"username": user.Username,
-			"status":   user.Status,
-			"roles":    roleCodes(resolvedRoles),
+		return s.recordAuditEntry(txCtx, AuditEntry{
+			ActorID:       input.ActorID,
+			ActorUsername: actorUsername,
+			Action:        auditActionCreate,
+			Resource:      auditResourceUser,
+			ResourceID:    user.ID.String(),
+			Status:        auditStatusSuccess,
+			IPAddress:     input.Meta.IPAddress,
+			UserAgent:     input.Meta.UserAgent,
+			Metadata: map[string]any{
+				"username": user.Username,
+				"status":   user.Status,
+				"roles":    roleCodes(validated.roles),
+			},
 		})
 	})
 	if err != nil {
@@ -419,146 +420,63 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (UserDe
 
 // UpdateUser updates a user's profile, status, password, and/or roles with super-admin and self-operation guards.
 func (s *Service) UpdateUser(ctx context.Context, input UpdateUserInput) (UserDetail, error) {
-	var fieldErrs []apperr.FieldError
-
-	var nextEmail *string
-	if input.Email != nil {
-		normalized, ok := normalizeEmail(*input.Email)
-		if !ok {
-			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "email", Message: ErrCodeInvalidEmail})
-		} else {
-			nextEmail = &normalized
-		}
-	}
-
-	var nextDisplay *string
-	if input.DisplayName != nil {
-		trimmed := strings.TrimSpace(*input.DisplayName)
-		if utf8.RuneCountInString(trimmed) > maxDisplayRunes {
-			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "displayName", Message: ErrCodeInvalidDisplay})
-		} else {
-			nextDisplay = &trimmed
-		}
-	}
-
-	var nextStatus *string
-	if input.Status != nil {
-		st := strings.TrimSpace(*input.Status)
-		if st != StatusActive && st != StatusDisabled {
-			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "status", Message: ErrCodeInvalidStatus})
-		} else {
-			nextStatus = &st
-		}
+	validated, err := s.validateUpdateUserInput(ctx, input)
+	if err != nil {
+		return UserDetail{}, err
 	}
 
 	var newPasswordHash *string
 	if input.Password != nil {
+		// Fast actor check before burning 64 MiB Argon2id RAM; re-verified inside tx.
+		if _, err := s.verifyActiveActor(ctx, input.ActorID, input.ActorSessionID, false); err != nil {
+			return UserDetail{}, err
+		}
 		hash, hashErr := s.hasher.Hash(*input.Password)
-		switch {
-		case errors.Is(hashErr, security.ErrInvalidPasswordLength):
-			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "password", Message: ErrCodeInvalidPassword})
-		case hashErr != nil:
+		if errors.Is(hashErr, security.ErrInvalidPasswordLength) {
+			return UserDetail{}, apperr.Validation([]apperr.FieldError{{Field: "password", Message: ErrCodeInvalidPassword}})
+		}
+		if hashErr != nil {
 			return UserDetail{}, apperr.Internal(fmt.Errorf("hash reset password: %w", hashErr))
-		default:
-			newPasswordHash = &hash
 		}
-	}
-
-	var (
-		nextRoleIDs   []uuid.UUID
-		resolvedRoles []RoleRef
-		updateRoles   bool
-	)
-	if input.RoleIDs != nil {
-		updateRoles = true
-		nextRoleIDs = dedupeUUIDs(*input.RoleIDs)
-		var roleErr error
-		resolvedRoles, roleErr = s.resolveValidatedRoles(ctx, nextRoleIDs)
-		if roleErr != nil {
-			if appErr, isApp := apperr.As(roleErr); isApp && appErr.Code == ErrCodeInvalidRole {
-				fieldErrs = append(fieldErrs, apperr.FieldError{Field: "roleIds", Message: ErrCodeInvalidRole})
-			} else {
-				return UserDetail{}, roleErr
-			}
-		}
-	}
-
-	if len(fieldErrs) > 0 {
-		return UserDetail{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		newPasswordHash = &hash
 	}
 
 	var updated UserDetail
-	err := s.withinTx(ctx, func(txCtx context.Context) error {
+	err = s.withinTx(ctx, func(txCtx context.Context) error {
 		if err := database.AcquireAdvisoryXactLock(txCtx, usersSuperAdminGuardKey); err != nil {
 			return apperr.Internal(err)
 		}
 
-		existing, lockErr := s.store.GetUserByIDForUpdate(txCtx, input.UserID)
-		if errors.Is(lockErr, errUserNotFound) {
-			return userNotFoundError()
-		}
-		if lockErr != nil {
-			return apperr.Internal(fmt.Errorf("lock user %s: %w", input.UserID, lockErr))
+		existing, actorUsername, err := s.lockTargetAndVerifyActor(txCtx, input.UserID, input.ActorID, input.ActorSessionID, "update")
+		if err != nil {
+			return err
 		}
 
 		currentRoles, err := s.getUserRoles(txCtx, existing.ID)
 		if err != nil {
 			return err
 		}
-		targetIsSuper := hasRoleCode(currentRoles, superAdminRoleCode)
-
 		finalRoles := currentRoles
-		if updateRoles {
-			finalRoles = nonNilRoleRefs(resolvedRoles)
+		if validated.updateRoles {
+			finalRoles = nonNilRoleRefs(validated.roles)
 		}
-		nextIsSuper := hasRoleCode(finalRoles, superAdminRoleCode)
+		rolesChanged := validated.updateRoles && !sameRoleSet(currentRoles, finalRoles)
 
 		finalStatus := existing.Status
-		if nextStatus != nil {
-			finalStatus = *nextStatus
+		if validated.status != nil {
+			finalStatus = *validated.status
+		}
+		if err := s.enforceUserUpdateGuards(txCtx, userUpdateGuardState{
+			existing:     existing,
+			currentRoles: currentRoles,
+			finalRoles:   finalRoles,
+			finalStatus:  finalStatus,
+			actorID:      input.ActorID,
+		}); err != nil {
+			return err
 		}
 
-		isSelf := input.ActorID != nil && *input.ActorID == existing.ID
-		if isSelf {
-			if finalStatus == StatusDisabled {
-				return selfOperationError()
-			}
-			if targetIsSuper && !nextIsSuper {
-				return selfOperationError()
-			}
-		}
-
-		if targetIsSuper || nextIsSuper {
-			isSuper, err := s.actorIsSuperAdmin(txCtx, input.ActorID)
-			if err != nil {
-				return err
-			}
-			if !isSuper {
-				return superAdminProtectedError()
-			}
-		}
-
-		wasActiveSuper := existing.Status == StatusActive && targetIsSuper
-		willBeActiveSuper := finalStatus == StatusActive && nextIsSuper
-		if wasActiveSuper && !willBeActiveSuper {
-			if err := s.ensureOtherActiveSuperAdmin(txCtx, existing.ID); err != nil {
-				return err
-			}
-		}
-
-		finalEmail := existing.Email
-		if nextEmail != nil {
-			finalEmail = *nextEmail
-		}
-		finalDisplay := existing.DisplayName
-		if nextDisplay != nil {
-			if *nextDisplay == "" {
-				finalDisplay = existing.Username
-			} else {
-				finalDisplay = *nextDisplay
-			}
-		}
-
+		finalEmail, finalDisplay := resolveFinalEmailAndDisplay(existing, validated.email, validated.displayName)
 		if err := s.store.UpdateUserProfile(txCtx, updateUserProfileRecord{
 			ID:          existing.ID,
 			Email:       finalEmail,
@@ -576,20 +494,20 @@ func (s *Service) UpdateUser(ctx context.Context, input UpdateUserInput) (UserDe
 		}
 
 		if newPasswordHash != nil {
-			if err := s.store.UpdateUserPasswordByAdmin(txCtx, existing.ID, *newPasswordHash, input.ActorID); err != nil {
+			if err := s.store.UpdateUserPasswordWithActor(txCtx, existing.ID, *newPasswordHash, input.ActorID); err != nil {
 				return apperr.Internal(fmt.Errorf("reset user password %s: %w", existing.ID, err))
 			}
 		}
 
-		if updateRoles && s.roles != nil {
-			if err := s.roles.ReplaceUserRoles(txCtx, existing.ID, nextRoleIDs); err != nil {
-				return err
+		if rolesChanged && s.roles != nil {
+			if err := s.roles.ReplaceUserRoles(txCtx, existing.ID, validated.roleIDs); err != nil {
+				return wrapAppErr(err)
 			}
 		}
 
 		if (finalStatus == StatusDisabled || newPasswordHash != nil) && s.sessions != nil {
 			if err := s.sessions.RevokeAllUserSessions(txCtx, existing.ID); err != nil {
-				return err
+				return wrapAppErr(err)
 			}
 		}
 
@@ -600,32 +518,30 @@ func (s *Service) UpdateUser(ctx context.Context, input UpdateUserInput) (UserDe
 		detail.Roles = finalRoles
 		updated = detail
 
-		changed := make([]string, 0, 5)
-		meta := map[string]any{"username": existing.Username}
-		if nextEmail != nil && finalEmail != existing.Email {
-			changed = append(changed, "email")
-		}
-		if nextDisplay != nil && finalDisplay != existing.DisplayName {
-			changed = append(changed, "displayName")
-		}
-		if nextStatus != nil && finalStatus != existing.Status {
-			changed = append(changed, "status")
-			meta["status"] = map[string]string{"from": existing.Status, "to": finalStatus}
-		}
-		if newPasswordHash != nil {
-			changed = append(changed, "password")
-			meta["passwordReset"] = true
-		}
-		if updateRoles {
-			changed = append(changed, "roles")
-			meta["roles"] = map[string]any{
-				"before": roleCodes(currentRoles),
-				"after":  roleCodes(finalRoles),
-			}
-		}
-		meta["changedFields"] = changed
-
-		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditActionUpdate, existing.ID.String(), meta)
+		meta := buildUserUpdateAuditMeta(userUpdateAuditDiff{
+			existing:      existing,
+			finalEmail:    finalEmail,
+			finalDisplay:  finalDisplay,
+			finalStatus:   finalStatus,
+			emailSet:      validated.email != nil,
+			displaySet:    validated.displayName != nil,
+			statusSet:     validated.status != nil,
+			passwordReset: newPasswordHash != nil,
+			rolesChanged:  rolesChanged,
+			currentRoles:  currentRoles,
+			finalRoles:    finalRoles,
+		})
+		return s.recordAuditEntry(txCtx, AuditEntry{
+			ActorID:       input.ActorID,
+			ActorUsername: actorUsername,
+			Action:        auditActionUpdate,
+			Resource:      auditResourceUser,
+			ResourceID:    existing.ID.String(),
+			Status:        auditStatusSuccess,
+			IPAddress:     input.Meta.IPAddress,
+			UserAgent:     input.Meta.UserAgent,
+			Metadata:      meta,
+		})
 	})
 	if err != nil {
 		return UserDetail{}, err
@@ -635,21 +551,17 @@ func (s *Service) UpdateUser(ctx context.Context, input UpdateUserInput) (UserDe
 
 // DeleteUser soft-deletes a user, clears role bindings, revokes all sessions, and writes an audit entry.
 func (s *Service) DeleteUser(ctx context.Context, input DeleteUserInput) error {
-	if input.ActorID != nil && *input.ActorID == input.UserID {
-		return selfOperationError()
-	}
-
 	return s.withinTx(ctx, func(txCtx context.Context) error {
 		if err := database.AcquireAdvisoryXactLock(txCtx, usersSuperAdminGuardKey); err != nil {
 			return apperr.Internal(err)
 		}
 
-		existing, lockErr := s.store.GetUserByIDForUpdate(txCtx, input.UserID)
-		if errors.Is(lockErr, errUserNotFound) {
-			return userNotFoundError()
+		existing, actorUsername, err := s.lockTargetAndVerifyActor(txCtx, input.UserID, input.ActorID, input.ActorSessionID, "delete")
+		if err != nil {
+			return err
 		}
-		if lockErr != nil {
-			return apperr.Internal(fmt.Errorf("lock user %s for delete: %w", input.UserID, lockErr))
+		if input.ActorID != nil && *input.ActorID == existing.ID {
+			return selfOperationError()
 		}
 
 		currentRoles, err := s.getUserRoles(txCtx, existing.ID)
@@ -673,21 +585,31 @@ func (s *Service) DeleteUser(ctx context.Context, input DeleteUserInput) error {
 
 		if s.roles != nil {
 			if err := s.roles.ReplaceUserRoles(txCtx, existing.ID, nil); err != nil {
-				return err
+				return wrapAppErr(err)
 			}
 		}
 		if s.sessions != nil {
 			if err := s.sessions.RevokeAllUserSessions(txCtx, existing.ID); err != nil {
-				return err
+				return wrapAppErr(err)
 			}
 		}
 		if err := s.store.SoftDeleteUser(txCtx, existing.ID, input.ActorID); err != nil {
 			return apperr.Internal(fmt.Errorf("soft delete user %s: %w", existing.ID, err))
 		}
 
-		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditActionDelete, existing.ID.String(), map[string]any{
-			"username":     existing.Username,
-			"removedRoles": roleCodes(currentRoles),
+		return s.recordAuditEntry(txCtx, AuditEntry{
+			ActorID:       input.ActorID,
+			ActorUsername: actorUsername,
+			Action:        auditActionDelete,
+			Resource:      auditResourceUser,
+			ResourceID:    existing.ID.String(),
+			Status:        auditStatusSuccess,
+			IPAddress:     input.Meta.IPAddress,
+			UserAgent:     input.Meta.UserAgent,
+			Metadata: map[string]any{
+				"username":     existing.Username,
+				"removedRoles": roleCodes(currentRoles),
+			},
 		})
 	})
 }
@@ -717,89 +639,22 @@ func (s *Service) GetProfile(ctx context.Context, userID, currentSessionID uuid.
 
 // UpdateProfile updates the authenticated user's display name, email, and/or avatar with FOR SHARE file locking.
 func (s *Service) UpdateProfile(ctx context.Context, input UpdateProfileInput) (Profile, error) {
-	var fieldErrs []apperr.FieldError
-
-	var nextEmail *string
-	if input.Email != nil {
-		normalized, ok := normalizeEmail(*input.Email)
-		if !ok {
-			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "email", Message: ErrCodeInvalidEmail})
-		} else {
-			nextEmail = &normalized
-		}
-	}
-
-	var nextDisplay *string
-	if input.DisplayName != nil {
-		trimmed := strings.TrimSpace(*input.DisplayName)
-		if utf8.RuneCountInString(trimmed) > maxDisplayRunes {
-			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "displayName", Message: ErrCodeInvalidDisplay})
-		} else {
-			nextDisplay = &trimmed
-		}
-	}
-
+	nextEmail, nextDisplay, fieldErrs := validateOptionalEmailAndDisplay(input.Email, input.DisplayName)
 	if len(fieldErrs) > 0 {
 		return Profile{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
 	}
 
 	var updated UserDetail
 	err := s.withinTx(ctx, func(txCtx context.Context) error {
-		existing, lockErr := s.store.GetUserByIDForUpdate(txCtx, input.UserID)
-		if errors.Is(lockErr, errUserNotFound) {
-			return apperr.Unauthorized(apperr.CodeUnauthorized)
-		}
-		if lockErr != nil {
-			return apperr.Internal(fmt.Errorf("lock user %s for profile update: %w", input.UserID, lockErr))
-		}
-		if existing.Status == StatusDisabled {
-			return accountDisabledError()
-		}
-		if err := s.ensureActiveSession(txCtx, existing.ID, input.CurrentSessionID, true); err != nil {
+		existing, err := s.lockActiveProfileUser(txCtx, input.UserID, input.CurrentSessionID, "profile update")
+		if err != nil {
 			return err
 		}
 
-		finalEmail := existing.Email
-		if nextEmail != nil {
-			finalEmail = *nextEmail
-		}
-		finalDisplay := existing.DisplayName
-		if nextDisplay != nil {
-			if *nextDisplay == "" {
-				finalDisplay = existing.Username
-			} else {
-				finalDisplay = *nextDisplay
-			}
-		}
-
-		finalAvatar := cloneUUIDPtr(existing.AvatarFileID)
-		avatarChanged := false
-		switch {
-		case input.ClearAvatar:
-			if existing.AvatarFileID != nil {
-				avatarChanged = true
-			}
-			finalAvatar = nil
-		case input.AvatarFileID != nil:
-			if !sameUUIDPtr(existing.AvatarFileID, input.AvatarFileID) {
-				if s.files == nil {
-					return apperr.Validation([]apperr.FieldError{{
-						Field:   "avatarFileId",
-						Message: ErrCodeProfileInvalidAvatar,
-					}})
-				}
-				if err := s.files.ValidateAndLockAvatarFile(txCtx, *input.AvatarFileID, existing.ID); err != nil {
-					if appErr, ok := apperr.As(err); ok && appErr.Status == 404 {
-						return apperr.Validation([]apperr.FieldError{{
-							Field:   "avatarFileId",
-							Message: ErrCodeProfileInvalidAvatar,
-						}})
-					}
-					return err
-				}
-				avatarChanged = true
-				finalAvatar = cloneUUIDPtr(input.AvatarFileID)
-			}
+		finalEmail, finalDisplay := resolveFinalEmailAndDisplay(existing, nextEmail, nextDisplay)
+		finalAvatar, avatarChanged, err := s.resolveProfileAvatar(txCtx, existing, input.AvatarFileID, input.ClearAvatar)
+		if err != nil {
+			return err
 		}
 
 		if err := s.store.UpdateOwnProfile(txCtx, updateOwnProfileRecord{
@@ -861,58 +716,13 @@ func (s *Service) UpdateProfile(ctx context.Context, input UpdateProfileInput) (
 // ChangePassword verifies the caller's current password, stores the new Argon2id hash,
 // and optionally revokes all other active sessions.
 func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (ChangePasswordResult, error) {
-	var fieldErrs []apperr.FieldError
-	if input.CurrentPassword == "" {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "currentPassword", Message: "VALIDATION_REQUIRED"})
-	}
-	if err := security.ValidatePasswordLength(input.NewPassword); errors.Is(err, security.ErrInvalidPasswordLength) {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "newPassword", Message: ErrCodeInvalidPassword})
-	}
-	if len(fieldErrs) > 0 {
-		return ChangePasswordResult{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
-	}
-
-	creds, err := s.store.GetUserPasswordHashByID(ctx, input.UserID)
-	if errors.Is(err, errUserNotFound) {
-		return ChangePasswordResult{}, apperr.Unauthorized(apperr.CodeUnauthorized)
-	}
-	if err != nil {
-		return ChangePasswordResult{}, apperr.Internal(fmt.Errorf("load password hash %s: %w", input.UserID, err))
-	}
-	if creds.Status == StatusDisabled {
-		return ChangePasswordResult{}, accountDisabledError()
-	}
-	if err := s.ensureActiveSession(ctx, creds.ID, input.CurrentSessionID, false); err != nil {
+	if err := validateChangePasswordInput(input); err != nil {
 		return ChangePasswordResult{}, err
 	}
 
-	matched, _, verifyErr := s.hasher.Verify(input.CurrentPassword, creds.PasswordHash)
-	if verifyErr != nil {
-		s.log.Error("stored password hash invalid", "user_id", creds.ID.String(), "error", verifyErr)
-	}
-	if verifyErr != nil || !matched {
-		actorID := creds.ID
-		s.recordAuditBestEffort(ctx, AuditEntry{
-			ActorID:       &actorID,
-			ActorUsername: creds.Username,
-			Action:        auditActionProfileChangePassword,
-			Resource:      auditResourceUser,
-			ResourceID:    creds.ID.String(),
-			Status:        auditStatusFailure,
-			IPAddress:     input.Meta.IPAddress,
-			UserAgent:     input.Meta.UserAgent,
-			Metadata: map[string]any{
-				"reason": "invalid_current_password",
-			},
-		})
-		return ChangePasswordResult{}, invalidCurrentPasswordError()
-	}
-
-	if input.NewPassword == input.CurrentPassword {
-		return ChangePasswordResult{}, apperr.Validation([]apperr.FieldError{{
-			Field:   "newPassword",
-			Message: ErrCodeProfilePasswordUnchanged,
-		}})
+	creds, err := s.verifyCurrentPasswordSnapshot(ctx, input)
+	if err != nil {
+		return ChangePasswordResult{}, err
 	}
 
 	newHash, hashErr := s.hasher.Hash(input.NewPassword)
@@ -954,17 +764,17 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 			return invalidCurrentPasswordError()
 		}
 
-		if err := s.store.UpdateOwnPasswordHash(txCtx, locked.ID, newHash); err != nil {
+		actorID := locked.ID
+		if err := s.store.UpdateUserPasswordWithActor(txCtx, locked.ID, newHash, &actorID); err != nil {
 			return apperr.Internal(fmt.Errorf("update own password %s: %w", locked.ID, err))
 		}
 		if revokeOthers && s.sessions != nil {
 			n, revErr := s.sessions.RevokeOtherUserSessions(txCtx, locked.ID, input.CurrentSessionID)
 			if revErr != nil {
-				return revErr
+				return wrapAppErr(revErr)
 			}
 			revokedCount = n
 		}
-		actorID := locked.ID
 		return s.recordAuditEntry(txCtx, AuditEntry{
 			ActorID:       &actorID,
 			ActorUsername: locked.Username,
@@ -982,20 +792,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	})
 	if err != nil {
 		if stalePasswordHash {
-			actorID := creds.ID
-			s.recordAuditBestEffort(ctx, AuditEntry{
-				ActorID:       &actorID,
-				ActorUsername: creds.Username,
-				Action:        auditActionProfileChangePassword,
-				Resource:      auditResourceUser,
-				ResourceID:    creds.ID.String(),
-				Status:        auditStatusFailure,
-				IPAddress:     input.Meta.IPAddress,
-				UserAgent:     input.Meta.UserAgent,
-				Metadata: map[string]any{
-					"reason": "password_changed_concurrently",
-				},
-			})
+			s.recordPasswordFailureAudit(ctx, creds, input.Meta, "password_changed_concurrently")
 		}
 		return ChangePasswordResult{}, err
 	}
@@ -1023,7 +820,7 @@ func (s *Service) ListProfileSessions(ctx context.Context, userID, currentSessio
 
 	sessions, err := s.sessions.ListActiveUserSessions(ctx, userID)
 	if err != nil {
-		return nil, err
+		return nil, wrapAppErr(err)
 	}
 	out := make([]UserSession, len(sessions))
 	for i, sess := range sessions {
@@ -1045,17 +842,8 @@ func (s *Service) ListProfileSessions(ctx context.Context, userID, currentSessio
 // RevokeProfileSession revokes a single non-current active session belonging to the caller.
 func (s *Service) RevokeProfileSession(ctx context.Context, input RevokeSessionInput) error {
 	return s.withinTx(ctx, func(txCtx context.Context) error {
-		user, err := s.store.GetUserByIDForUpdate(txCtx, input.UserID)
-		if errors.Is(err, errUserNotFound) {
-			return apperr.Unauthorized(apperr.CodeUnauthorized)
-		}
+		user, err := s.lockActiveProfileUser(txCtx, input.UserID, input.CurrentSessionID, "session revoke")
 		if err != nil {
-			return apperr.Internal(fmt.Errorf("lock user %s for session revoke: %w", input.UserID, err))
-		}
-		if user.Status == StatusDisabled {
-			return accountDisabledError()
-		}
-		if err := s.ensureActiveSession(txCtx, user.ID, input.CurrentSessionID, true); err != nil {
 			return err
 		}
 		if input.SessionID == uuid.Nil {
@@ -1070,7 +858,7 @@ func (s *Service) RevokeProfileSession(ctx context.Context, input RevokeSessionI
 
 		revoked, revErr := s.sessions.RevokeUserSession(txCtx, user.ID, input.SessionID)
 		if revErr != nil {
-			return revErr
+			return wrapAppErr(revErr)
 		}
 		if !revoked {
 			return profileSessionNotFoundError()
@@ -1093,17 +881,8 @@ func (s *Service) RevokeProfileSession(ctx context.Context, input RevokeSessionI
 func (s *Service) RevokeOtherProfileSessions(ctx context.Context, input RevokeOtherSessionsInput) (int64, error) {
 	var count int64
 	err := s.withinTx(ctx, func(txCtx context.Context) error {
-		user, err := s.store.GetUserByIDForUpdate(txCtx, input.UserID)
-		if errors.Is(err, errUserNotFound) {
-			return apperr.Unauthorized(apperr.CodeUnauthorized)
-		}
+		user, err := s.lockActiveProfileUser(txCtx, input.UserID, input.CurrentSessionID, "bulk session revoke")
 		if err != nil {
-			return apperr.Internal(fmt.Errorf("lock user %s for bulk session revoke: %w", input.UserID, err))
-		}
-		if user.Status == StatusDisabled {
-			return accountDisabledError()
-		}
-		if err := s.ensureActiveSession(txCtx, user.ID, input.CurrentSessionID, true); err != nil {
 			return err
 		}
 		if s.sessions == nil {
@@ -1112,7 +891,7 @@ func (s *Service) RevokeOtherProfileSessions(ctx context.Context, input RevokeOt
 
 		n, revErr := s.sessions.RevokeOtherUserSessions(txCtx, user.ID, input.CurrentSessionID)
 		if revErr != nil {
-			return revErr
+			return wrapAppErr(revErr)
 		}
 		count = n
 		if count == 0 {
@@ -1138,6 +917,412 @@ func (s *Service) RevokeOtherProfileSessions(ctx context.Context, input RevokeOt
 	return count, nil
 }
 
+type validatedCreateUser struct {
+	username    string
+	email       string
+	displayName string
+	status      string
+	roleIDs     []uuid.UUID
+	roles       []RoleRef
+}
+
+func (s *Service) validateCreateUserInput(ctx context.Context, input CreateUserInput) (validatedCreateUser, error) {
+	var fieldErrs []apperr.FieldError
+	username, ok := normalizeUsername(input.Username)
+	if !ok {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "username", Message: ErrCodeInvalidUsername})
+	}
+	email, ok := normalizeEmail(input.Email)
+	if !ok {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "email", Message: ErrCodeInvalidEmail})
+	}
+	displayName, ok := normalizeDisplayName(input.DisplayName, username)
+	if !ok {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "displayName", Message: ErrCodeInvalidDisplay})
+	}
+	status := strings.TrimSpace(input.Status)
+	if status == "" {
+		status = StatusActive
+	}
+	if status != StatusActive && status != StatusDisabled {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "status", Message: ErrCodeInvalidStatus})
+	}
+	if err := security.ValidatePasswordLength(input.Password); errors.Is(err, security.ErrInvalidPasswordLength) {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "password", Message: ErrCodeInvalidPassword})
+	}
+
+	roleIDs := dedupeUUIDs(input.RoleIDs)
+	resolvedRoles, rolesValid, roleErr := s.resolveValidatedRoles(ctx, roleIDs)
+	if roleErr != nil {
+		return validatedCreateUser{}, roleErr
+	}
+	if !rolesValid {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "roleIds", Message: ErrCodeInvalidRole})
+	}
+
+	if len(fieldErrs) > 0 {
+		return validatedCreateUser{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+	}
+	return validatedCreateUser{
+		username:    username,
+		email:       email,
+		displayName: displayName,
+		status:      status,
+		roleIDs:     roleIDs,
+		roles:       sortRoleRefs(resolvedRoles),
+	}, nil
+}
+
+type validatedUpdateUser struct {
+	email       *string
+	displayName *string
+	status      *string
+	updateRoles bool
+	roleIDs     []uuid.UUID
+	roles       []RoleRef
+}
+
+func (s *Service) validateUpdateUserInput(ctx context.Context, input UpdateUserInput) (validatedUpdateUser, error) {
+	nextEmail, nextDisplay, fieldErrs := validateOptionalEmailAndDisplay(input.Email, input.DisplayName)
+
+	var nextStatus *string
+	if input.Status != nil {
+		st := strings.TrimSpace(*input.Status)
+		if st != StatusActive && st != StatusDisabled {
+			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "status", Message: ErrCodeInvalidStatus})
+		} else {
+			nextStatus = &st
+		}
+	}
+
+	if input.Password != nil {
+		if err := security.ValidatePasswordLength(*input.Password); errors.Is(err, security.ErrInvalidPasswordLength) {
+			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "password", Message: ErrCodeInvalidPassword})
+		}
+	}
+
+	var (
+		nextRoleIDs   []uuid.UUID
+		resolvedRoles []RoleRef
+		updateRoles   bool
+	)
+	if input.RoleIDs != nil {
+		updateRoles = true
+		nextRoleIDs = dedupeUUIDs(*input.RoleIDs)
+		var (
+			rolesValid bool
+			roleErr    error
+		)
+		resolvedRoles, rolesValid, roleErr = s.resolveValidatedRoles(ctx, nextRoleIDs)
+		if roleErr != nil {
+			return validatedUpdateUser{}, roleErr
+		}
+		if !rolesValid {
+			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "roleIds", Message: ErrCodeInvalidRole})
+		}
+	}
+
+	if len(fieldErrs) > 0 {
+		return validatedUpdateUser{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+	}
+	return validatedUpdateUser{
+		email:       nextEmail,
+		displayName: nextDisplay,
+		status:      nextStatus,
+		updateRoles: updateRoles,
+		roleIDs:     nextRoleIDs,
+		roles:       sortRoleRefs(resolvedRoles),
+	}, nil
+}
+
+type userUpdateGuardState struct {
+	existing     User
+	currentRoles []RoleRef
+	finalRoles   []RoleRef
+	finalStatus  string
+	actorID      *uuid.UUID
+}
+
+func (s *Service) enforceUserUpdateGuards(ctx context.Context, st userUpdateGuardState) error {
+	targetIsSuper := hasRoleCode(st.currentRoles, superAdminRoleCode)
+	nextIsSuper := hasRoleCode(st.finalRoles, superAdminRoleCode)
+
+	if st.actorID != nil && *st.actorID == st.existing.ID {
+		if st.finalStatus == StatusDisabled {
+			return selfOperationError()
+		}
+		if targetIsSuper && !nextIsSuper {
+			return selfOperationError()
+		}
+	}
+
+	if targetIsSuper || nextIsSuper {
+		isSuper, err := s.actorIsSuperAdmin(ctx, st.actorID)
+		if err != nil {
+			return err
+		}
+		if !isSuper {
+			return superAdminProtectedError()
+		}
+	}
+
+	wasActiveSuper := st.existing.Status == StatusActive && targetIsSuper
+	willBeActiveSuper := st.finalStatus == StatusActive && nextIsSuper
+	if wasActiveSuper && !willBeActiveSuper {
+		if err := s.ensureOtherActiveSuperAdmin(ctx, st.existing.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type userUpdateAuditDiff struct {
+	existing      User
+	finalEmail    string
+	finalDisplay  string
+	finalStatus   string
+	emailSet      bool
+	displaySet    bool
+	statusSet     bool
+	passwordReset bool
+	rolesChanged  bool
+	currentRoles  []RoleRef
+	finalRoles    []RoleRef
+}
+
+func buildUserUpdateAuditMeta(d userUpdateAuditDiff) map[string]any {
+	changed := make([]string, 0, 5)
+	meta := map[string]any{"username": d.existing.Username}
+	if d.emailSet && d.finalEmail != d.existing.Email {
+		changed = append(changed, "email")
+	}
+	if d.displaySet && d.finalDisplay != d.existing.DisplayName {
+		changed = append(changed, "displayName")
+	}
+	if d.statusSet && d.finalStatus != d.existing.Status {
+		changed = append(changed, "status")
+		meta["status"] = map[string]string{"from": d.existing.Status, "to": d.finalStatus}
+	}
+	if d.passwordReset {
+		changed = append(changed, "password")
+		meta["passwordReset"] = true
+	}
+	if d.rolesChanged {
+		changed = append(changed, "roles")
+		meta["roles"] = map[string]any{
+			"before": roleCodes(d.currentRoles),
+			"after":  roleCodes(d.finalRoles),
+		}
+	}
+	meta["changedFields"] = changed
+	return meta
+}
+
+func validateOptionalEmailAndDisplay(email, displayName *string) (*string, *string, []apperr.FieldError) {
+	var (
+		fieldErrs   []apperr.FieldError
+		nextEmail   *string
+		nextDisplay *string
+	)
+	if email != nil {
+		normalized, ok := normalizeEmail(*email)
+		if !ok {
+			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "email", Message: ErrCodeInvalidEmail})
+		} else {
+			nextEmail = &normalized
+		}
+	}
+	if displayName != nil {
+		trimmed := strings.TrimSpace(*displayName)
+		if !isValidText(trimmed) || utf8.RuneCountInString(trimmed) > maxDisplayRunes {
+			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "displayName", Message: ErrCodeInvalidDisplay})
+		} else {
+			nextDisplay = &trimmed
+		}
+	}
+	return nextEmail, nextDisplay, fieldErrs
+}
+
+func resolveFinalEmailAndDisplay(existing User, nextEmail, nextDisplay *string) (string, string) {
+	finalEmail := existing.Email
+	if nextEmail != nil {
+		finalEmail = *nextEmail
+	}
+	finalDisplay := existing.DisplayName
+	if nextDisplay != nil {
+		if *nextDisplay == "" {
+			finalDisplay = existing.Username
+		} else {
+			finalDisplay = *nextDisplay
+		}
+	}
+	return finalEmail, finalDisplay
+}
+
+func (s *Service) lockTargetAndVerifyActor(
+	txCtx context.Context,
+	targetID uuid.UUID,
+	actorID *uuid.UUID,
+	actorSessionID uuid.UUID,
+	op string,
+) (User, string, error) {
+	if actorID != nil && *actorID == targetID {
+		// Self-mutation locks the user row before FOR SHARE on user_sessions, matching /profile* lock order.
+		existing, err := s.lockActiveProfileUser(txCtx, targetID, actorSessionID, op)
+		if err != nil {
+			return User{}, "", err
+		}
+		return existing, existing.Username, nil
+	}
+
+	actorUsername, err := s.verifyActiveActor(txCtx, actorID, actorSessionID, true)
+	if err != nil {
+		return User{}, "", err
+	}
+
+	existing, lockErr := s.store.GetUserByIDForUpdate(txCtx, targetID)
+	if errors.Is(lockErr, errUserNotFound) {
+		return User{}, "", userNotFoundError()
+	}
+	if lockErr != nil {
+		return User{}, "", apperr.Internal(fmt.Errorf("lock user %s for %s: %w", targetID, op, lockErr))
+	}
+	return existing, actorUsername, nil
+}
+
+func (s *Service) verifyActiveActor(ctx context.Context, actorID *uuid.UUID, sessionID uuid.UUID, lockSession bool) (string, error) {
+	if actorID == nil || *actorID == uuid.Nil {
+		return "", nil
+	}
+	actor, err := s.store.GetUserByID(ctx, *actorID)
+	if errors.Is(err, errUserNotFound) {
+		return "", apperr.Unauthorized(apperr.CodeUnauthorized)
+	}
+	if err != nil {
+		return "", apperr.Internal(fmt.Errorf("load actor %s: %w", *actorID, err))
+	}
+	if actor.Status == StatusDisabled {
+		return "", accountDisabledError()
+	}
+	if err := s.ensureActiveSession(ctx, actor.ID, sessionID, lockSession); err != nil {
+		return "", err
+	}
+	return actor.Username, nil
+}
+
+func (s *Service) lockActiveProfileUser(txCtx context.Context, userID, currentSessionID uuid.UUID, op string) (User, error) {
+	user, lockErr := s.store.GetUserByIDForUpdate(txCtx, userID)
+	if errors.Is(lockErr, errUserNotFound) {
+		return User{}, apperr.Unauthorized(apperr.CodeUnauthorized)
+	}
+	if lockErr != nil {
+		return User{}, apperr.Internal(fmt.Errorf("lock user %s for %s: %w", userID, op, lockErr))
+	}
+	if user.Status == StatusDisabled {
+		return User{}, accountDisabledError()
+	}
+	if err := s.ensureActiveSession(txCtx, user.ID, currentSessionID, true); err != nil {
+		return User{}, err
+	}
+	return user, nil
+}
+
+func (s *Service) resolveProfileAvatar(
+	txCtx context.Context,
+	existing User,
+	requestedID *uuid.UUID,
+	clearAvatar bool,
+) (*uuid.UUID, bool, error) {
+	finalAvatar := cloneUUIDPtr(existing.AvatarFileID)
+	switch {
+	case clearAvatar:
+		return nil, existing.AvatarFileID != nil, nil
+	case requestedID != nil && !sameUUIDPtr(existing.AvatarFileID, requestedID):
+		if s.files == nil {
+			return nil, false, apperr.Validation([]apperr.FieldError{{
+				Field:   "avatarFileId",
+				Message: ErrCodeProfileInvalidAvatar,
+			}})
+		}
+		if err := s.files.ValidateAndLockAvatarFile(txCtx, *requestedID, existing.ID); err != nil {
+			if appErr, ok := apperr.As(err); ok && appErr.Status == http.StatusNotFound {
+				return nil, false, apperr.Validation([]apperr.FieldError{{
+					Field:   "avatarFileId",
+					Message: ErrCodeProfileInvalidAvatar,
+				}})
+			}
+			return nil, false, wrapAppErr(err)
+		}
+		return cloneUUIDPtr(requestedID), true, nil
+	default:
+		return finalAvatar, false, nil
+	}
+}
+
+func validateChangePasswordInput(input ChangePasswordInput) error {
+	var fieldErrs []apperr.FieldError
+	if input.CurrentPassword == "" {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "currentPassword", Message: "VALIDATION_REQUIRED"})
+	}
+	if err := security.ValidatePasswordLength(input.NewPassword); errors.Is(err, security.ErrInvalidPasswordLength) {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "newPassword", Message: ErrCodeInvalidPassword})
+	}
+	if len(fieldErrs) > 0 {
+		return apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+	}
+	return nil
+}
+
+func (s *Service) verifyCurrentPasswordSnapshot(ctx context.Context, input ChangePasswordInput) (userPasswordRecord, error) {
+	creds, err := s.store.GetUserPasswordHashByID(ctx, input.UserID)
+	if errors.Is(err, errUserNotFound) {
+		return userPasswordRecord{}, apperr.Unauthorized(apperr.CodeUnauthorized)
+	}
+	if err != nil {
+		return userPasswordRecord{}, apperr.Internal(fmt.Errorf("load password hash %s: %w", input.UserID, err))
+	}
+	if creds.Status == StatusDisabled {
+		return userPasswordRecord{}, accountDisabledError()
+	}
+	if err := s.ensureActiveSession(ctx, creds.ID, input.CurrentSessionID, false); err != nil {
+		return userPasswordRecord{}, err
+	}
+
+	matched, _, verifyErr := s.hasher.Verify(input.CurrentPassword, creds.PasswordHash)
+	if verifyErr != nil {
+		s.log.Error("stored password hash invalid", "user_id", creds.ID.String(), "error", verifyErr)
+	}
+	if verifyErr != nil || !matched {
+		s.recordPasswordFailureAudit(ctx, creds, input.Meta, "invalid_current_password")
+		return userPasswordRecord{}, invalidCurrentPasswordError()
+	}
+
+	if input.NewPassword == input.CurrentPassword {
+		return userPasswordRecord{}, apperr.Validation([]apperr.FieldError{{
+			Field:   "newPassword",
+			Message: ErrCodeProfilePasswordUnchanged,
+		}})
+	}
+	return creds, nil
+}
+
+func (s *Service) recordPasswordFailureAudit(ctx context.Context, creds userPasswordRecord, meta RequestMeta, reason string) {
+	actorID := creds.ID
+	s.recordAuditBestEffort(ctx, AuditEntry{
+		ActorID:       &actorID,
+		ActorUsername: creds.Username,
+		Action:        auditActionProfileChangePassword,
+		Resource:      auditResourceUser,
+		ResourceID:    creds.ID.String(),
+		Status:        auditStatusFailure,
+		IPAddress:     meta.IPAddress,
+		UserAgent:     meta.UserAgent,
+		Metadata: map[string]any{
+			"reason": reason,
+		},
+	})
+}
+
 func (s *Service) ensureActiveSession(ctx context.Context, userID, sessionID uuid.UUID, lock bool) error {
 	if s.sessions == nil {
 		return nil
@@ -1155,7 +1340,7 @@ func (s *Service) ensureActiveSession(ctx context.Context, userID, sessionID uui
 		active, err = s.sessions.IsSessionActive(ctx, userID, sessionID)
 	}
 	if err != nil {
-		return err
+		return wrapAppErr(err)
 	}
 	if !active {
 		return apperr.Unauthorized(apperr.CodeUnauthorized)
@@ -1188,21 +1373,21 @@ func (s *Service) toProfile(ctx context.Context, detail UserDetail) Profile {
 	}
 }
 
-func (s *Service) resolveValidatedRoles(ctx context.Context, ids []uuid.UUID) ([]RoleRef, error) {
+func (s *Service) resolveValidatedRoles(ctx context.Context, ids []uuid.UUID) ([]RoleRef, bool, error) {
 	if len(ids) == 0 {
-		return make([]RoleRef, 0), nil
+		return make([]RoleRef, 0), true, nil
 	}
 	if slices.Contains(ids, uuid.Nil) || s.roles == nil {
-		return nil, apperr.New(422, ErrCodeInvalidRole)
+		return nil, false, nil
 	}
 	refs, err := s.roles.ResolveRoles(ctx, ids)
 	if err != nil {
-		return nil, err
+		return nil, false, wrapAppErr(err)
 	}
 	if len(refs) != len(ids) {
-		return nil, apperr.New(422, ErrCodeInvalidRole)
+		return nil, false, nil
 	}
-	return refs, nil
+	return refs, true, nil
 }
 
 func (s *Service) attachUserRoles(ctx context.Context, users []UserDetail) error {
@@ -1215,7 +1400,7 @@ func (s *Service) attachUserRoles(ctx context.Context, users []UserDetail) error
 	}
 	roleMap, err := s.roles.ListRolesByUserIDs(ctx, ids)
 	if err != nil {
-		return err
+		return wrapAppErr(err)
 	}
 	for i := range users {
 		users[i].Roles = nonNilRoleRefs(roleMap[users[i].ID])
@@ -1229,7 +1414,7 @@ func (s *Service) getUserRoles(ctx context.Context, userID uuid.UUID) ([]RoleRef
 	}
 	m, err := s.roles.ListRolesByUserIDs(ctx, []uuid.UUID{userID})
 	if err != nil {
-		return nil, err
+		return nil, wrapAppErr(err)
 	}
 	return nonNilRoleRefs(m[userID]), nil
 }
@@ -1251,7 +1436,7 @@ func (s *Service) ensureOtherActiveSuperAdmin(ctx context.Context, excludeUserID
 	}
 	ids, err := s.roles.ListUserIDsByRoleCode(ctx, superAdminRoleCode)
 	if err != nil {
-		return err
+		return wrapAppErr(err)
 	}
 	remaining := make([]uuid.UUID, 0, len(ids))
 	for _, id := range ids {
@@ -1268,41 +1453,6 @@ func (s *Service) ensureOtherActiveSuperAdmin(ctx context.Context, excludeUserID
 	}
 	if count == 0 {
 		return lastSuperAdminError()
-	}
-	return nil
-}
-
-func (s *Service) recordAudit(
-	ctx context.Context,
-	actorID *uuid.UUID,
-	meta RequestMeta,
-	action string,
-	resourceID string,
-	metadata map[string]any,
-) error {
-	if s.audit == nil {
-		return nil
-	}
-	actorUsername := ""
-	if actorID != nil && *actorID != uuid.Nil {
-		if u, err := s.store.GetUserByID(ctx, *actorID); err == nil {
-			actorUsername = u.Username
-		} else {
-			s.log.Warn("resolve actor username for identity audit failed", "actor_id", actorID.String(), "error", err)
-		}
-	}
-	if err := s.audit.Record(ctx, AuditEntry{
-		ActorID:       actorID,
-		ActorUsername: actorUsername,
-		Action:        action,
-		Resource:      auditResourceUser,
-		ResourceID:    resourceID,
-		Status:        auditStatusSuccess,
-		IPAddress:     meta.IPAddress,
-		UserAgent:     meta.UserAgent,
-		Metadata:      metadata,
-	}); err != nil {
-		return apperr.Internal(fmt.Errorf("record audit %s: %w", action, err))
 	}
 	return nil
 }
@@ -1345,10 +1495,27 @@ func sameUUIDPtr(a, b *uuid.UUID) bool {
 }
 
 func (s *Service) withinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	var err error
 	if s.tx == nil {
-		return fn(ctx)
+		err = fn(ctx)
+	} else {
+		err = s.tx.WithinTx(ctx, fn)
 	}
-	return s.tx.WithinTx(ctx, fn)
+	return wrapAppErr(err)
+}
+
+func wrapAppErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := apperr.As(err); ok {
+		return err
+	}
+	return apperr.Internal(err)
+}
+
+func isValidText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, 0)
 }
 
 func normalizeUsername(raw string) (string, bool) {
@@ -1373,7 +1540,7 @@ func normalizeEmail(raw string) (string, bool) {
 
 func normalizeDisplayName(raw, fallback string) (string, bool) {
 	d := strings.TrimSpace(raw)
-	if utf8.RuneCountInString(d) > maxDisplayRunes {
+	if !isValidText(d) || utf8.RuneCountInString(d) > maxDisplayRunes {
 		return "", false
 	}
 	if d == "" {
@@ -1399,13 +1566,20 @@ func normalizeStatusesFilter(in []string) []string {
 	return out
 }
 
-func normalizeUserSort(sort string) string {
+func isAllowedUserSort(sort string) bool {
 	switch sort {
 	case "created_at", "updated_at", "username", "last_login_at":
-		return sort
+		return true
 	default:
-		return ""
+		return false
 	}
+}
+
+func normalizeUserSort(sort string) string {
+	if isAllowedUserSort(sort) {
+		return sort
+	}
+	return "created_at"
 }
 
 func normalizeUserOrder(order string) string {
@@ -1422,6 +1596,40 @@ func hasRoleCode(roles []RoleRef, code string) bool {
 		}
 	}
 	return false
+}
+
+func sortRoleRefs(in []RoleRef) []RoleRef {
+	if len(in) == 0 {
+		return make([]RoleRef, 0)
+	}
+	out := slices.Clone(in)
+	slices.SortFunc(out, func(a, b RoleRef) int {
+		if a.IsSystem != b.IsSystem {
+			if a.IsSystem {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(a.Code, b.Code)
+	})
+	return out
+}
+
+func sameRoleSet(a, b []RoleRef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	aIDs := make([]string, len(a))
+	for i, r := range a {
+		aIDs[i] = r.ID.String()
+	}
+	bIDs := make([]string, len(b))
+	for i, r := range b {
+		bIDs[i] = r.ID.String()
+	}
+	slices.Sort(aIDs)
+	slices.Sort(bIDs)
+	return slices.Equal(aIDs, bIDs)
 }
 
 func roleCodes(roles []RoleRef) []string {

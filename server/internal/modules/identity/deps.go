@@ -7,6 +7,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// PasswordHasher hashes and verifies user passwords.
+type PasswordHasher interface {
+	Hash(password string) (string, error)
+	Verify(password, encodedHash string) (matched bool, needsRehash bool, err error)
+}
+
 // RoleRef is the lightweight role summary consumed by identity without importing access.
 type RoleRef struct {
 	ID       uuid.UUID

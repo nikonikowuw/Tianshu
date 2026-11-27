@@ -190,9 +190,6 @@ SELECT
     display_name,
     avatar_file_id,
     status,
-    last_login_at,
-    created_by,
-    updated_by,
     created_at,
     updated_at
 FROM users
@@ -208,9 +205,6 @@ type GetUserByIDForUpdateRow struct {
 	DisplayName  string
 	AvatarFileID uuid.NullUUID
 	Status       string
-	LastLoginAt  pgtype.Timestamptz
-	CreatedBy    uuid.NullUUID
-	UpdatedBy    uuid.NullUUID
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 }
@@ -225,9 +219,6 @@ func (q *Queries) GetUserByIDForUpdate(ctx context.Context, id uuid.UUID) (GetUs
 		&i.DisplayName,
 		&i.AvatarFileID,
 		&i.Status,
-		&i.LastLoginAt,
-		&i.CreatedBy,
-		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -537,26 +528,6 @@ func (q *Queries) SoftDeleteUser(ctx context.Context, arg SoftDeleteUserParams) 
 	return err
 }
 
-const updateOwnPasswordHash = `-- name: UpdateOwnPasswordHash :exec
-UPDATE users
-SET password_hash = $2,
-    updated_by = $3,
-    updated_at = now()
-WHERE id = $1
-  AND deleted_at IS NULL
-`
-
-type UpdateOwnPasswordHashParams struct {
-	ID           uuid.UUID
-	PasswordHash string
-	UpdatedBy    uuid.NullUUID
-}
-
-func (q *Queries) UpdateOwnPasswordHash(ctx context.Context, arg UpdateOwnPasswordHashParams) error {
-	_, err := q.db.Exec(ctx, updateOwnPasswordHash, arg.ID, arg.PasswordHash, arg.UpdatedBy)
-	return err
-}
-
 const updateOwnProfile = `-- name: UpdateOwnProfile :one
 UPDATE users
 SET email = $2,
@@ -603,26 +574,6 @@ func (q *Queries) UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const updateUserPasswordByAdmin = `-- name: UpdateUserPasswordByAdmin :exec
-UPDATE users
-SET password_hash = $2,
-    updated_by = $3,
-    updated_at = now()
-WHERE id = $1
-  AND deleted_at IS NULL
-`
-
-type UpdateUserPasswordByAdminParams struct {
-	ID           uuid.UUID
-	PasswordHash string
-	UpdatedBy    uuid.NullUUID
-}
-
-func (q *Queries) UpdateUserPasswordByAdmin(ctx context.Context, arg UpdateUserPasswordByAdminParams) error {
-	_, err := q.db.Exec(ctx, updateUserPasswordByAdmin, arg.ID, arg.PasswordHash, arg.UpdatedBy)
-	return err
-}
-
 const updateUserPasswordHash = `-- name: UpdateUserPasswordHash :exec
 UPDATE users
 SET password_hash = $2,
@@ -638,6 +589,26 @@ type UpdateUserPasswordHashParams struct {
 
 func (q *Queries) UpdateUserPasswordHash(ctx context.Context, arg UpdateUserPasswordHashParams) error {
 	_, err := q.db.Exec(ctx, updateUserPasswordHash, arg.ID, arg.PasswordHash)
+	return err
+}
+
+const updateUserPasswordWithActor = `-- name: UpdateUserPasswordWithActor :exec
+UPDATE users
+SET password_hash = $2,
+    updated_by = $3,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+type UpdateUserPasswordWithActorParams struct {
+	ID           uuid.UUID
+	PasswordHash string
+	UpdatedBy    uuid.NullUUID
+}
+
+func (q *Queries) UpdateUserPasswordWithActor(ctx context.Context, arg UpdateUserPasswordWithActorParams) error {
+	_, err := q.db.Exec(ctx, updateUserPasswordWithActor, arg.ID, arg.PasswordHash, arg.UpdatedBy)
 	return err
 }
 

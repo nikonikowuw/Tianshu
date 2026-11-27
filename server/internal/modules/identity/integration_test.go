@@ -3,6 +3,7 @@ package identity_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -29,6 +30,7 @@ import (
 	"tianshu/internal/platform/security"
 	"tianshu/internal/platform/storage"
 	"tianshu/internal/shared/apperr"
+	"tianshu/internal/shared/pagination"
 	"tianshu/migrations"
 )
 
@@ -139,42 +141,78 @@ func openIsolatedTestPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func TestIdentityConcurrentLastSuperAdminAndSoftDeleteRebuild(t *testing.T) {
-	pool := openIsolatedTestPool(t)
-	tx := database.NewTxManager(pool)
-	mem := cache.NewMemory()
-	defer func() { _ = mem.Close() }()
-
+func newTestBundle(t *testing.T) *i18n.Bundle {
+	t.Helper()
 	bundle, err := i18n.NewBundle()
 	if err != nil {
 		t.Fatalf("NewBundle: %v", err)
 	}
-	_ = bundle.RegisterFS("access", access.LocalesFS, "locales")
-	_ = bundle.RegisterFS("identity", identity.LocalesFS, "locales")
+	if err := bundle.RegisterFS("access", access.LocalesFS, "locales"); err != nil {
+		t.Fatalf("RegisterFS(access): %v", err)
+	}
+	if err := bundle.RegisterFS("identity", identity.LocalesFS, "locales"); err != nil {
+		t.Fatalf("RegisterFS(identity): %v", err)
+	}
+	if err := bundle.RegisterFS("auth", auth.LocalesFS, "locales"); err != nil {
+		t.Fatalf("RegisterFS(auth): %v", err)
+	}
+	if err := bundle.RegisterFS("files", files.LocalesFS, "locales"); err != nil {
+		t.Fatalf("RegisterFS(files): %v", err)
+	}
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("bundle.Validate: %v", err)
+	}
+	return bundle
+}
+
+func TestIdentityConcurrentLastSuperAdminAndSoftDeleteRebuild(t *testing.T) {
+	pool := openIsolatedTestPool(t)
+	ctx := t.Context()
+	log := logger.New("test", "error", io.Discard)
+	tx := database.NewTxManager(pool)
+	mem := cache.NewMemory()
+	defer func() { _ = mem.Close() }()
+	bundle := newTestBundle(t)
 
 	hasher, err := security.NewPasswordHasher(security.DefaultArgon2Params())
 	if err != nil {
 		t.Fatalf("NewPasswordHasher: %v", err)
+	}
+	jwtMgr, err := security.NewJWTManager("integration-test-jwt-secret-at-least-32-bytes", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("NewJWTManager: %v", err)
 	}
 
 	accessSvc := access.NewService(pool, access.ServiceDeps{
 		Tx:    tx,
 		Cache: mem,
 		I18n:  bundle,
-		Log:   logger.New("test", "error", io.Discard),
+		Log:   log,
 	})
-	if err := accessSvc.SyncCatalog(t.Context()); err != nil {
+	if err := accessSvc.SyncCatalog(ctx); err != nil {
 		t.Fatalf("SyncCatalog: %v", err)
 	}
 
+	sessAdapter := &authSessionAdapter{}
 	idSvc := identity.NewService(pool, hasher, identity.ServiceDeps{
-		Tx:    tx,
-		Roles: &accessAdapter{svc: accessSvc},
-		I18n:  bundle,
-		Log:   logger.New("test", "error", io.Discard),
+		Tx:       tx,
+		Roles:    &accessAdapter{svc: accessSvc},
+		Sessions: sessAdapter,
+		Log:      log,
 	})
 
-	u1, err := idSvc.CreateInitialAdmin(t.Context(), identity.CreateInitialAdminInput{
+	authSvc := auth.NewService(config.Default().Auth, pool, auth.ServiceDeps{
+		Identity: &authIdentityBridge{svc: idSvc},
+		Access:   &authAccessBridge{svc: accessSvc},
+		Hasher:   hasher,
+		JWT:      jwtMgr,
+		Tx:       tx,
+		Cache:    mem,
+		Log:      log,
+	})
+	sessAdapter.svc = authSvc
+
+	u1, err := idSvc.CreateInitialAdmin(ctx, identity.CreateInitialAdminInput{
 		Username: "admin1",
 		Email:    "admin1@example.com",
 		Password: "password123",
@@ -182,11 +220,20 @@ func TestIdentityConcurrentLastSuperAdminAndSoftDeleteRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInitialAdmin(1): %v", err)
 	}
-	if err := accessSvc.AssignRoleByCode(t.Context(), u1.ID, access.RoleCodeSuperAdmin); err != nil {
+	if err := accessSvc.AssignRoleByCode(ctx, u1.ID, access.RoleCodeSuperAdmin); err != nil {
 		t.Fatalf("AssignRoleByCode(1): %v", err)
 	}
 
-	opts, err := accessSvc.ListRoleOptions(t.Context())
+	login1, err := authSvc.Login(ctx, auth.LoginInput{Identifier: "admin1", Password: "password123", ClientIP: "127.0.0.1", UserAgent: "A1"})
+	if err != nil {
+		t.Fatalf("Login(admin1): %v", err)
+	}
+	claims1, err := jwtMgr.Verify(login1.AccessToken)
+	if err != nil {
+		t.Fatalf("Verify(admin1): %v", err)
+	}
+
+	opts, err := accessSvc.ListRoleOptions(ctx)
 	if err != nil {
 		t.Fatalf("ListRoleOptions: %v", err)
 	}
@@ -197,70 +244,364 @@ func TestIdentityConcurrentLastSuperAdminAndSoftDeleteRebuild(t *testing.T) {
 		}
 	}
 
-	u2, err := idSvc.CreateUser(t.Context(), identity.CreateUserInput{
-		Username: "admin2",
-		Email:    "admin2@example.com",
-		Password: "password123",
-		RoleIDs:  []uuid.UUID{superRoleID},
-		ActorID:  &u1.ID,
+	u2, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username:       "admin2",
+		Email:          "admin2@example.com",
+		Password:       "password123",
+		RoleIDs:        []uuid.UUID{superRoleID},
+		ActorID:        &u1.ID,
+		ActorSessionID: claims1.SessionID,
 	})
 	if err != nil {
 		t.Fatalf("CreateUser(admin2): %v", err)
 	}
+	login2, err := authSvc.Login(ctx, auth.LoginInput{Identifier: "admin2", Password: "password123", ClientIP: "127.0.0.2", UserAgent: "A2"})
+	if err != nil {
+		t.Fatalf("Login(admin2): %v", err)
+	}
+	claims2, err := jwtMgr.Verify(login2.AccessToken)
+	if err != nil {
+		t.Fatalf("Verify(admin2): %v", err)
+	}
 
-	// Concurrent disable: u2 disables u1, u1 disables u2 -> exactly one succeeds, one gets USERS_LAST_SUPER_ADMIN.
+	// Concurrent mutual disable under advisory lock: exactly 1 succeeds, the loser is rejected (disabled/unauthorized/last super)
+	// and exactly 1 active super_admin remains.
+	start := make(chan struct{})
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	disabled := identity.StatusDisabled
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = idSvc.UpdateUser(t.Context(), identity.UpdateUserInput{UserID: u1.ID, Status: &disabled, ActorID: &u2.ID})
+		<-start
+		_, errs[0] = idSvc.UpdateUser(ctx, identity.UpdateUserInput{
+			UserID:         u1.ID,
+			Status:         &disabled,
+			ActorID:        &u2.ID,
+			ActorSessionID: claims2.SessionID,
+		})
 	}()
 	go func() {
 		defer wg.Done()
-		_, errs[1] = idSvc.UpdateUser(t.Context(), identity.UpdateUserInput{UserID: u2.ID, Status: &disabled, ActorID: &u1.ID})
+		<-start
+		_, errs[1] = idSvc.UpdateUser(ctx, identity.UpdateUserInput{
+			UserID:         u2.ID,
+			Status:         &disabled,
+			ActorID:        &u1.ID,
+			ActorSessionID: claims1.SessionID,
+		})
 	}()
+	close(start)
 	wg.Wait()
 
-	var okCount, lastSuperCount int
+	var okCount, rejectedCount int
 	for _, e := range errs {
 		if e == nil {
 			okCount++
-		} else if appErr, ok := apperr.As(e); ok && appErr.Code == identity.ErrCodeLastSuperAdmin {
-			lastSuperCount++
+			continue
+		}
+		appErr, ok := apperr.As(e)
+		if !ok {
+			t.Fatalf("expected *apperr.Error, got %v", e)
+		}
+		if appErr.Code == "AUTH_ACCOUNT_DISABLED" || appErr.Code == apperr.CodeUnauthorized || appErr.Code == identity.ErrCodeLastSuperAdmin {
+			rejectedCount++
 		} else {
 			t.Fatalf("unexpected concurrent error: %v", e)
 		}
 	}
-	if okCount != 1 || lastSuperCount != 1 {
-		t.Fatalf("expected 1 success and 1 %s, got ok=%d lastSuper=%d", identity.ErrCodeLastSuperAdmin, okCount, lastSuperCount)
+	if okCount != 1 || rejectedCount != 1 {
+		t.Fatalf("expected 1 success and 1 rejection, got ok=%d rejected=%d errs=%v", okCount, rejectedCount, errs)
 	}
 
-	// Soft-delete an ordinary user and recreate with the same username & email.
-	alice, err := idSvc.CreateUser(t.Context(), identity.CreateUserInput{
-		Username: "alice",
-		Email:    "alice@example.com",
-		Password: "password123",
-		ActorID:  &u1.ID,
+	// Determine the surviving active super_admin and disabled loser.
+	var (
+		activeID, disabledID     uuid.UUID
+		activeSess, disabledSess uuid.UUID
+	)
+	if errs[0] == nil {
+		// u2 disabled u1
+		activeID, activeSess = u2.ID, claims2.SessionID
+		disabledID, disabledSess = u1.ID, claims1.SessionID
+	} else {
+		// u1 disabled u2
+		activeID, activeSess = u1.ID, claims1.SessionID
+		disabledID, disabledSess = u2.ID, claims2.SessionID
+	}
+
+	// Disabled loser cannot self-re-enable or mint a backdoor super_admin with its residual AT/session.
+	active := identity.StatusActive
+	if _, err := idSvc.UpdateUser(ctx, identity.UpdateUserInput{
+		UserID:         disabledID,
+		Status:         &active,
+		ActorID:        &disabledID,
+		ActorSessionID: disabledSess,
+	}); err == nil {
+		t.Fatal("disabled admin must not self-re-enable")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != "AUTH_ACCOUNT_DISABLED" {
+		t.Fatalf("disabled self-re-enable = %v, want AUTH_ACCOUNT_DISABLED", err)
+	}
+
+	if _, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username:       "backdoor",
+		Email:          "backdoor@example.com",
+		Password:       "password123",
+		RoleIDs:        []uuid.UUID{superRoleID},
+		ActorID:        &disabledID,
+		ActorSessionID: disabledSess,
+	}); err == nil {
+		t.Fatal("disabled admin must not create backdoor super_admin")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != "AUTH_ACCOUNT_DISABLED" {
+		t.Fatalf("disabled backdoor create = %v, want AUTH_ACCOUNT_DISABLED", err)
+	}
+
+	// Soft-delete an ordinary user with a role & active session, verify both are cleared, and recreate with same username/email.
+	customRole, err := accessSvc.CreateRole(ctx, access.CreateRoleInput{
+		Code:        "temp_role",
+		Name:        "Temp Role",
+		Permissions: []string{"users:read"},
+	})
+	if err != nil {
+		t.Fatalf("CreateRole: %v", err)
+	}
+
+	alice, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username:       "alice",
+		Email:          "alice@example.com",
+		Password:       "password123",
+		RoleIDs:        []uuid.UUID{customRole.ID},
+		ActorID:        &activeID,
+		ActorSessionID: activeSess,
 	})
 	if err != nil {
 		t.Fatalf("create alice: %v", err)
 	}
-	if err := idSvc.DeleteUser(t.Context(), identity.DeleteUserInput{UserID: alice.ID, ActorID: &u1.ID}); err != nil {
+	aliceLogin, err := authSvc.Login(ctx, auth.LoginInput{Identifier: "alice", Password: "password123", ClientIP: "10.0.0.5", UserAgent: "AliceUA"})
+	if err != nil {
+		t.Fatalf("login alice: %v", err)
+	}
+
+	if err := idSvc.DeleteUser(ctx, identity.DeleteUserInput{
+		UserID:         alice.ID,
+		ActorID:        &activeID,
+		ActorSessionID: activeSess,
+	}); err != nil {
 		t.Fatalf("delete alice: %v", err)
 	}
-	alice2, err := idSvc.CreateUser(t.Context(), identity.CreateUserInput{
-		Username: "alice",
-		Email:    "alice@example.com",
-		Password: "password123",
-		ActorID:  &u1.ID,
+	// Active session must be revoked on soft delete.
+	if _, err := authSvc.Refresh(ctx, auth.RefreshInput{RefreshToken: aliceLogin.RefreshToken}); err == nil {
+		t.Fatal("expected soft-deleted user's refresh token to fail")
+	}
+	// Clearing user_roles on soft delete releases ROLES_IN_USE so customRole can be deleted.
+	if err := accessSvc.DeleteRole(ctx, access.DeleteRoleInput{RoleID: customRole.ID}); err != nil {
+		t.Fatalf("expected custom role deletable after user soft delete, got %v", err)
+	}
+
+	alice2, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username:       "alice",
+		Email:          "alice@example.com",
+		Password:       "password123",
+		ActorID:        &activeID,
+		ActorSessionID: activeSess,
 	})
 	if err != nil {
 		t.Fatalf("recreate alice after soft delete: %v", err)
 	}
 	if alice2.ID == alice.ID {
 		t.Fatalf("expected new UUIDv7 for recreated user")
+	}
+}
+
+type failingAuditRecorder struct {
+	err error
+}
+
+func (f *failingAuditRecorder) Record(_ context.Context, _ identity.AuditEntry) error {
+	return f.err
+}
+
+func TestIdentityUniqueConflictsListSQLAndTxRollbackPostgres(t *testing.T) {
+	pool := openIsolatedTestPool(t)
+	ctx := t.Context()
+	log := logger.New("test", "error", io.Discard)
+	tx := database.NewTxManager(pool)
+	mem := cache.NewMemory()
+	defer func() { _ = mem.Close() }()
+	bundle := newTestBundle(t)
+
+	hasher, err := security.NewPasswordHasher(security.DefaultArgon2Params())
+	if err != nil {
+		t.Fatalf("NewPasswordHasher: %v", err)
+	}
+
+	accessSvc := access.NewService(pool, access.ServiceDeps{
+		Tx:    tx,
+		Cache: mem,
+		I18n:  bundle,
+		Log:   log,
+	})
+	if err := accessSvc.SyncCatalog(ctx); err != nil {
+		t.Fatalf("SyncCatalog: %v", err)
+	}
+
+	idSvc := identity.NewService(pool, hasher, identity.ServiceDeps{
+		Tx:    tx,
+		Roles: &accessAdapter{svc: accessSvc},
+		Log:   log,
+	})
+
+	admin, err := idSvc.CreateInitialAdmin(ctx, identity.CreateInitialAdminInput{
+		Username: "root_sql",
+		Email:    "root.sql@example.com",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("CreateInitialAdmin: %v", err)
+	}
+	if err := accessSvc.AssignRoleByCode(ctx, admin.ID, access.RoleCodeSuperAdmin); err != nil {
+		t.Fatalf("AssignRoleByCode: %v", err)
+	}
+
+	roleOps, err := accessSvc.CreateRole(ctx, access.CreateRoleInput{
+		Code:        "ops_viewer",
+		Name:        "Ops Viewer",
+		Permissions: []string{"users:read"},
+	})
+	if err != nil {
+		t.Fatalf("CreateRole: %v", err)
+	}
+
+	// 1. Real Postgres case-insensitive unique conflicts (23505 on uq_users_username_lower / uq_users_email_lower).
+	if _, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username: "ROOT_SQL",
+		Email:    "other@example.com",
+		Password: "password123",
+		ActorID:  &admin.ID,
+	}); err == nil {
+		t.Fatal("expected 409 username conflict")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != identity.ErrCodeUsernameConflict {
+		t.Fatalf("expected %s, got %v", identity.ErrCodeUsernameConflict, err)
+	}
+	if _, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username: "distinct_user",
+		Email:    "ROOT.SQL@EXAMPLE.COM",
+		Password: "password123",
+		ActorID:  &admin.ID,
+	}); err == nil {
+		t.Fatal("expected 409 email conflict")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != identity.ErrCodeEmailConflict {
+		t.Fatalf("expected %s, got %v", identity.ErrCodeEmailConflict, err)
+	}
+
+	// 2. ListUsers SQL: ILIKE escaping (%, _, \), status/role filters, all 4 sort columns + NULLS LAST + default sort with order=asc.
+	uSpecial, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username:    "alpha_user",
+		Email:       "alpha@example.com",
+		DisplayName: `100%_match\display`,
+		Password:    "password123",
+		Status:      identity.StatusDisabled,
+		RoleIDs:     []uuid.UUID{roleOps.ID},
+		ActorID:     &admin.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser(uSpecial): %v", err)
+	}
+	uLoggedIn, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username:    "zeta_user",
+		Email:       "zeta@example.com",
+		DisplayName: "Plain Display",
+		Password:    "password123",
+		ActorID:     &admin.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser(uLoggedIn): %v", err)
+	}
+	if err := idSvc.RecordLogin(ctx, uLoggedIn.ID); err != nil {
+		t.Fatalf("RecordLogin: %v", err)
+	}
+
+	// Duplicate email on UpdateUser triggers real Postgres 23505 -> 409 USERS_EMAIL_CONFLICT.
+	dupEmail := "ALPHA@EXAMPLE.COM"
+	if _, err := idSvc.UpdateUser(ctx, identity.UpdateUserInput{
+		UserID:  uLoggedIn.ID,
+		Email:   &dupEmail,
+		ActorID: &admin.ID,
+	}); err == nil {
+		t.Fatal("expected 409 email conflict on UpdateUser")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != identity.ErrCodeEmailConflict {
+		t.Fatalf("expected %s, got %v", identity.ErrCodeEmailConflict, err)
+	}
+
+	// Escaped ILIKE must only match literal "100%_match\" and not "Plain Display".
+	escaped, err := idSvc.ListUsers(ctx, identity.UserListFilter{
+		Pagination: pagination.Normalize(1, 20),
+		Q:          `100%_match\`,
+		Statuses:   []string{identity.StatusDisabled},
+		RoleIDs:    []uuid.UUID{roleOps.ID},
+	})
+	if err != nil || escaped.Total != 1 || len(escaped.Items) != 1 || escaped.Items[0].ID != uSpecial.ID {
+		t.Fatalf("escaped ListUsers = (%+v, %v), want only %s", escaped, err, uSpecial.ID)
+	}
+	if escaped.Items[0].CreatedBy == nil || escaped.Items[0].CreatedBy.Username != "root_sql" {
+		t.Fatalf("expected LEFT JOIN createdBy projection, got %+v", escaped.Items[0].CreatedBy)
+	}
+
+	// Sort by username ASC and last_login_at DESC (non-null first, NULLS LAST).
+	byUsername, err := idSvc.ListUsers(ctx, identity.UserListFilter{
+		Pagination: pagination.Normalize(1, 20),
+		Sort:       "username",
+		Order:      "asc",
+	})
+	if err != nil || len(byUsername.Items) != 3 || byUsername.Items[0].Username != "alpha_user" || byUsername.Items[2].Username != "zeta_user" {
+		t.Fatalf("sort username asc = (%+v, %v)", byUsername, err)
+	}
+	byLogin, err := idSvc.ListUsers(ctx, identity.UserListFilter{
+		Pagination: pagination.Normalize(1, 20),
+		Sort:       "last_login_at",
+		Order:      "desc",
+	})
+	if err != nil || len(byLogin.Items) != 3 || byLogin.Items[0].ID != uLoggedIn.ID {
+		t.Fatalf("sort last_login_at desc (NULLS LAST) = (%+v, %v)", byLogin, err)
+	}
+	// Empty sort with order=asc sorts created_at ASC (admin created first).
+	byDefaultAsc, err := idSvc.ListUsers(ctx, identity.UserListFilter{
+		Pagination: pagination.Normalize(1, 20),
+		Order:      "asc",
+	})
+	if err != nil || len(byDefaultAsc.Items) != 3 || byDefaultAsc.Items[0].ID != admin.ID {
+		t.Fatalf("default sort order=asc = (%+v, %v), want admin first", byDefaultAsc, err)
+	}
+
+	// 3. Cross-module tx rollback: prime access cache, then trigger failing AuditRecorder inside UpdateUser.
+	// Neither users/user_roles changes nor AfterCommit cache invalidation may persist.
+	if _, err := accessSvc.GetUserAccess(ctx, uSpecial.ID); err != nil {
+		t.Fatalf("prime GetUserAccess cache: %v", err)
+	}
+	rollbackSvc := identity.NewService(pool, hasher, identity.ServiceDeps{
+		Tx:    tx,
+		Roles: &accessAdapter{svc: accessSvc},
+		Audit: &failingAuditRecorder{err: errors.New("audit write failure")},
+		Log:   log,
+	})
+	newDisplay := "Should Rollback"
+	emptyRoles := []uuid.UUID{}
+	if _, err := rollbackSvc.UpdateUser(ctx, identity.UpdateUserInput{
+		UserID:      uSpecial.ID,
+		DisplayName: &newDisplay,
+		RoleIDs:     &emptyRoles,
+		ActorID:     &admin.ID,
+	}); err == nil {
+		t.Fatal("expected rollback error from failing AuditRecorder")
+	}
+	reloaded, err := idSvc.GetUser(ctx, uSpecial.ID)
+	if err != nil {
+		t.Fatalf("GetUser after rollback: %v", err)
+	}
+	if reloaded.DisplayName != `100%_match\display` || len(reloaded.Roles) != 1 || reloaded.Roles[0].ID != roleOps.ID {
+		t.Fatalf("expected users and user_roles rolled back cleanly, got %+v", reloaded)
+	}
+	if _, cacheErr := mem.Get(ctx, "access:user:"+uSpecial.ID.String()); cacheErr != nil {
+		t.Fatalf("AfterCommit cache invalidation must not fire on rolled-back tx: err=%v", cacheErr)
 	}
 }
 
@@ -436,15 +777,7 @@ func TestProfileAvatarLockPasswordAndSessionInvalidationPostgres(t *testing.T) {
 	tx := database.NewTxManager(pool)
 	mem := cache.NewMemory()
 	defer func() { _ = mem.Close() }()
-
-	bundle, err := i18n.NewBundle()
-	if err != nil {
-		t.Fatalf("NewBundle: %v", err)
-	}
-	_ = bundle.RegisterFS("access", access.LocalesFS, "locales")
-	_ = bundle.RegisterFS("identity", identity.LocalesFS, "locales")
-	_ = bundle.RegisterFS("auth", auth.LocalesFS, "locales")
-	_ = bundle.RegisterFS("files", files.LocalesFS, "locales")
+	bundle := newTestBundle(t)
 
 	hasher, err := security.NewPasswordHasher(security.DefaultArgon2Params())
 	if err != nil {
@@ -463,7 +796,6 @@ func TestProfileAvatarLockPasswordAndSessionInvalidationPostgres(t *testing.T) {
 		Sessions: sessAdapter,
 		Files:    filesAdapter,
 		Audit:    &identityAuditBridge{svc: auditSvc},
-		I18n:     bundle,
 		Log:      log,
 	})
 
@@ -585,6 +917,62 @@ func TestProfileAvatarLockPasswordAndSessionInvalidationPostgres(t *testing.T) {
 	}
 	if err := fileSvc.Delete(ctx, files.DeleteInput{FileID: avatarFile.ID, ActorID: &user.ID}); err != nil {
 		t.Fatalf("Delete released avatar: %v", err)
+	}
+
+	// 1b. Concurrent avatar bind (FOR SHARE) vs file delete (FOR UPDATE) must serialize cleanly with zero dangling reference.
+	raceAvatar, err := fileSvc.UploadAvatar(ctx, files.UploadInput{
+		Filename:   "race.png",
+		Reader:     bytes.NewReader(makeSmallPNGBytes(t)),
+		UploaderID: &user.ID,
+	})
+	if err != nil {
+		t.Fatalf("UploadAvatar(race): %v", err)
+	}
+	raceStart := make(chan struct{})
+	var (
+		raceWG          sync.WaitGroup
+		bindErr, delErr error
+	)
+	raceWG.Add(2)
+	go func() {
+		defer raceWG.Done()
+		<-raceStart
+		_, bindErr = idSvc.UpdateProfile(ctx, identity.UpdateProfileInput{
+			UserID:           user.ID,
+			CurrentSessionID: claims1.SessionID,
+			AvatarFileID:     &raceAvatar.ID,
+		})
+	}()
+	go func() {
+		defer raceWG.Done()
+		<-raceStart
+		delErr = fileSvc.Delete(ctx, files.DeleteInput{FileID: raceAvatar.ID, ActorID: &user.ID})
+	}()
+	close(raceStart)
+	raceWG.Wait()
+
+	switch {
+	case bindErr == nil && delErr != nil:
+		if appErr, ok := apperr.As(delErr); !ok || appErr.Code != files.ErrCodeInUse {
+			t.Fatalf("when bind wins, delete must return %s, got %v", files.ErrCodeInUse, delErr)
+		}
+		if _, err := idSvc.UpdateProfile(ctx, identity.UpdateProfileInput{
+			UserID:           user.ID,
+			CurrentSessionID: claims1.SessionID,
+			ClearAvatar:      true,
+		}); err != nil {
+			t.Fatalf("clear race avatar: %v", err)
+		}
+	case delErr == nil && bindErr != nil:
+		if appErr, ok := apperr.As(bindErr); !ok || appErr.Code != apperr.CodeValidationFailed {
+			t.Fatalf("when delete wins, bind must return 422, got %v", bindErr)
+		}
+		latest, err := idSvc.GetProfile(ctx, user.ID, claims1.SessionID)
+		if err != nil || latest.AvatarFileID != nil {
+			t.Fatalf("expected no dangling avatar reference when delete wins, got (%+v, %v)", latest, err)
+		}
+	default:
+		t.Fatalf("concurrent bind/delete must have exactly one winner: bindErr=%v delErr=%v", bindErr, delErr)
 	}
 
 	// 2. Multi-device sessions: kick device 2 -> refresh fails AND device 2 gets 401 on all /profile* endpoints.

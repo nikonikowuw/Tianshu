@@ -2,7 +2,9 @@ package identity
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -10,6 +12,12 @@ import (
 	"tianshu/internal/shared/apperr"
 	"tianshu/internal/shared/authctx"
 	"tianshu/internal/shared/pagination"
+)
+
+const (
+	maxSearchQueryRunes    = 100
+	maxMultiFilterItems    = 20
+	maxMultiFilterRawItems = 100
 )
 
 type optionalNullableString struct {
@@ -29,16 +37,6 @@ func (o *optionalNullableString) UnmarshalJSON(data []byte) error {
 	}
 	o.Value = &s
 	return nil
-}
-
-type listUsersRequest struct {
-	Page     *int     `form:"page" binding:"omitempty,min=1"`
-	PageSize *int     `form:"pageSize" binding:"omitempty,min=10,max=100"`
-	Q        string   `form:"q" binding:"omitempty,max=100"`
-	Status   []string `form:"status"`
-	RoleID   []string `form:"roleId"`
-	Sort     string   `form:"sort" binding:"omitempty,oneof=created_at updated_at username last_login_at"`
-	Order    string   `form:"order" binding:"omitempty,oneof=asc desc"`
 }
 
 type createUserRequest struct {
@@ -71,66 +69,137 @@ type changePasswordRequest struct {
 }
 
 func bindListUsersRequest(c *gin.Context) (UserListFilter, error) {
-	var req listUsersRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		return UserListFilter{}, err
-	}
-
 	var fieldErrs []apperr.FieldError
-	statuses := make([]string, 0, len(req.Status))
-	for _, raw := range req.Status {
-		st := strings.TrimSpace(raw)
-		if st == "" {
-			continue
-		}
-		if st != StatusActive && st != StatusDisabled {
-			fieldErrs = append(fieldErrs, apperr.FieldError{
-				Field:   "status",
-				Message: ErrCodeInvalidStatus,
-			})
-			break
-		}
-		statuses = append(statuses, st)
+
+	page, pageOK := parseOptionalInt(c.Query("page"), pagination.DefaultPage)
+	if !pageOK || page < pagination.DefaultPage {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "page",
+			Message: ErrCodeInvalidPage,
+		})
 	}
 
-	roleIDs := make([]uuid.UUID, 0, len(req.RoleID))
-	for _, raw := range req.RoleID {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			continue
-		}
-		parsed, err := uuid.Parse(trimmed)
-		if err != nil {
-			fieldErrs = append(fieldErrs, apperr.FieldError{
-				Field:   "roleId",
-				Message: "VALIDATION_UUID",
-			})
-			break
-		}
-		roleIDs = append(roleIDs, parsed)
+	pageSize, pageSizeOK := parseOptionalInt(c.Query("pageSize"), pagination.DefaultPageSize)
+	if !pageSizeOK || pageSize < pagination.MinPageSize || pageSize > pagination.MaxPageSize {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "pageSize",
+			Message: ErrCodeInvalidPageSize,
+		})
+	}
+
+	q := strings.TrimSpace(c.Query("q"))
+	if !isValidText(q) {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "q",
+			Message: "VALIDATION_DEFAULT",
+		})
+	} else if utf8.RuneCountInString(q) > maxSearchQueryRunes {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "q",
+			Message: ErrCodeQueryTooLong,
+		})
+	}
+
+	statuses, statusErr := parseStatusQuery(c.QueryArray("status"))
+	if statusErr != nil {
+		fieldErrs = append(fieldErrs, *statusErr)
+	}
+
+	roleIDs, roleErr := parseRoleIDQuery(c.QueryArray("roleId"))
+	if roleErr != nil {
+		fieldErrs = append(fieldErrs, *roleErr)
+	}
+
+	sortBy := strings.TrimSpace(c.Query("sort"))
+	if sortBy != "" && !isAllowedUserSort(sortBy) {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "sort",
+			Message: "VALIDATION_ONE_OF",
+		})
+	}
+
+	order := strings.ToLower(strings.TrimSpace(c.Query("order")))
+	if order != "" && order != "asc" && order != "desc" {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "order",
+			Message: "VALIDATION_ONE_OF",
+		})
 	}
 
 	if len(fieldErrs) > 0 {
 		return UserListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
 	}
 
-	page := pagination.DefaultPage
-	if req.Page != nil {
-		page = *req.Page
-	}
-	pageSize := pagination.DefaultPageSize
-	if req.PageSize != nil {
-		pageSize = *req.PageSize
-	}
-
 	return UserListFilter{
 		Pagination: pagination.Normalize(page, pageSize),
-		Q:          strings.TrimSpace(req.Q),
+		Q:          q,
 		Statuses:   statuses,
 		RoleIDs:    roleIDs,
-		Sort:       req.Sort,
-		Order:      req.Order,
+		Sort:       sortBy,
+		Order:      order,
 	}, nil
+}
+
+func parseOptionalInt(raw string, fallback int) (int, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fallback, true
+	}
+	v, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func parseStatusQuery(raw []string) ([]string, *apperr.FieldError) {
+	if len(raw) > maxMultiFilterRawItems {
+		return nil, &apperr.FieldError{Field: "status", Message: ErrCodeInvalidStatus}
+	}
+	seen := make(map[string]struct{}, min(len(raw), maxMultiFilterItems))
+	statuses := make([]string, 0, min(len(raw), maxMultiFilterItems))
+	for _, item := range raw {
+		st := strings.TrimSpace(item)
+		if st == "" {
+			continue
+		}
+		if st != StatusActive && st != StatusDisabled {
+			return nil, &apperr.FieldError{Field: "status", Message: ErrCodeInvalidStatus}
+		}
+		if _, exists := seen[st]; exists {
+			continue
+		}
+		seen[st] = struct{}{}
+		statuses = append(statuses, st)
+	}
+	return statuses, nil
+}
+
+func parseRoleIDQuery(raw []string) ([]uuid.UUID, *apperr.FieldError) {
+	if len(raw) > maxMultiFilterRawItems {
+		return nil, &apperr.FieldError{Field: "roleId", Message: ErrCodeTooManyRoleFilters}
+	}
+	seen := make(map[uuid.UUID]struct{}, min(len(raw), maxMultiFilterItems))
+	roleIDs := make([]uuid.UUID, 0, min(len(raw), maxMultiFilterItems))
+	for _, item := range raw {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		parsed, err := uuid.Parse(trimmed)
+		if err != nil || parsed == uuid.Nil {
+			return nil, &apperr.FieldError{Field: "roleId", Message: "VALIDATION_UUID"}
+		}
+		if _, exists := seen[parsed]; exists {
+			continue
+		}
+		if len(roleIDs) >= maxMultiFilterItems {
+			return nil, &apperr.FieldError{Field: "roleId", Message: ErrCodeTooManyRoleFilters}
+		}
+		seen[parsed] = struct{}{}
+		roleIDs = append(roleIDs, parsed)
+	}
+	return roleIDs, nil
 }
 
 func parseIDParam(c *gin.Context) (uuid.UUID, error) {
@@ -158,18 +227,6 @@ func parseRoleIDStrings(raw []string) ([]uuid.UUID, error) {
 		ids = append(ids, parsed)
 	}
 	return ids, nil
-}
-
-func extractActorAndMeta(c *gin.Context) (*uuid.UUID, RequestMeta) {
-	var actorID *uuid.UUID
-	if identity, ok := authctx.IdentityFromContext(c.Request.Context()); ok {
-		id := identity.UserID
-		actorID = &id
-	}
-	return actorID, RequestMeta{
-		IPAddress: c.ClientIP(),
-		UserAgent: c.Request.UserAgent(),
-	}
 }
 
 func extractAuthIdentityAndMeta(c *gin.Context) (authctx.Identity, RequestMeta, bool) {

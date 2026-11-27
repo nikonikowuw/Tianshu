@@ -33,7 +33,7 @@
 - 改密：校验旧密码，在行锁事务（`SELECT ... FOR UPDATE`）内二次核验账号活跃态、当前会话仍活跃且密码哈希未被并发修改，随后写入新哈希并按 `revokeOtherSessions` 开关（默认 `true`）吊销除当前 session 外的所有会话；可选择轮换当前 session。
 - 个人中心与活跃会话端点（`/api/v1/profile*`）：除 JWT 验签与用户活跃态检查外，每次请求校验调用者 `session_id` 在 `user_sessions` 中仍处于未吊销且未过期状态（写操作在行锁事务内 `FOR SHARE` 校验），防止已被踢下线的旧设备在 Access Token 剩余窗口内反踢合法会话或篡改资料/密码。
 - 禁用/软删除用户/管理员重置他人密码：显式吊销该用户全部 session（软删除不触发外键 `ON DELETE CASCADE`）；若存在物理清理，再由外键级联清理 `user_sessions`。
-- **用户管理提权与自我保护**：只有当前持有 `super_admin` 角色的操作者可以授予/撤销 `super_admin` 角色，以及编辑、禁用或删除 `super_admin` 账号（否则返回 `403 USERS_SUPER_ADMIN_PROTECTED`）；操作者禁止删除自身、禁用自身或移除自身的 `super_admin` 角色（`409 USERS_SELF_OPERATION_FORBIDDEN`）。
+- **用户管理提权与自我保护**：只有当前持有 `super_admin` 角色的操作者可以授予/撤销 `super_admin` 角色，以及编辑、禁用或删除 `super_admin` 账号（否则返回 `403 USERS_SUPER_ADMIN_PROTECTED`）；操作者禁止删除自身、禁用自身或移除自身的 `super_admin` 角色（`409 USERS_SELF_OPERATION_FORBIDDEN`）。用户管理写端点（`POST /api/v1/users`、`PATCH /api/v1/users/:id`、`DELETE /api/v1/users/:id`）均在咨询锁（`usersSuperAdminGuardKey`）串行化事务内校验操作者账号未软删除（`401`）、处于 `active` 状态（`403 AUTH_ACCOUNT_DISABLED`）且当前 `session_id` 仍活跃（`FOR SHARE`，`401`），防止被禁用或被踢下线的管理员在 Access Token 残余窗口内自我解禁、创建后门 `super_admin` 或篡改他人账号，并消除 `POST /api/v1/users` 授予 `super_admin` 时的并发降权 TOCTOU 竞态。
 - 会话列表只返回当前用户自己的记录；`id`、IP、UA、最近使用时间、当前设备标记；不返回 token/hash。
 - 过期 session 与过期 `refresh_token_history` 由 janitor 按 `auth.session_retention_days`（默认 7 天，`0` 禁用）定期分批清理；已吊销会话保留至过期后再清理以维持重放检测。
 

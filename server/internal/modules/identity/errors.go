@@ -8,18 +8,22 @@ import (
 
 // Domain error codes owned by the identity module.
 const (
-	ErrCodeUsernameConflict  = "USERS_USERNAME_CONFLICT"
-	ErrCodeEmailConflict     = "USERS_EMAIL_CONFLICT"
-	ErrCodeInvalidPassword   = "USERS_INVALID_PASSWORD"
-	ErrCodeUserNotFound      = "USERS_NOT_FOUND"
-	ErrCodeLastSuperAdmin    = "USERS_LAST_SUPER_ADMIN"
-	ErrCodeSelfOperation     = "USERS_SELF_OPERATION_FORBIDDEN"
-	ErrCodeSuperAdminProtect = "USERS_SUPER_ADMIN_PROTECTED"
-	ErrCodeInvalidRole       = "USERS_INVALID_ROLE"
-	ErrCodeInvalidUsername   = "USERS_INVALID_USERNAME"
-	ErrCodeInvalidEmail      = "USERS_INVALID_EMAIL"
-	ErrCodeInvalidDisplay    = "USERS_INVALID_DISPLAY_NAME"
-	ErrCodeInvalidStatus     = "USERS_INVALID_STATUS"
+	ErrCodeUsernameConflict   = "USERS_USERNAME_CONFLICT"
+	ErrCodeEmailConflict      = "USERS_EMAIL_CONFLICT"
+	ErrCodeInvalidPassword    = "USERS_INVALID_PASSWORD"
+	ErrCodeUserNotFound       = "USERS_NOT_FOUND"
+	ErrCodeLastSuperAdmin     = "USERS_LAST_SUPER_ADMIN"
+	ErrCodeSelfOperation      = "USERS_SELF_OPERATION_FORBIDDEN"
+	ErrCodeSuperAdminProtect  = "USERS_SUPER_ADMIN_PROTECTED"
+	ErrCodeInvalidRole        = "USERS_INVALID_ROLE"
+	ErrCodeInvalidUsername    = "USERS_INVALID_USERNAME"
+	ErrCodeInvalidEmail       = "USERS_INVALID_EMAIL"
+	ErrCodeInvalidDisplay     = "USERS_INVALID_DISPLAY_NAME"
+	ErrCodeInvalidStatus      = "USERS_INVALID_STATUS"
+	ErrCodeInvalidPage        = "USERS_INVALID_PAGE"
+	ErrCodeInvalidPageSize    = "USERS_INVALID_PAGE_SIZE"
+	ErrCodeQueryTooLong       = "USERS_QUERY_TOO_LONG"
+	ErrCodeTooManyRoleFilters = "USERS_TOO_MANY_ROLE_FILTERS"
 
 	ErrCodeProfileInvalidCurrentPassword = "PROFILE_INVALID_CURRENT_PASSWORD"
 	ErrCodeProfilePasswordUnchanged      = "PROFILE_PASSWORD_UNCHANGED"
@@ -44,10 +48,6 @@ func usernameExistsError() *apperr.Error {
 
 func emailExistsError() *apperr.Error {
 	return apperr.Conflict(ErrCodeEmailConflict)
-}
-
-func invalidPasswordError() *apperr.Error {
-	return apperr.New(422, ErrCodeInvalidPassword)
 }
 
 func userNotFoundError() *apperr.Error {
