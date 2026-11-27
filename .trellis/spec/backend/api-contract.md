@@ -233,12 +233,12 @@
 ### `GET /api/v1/users`（`users:read`）
 
 - 查询参数：
-  - `page`（默认 `1`）、`pageSize`（默认 `20`，范围 `10..100`）
-  - `q`（最大 100 字符）：匹配 `username`、`email`、`display_name`（大小写不敏感 `ILIKE`）
+  - `page`（默认 `1`，须为 `>= 1` 的整数）、`pageSize`（默认 `20`，须为 `10..100` 的整数）；非整数或越界返回 `422 VALIDATION_FAILED`
+  - `q`（最大 100 字符，拒绝 NUL 字节与非法 UTF-8）：匹配 `username`、`email`、`display_name`（大小写不敏感 `ILIKE`）
   - `status`（重复 key：`?status=active&status=disabled`，白名单 `active` / `disabled`）
-  - `roleId`（重复 key：`?roleId=<uuid>`，多值取并集匹配）
-  - `sort`（白名单：`created_at` / `updated_at` / `username` / `last_login_at`）、`order`（`asc` / `desc`）；默认排序：`created_at DESC, id DESC`
-- 响应 `200`：`Paginated<UserDTO>`，`UserDTO` 字段：`id`, `username`, `email`, `displayName`, `status`, `lastLoginAt`（RFC3339 或 `null`）, `roles`（`[{ id, code, name, isSystem }]`，空为 `[]`）, `createdBy` / `updatedBy`（`{ id, username }` 或 `null`）, `createdAt`, `updatedAt`。
+  - `roleId`（重复 key：`?roleId=<uuid>`，多值取并集匹配；拒绝 Nil UUID，最多 20 个去重项）
+  - `sort`（白名单：`created_at` / `updated_at` / `username` / `last_login_at`，缺省按 `created_at`）、`order`（`asc` / `desc`，缺省 `desc`）；默认排序：`created_at DESC, id DESC`（仅传 `order=asc` 时按 `created_at ASC, id ASC`）
+- 响应 `200`：`Paginated<UserDTO>`，`UserDTO` 字段：`id`, `username`, `email`, `displayName`, `status`, `lastLoginAt`（RFC3339 或 `null`）, `roles`（`[{ id, code, name, isSystem }]`，空为 `[]`，按 `is_system DESC, code ASC` 排序）, `createdBy` / `updatedBy`（`{ id, username }` 或 `null`）, `createdAt`, `updatedAt`。
 
 ### `GET /api/v1/users/:id`（`users:read`）
 
@@ -246,19 +246,19 @@
 
 ### `POST /api/v1/users`（`users:create`）
 
-- 请求：`{ username, email, displayName?, password, status?, roleIds[] }`（`username` 3–64、`email` ≤255、`displayName` ≤100、`password` 8–128、`status` 默认 `active`）。
-- 响应 `201`：`UserDTO`。非 `super_admin` 授予 `super_admin` 返回 `403 USERS_SUPER_ADMIN_PROTECTED`；无效 `roleIds` 返回 `422`；用户名/邮箱冲突返回 `409`。
+- 请求：`{ username, email, displayName?, password, status?, roleIds[] }`（`username` 3–64、`email` ≤255、`displayName` ≤100 且不含 NUL、`password` 8–128、`status` 默认 `active`）。
+- 响应 `201`：`UserDTO`（`roles` 按 `is_system DESC, code ASC` 返回）。事务内校验操作者未软删除、处于 `active` 且当前会话有效（分别返回 `401` / `403 AUTH_ACCOUNT_DISABLED`）；授予 `super_admin` 受 `usersSuperAdminGuardKey` 串行化校验（非超管返回 `403 USERS_SUPER_ADMIN_PROTECTED`）；无效 `roleIds` 返回 `422`；用户名/邮箱冲突返回 `409`。
 
 ### `PATCH /api/v1/users/:id`（`users:update`）
 
 - 请求（全可选指针语义，未传表示不修改；`username` 不可修改）：`{ email?, displayName?, status?, password?, roleIds? }`。
-- 响应 `200`：`UserDTO`。
-- 约束：禁止非超管编辑/禁用/重设超管账号或授予/撤销超管（`403 USERS_SUPER_ADMIN_PROTECTED`）；禁止禁用自己或移除自己的 `super_admin`（`409 USERS_SELF_OPERATION_FORBIDDEN`）；禁用或移除最后一名活跃超管返回 `409 USERS_LAST_SUPER_ADMIN`。禁用或重置密码时吊销目标用户全部活跃会话，角色变更在事务提交后失效目标用户权限缓存。
+- 响应 `200`：`UserDTO`（`roles` 按 `is_system DESC, code ASC` 返回）。
+- 约束：事务内校验操作者未软删除、处于 `active` 且当前会话有效（分别返回 `401` / `403 AUTH_ACCOUNT_DISABLED`，阻止禁用管理员自我解禁）；禁止非超管编辑/禁用/重设超管账号或授予/撤销超管（`403 USERS_SUPER_ADMIN_PROTECTED`）；禁止禁用自己或移除自己的 `super_admin`（`409 USERS_SELF_OPERATION_FORBIDDEN`）；禁用或移除最后一名活跃超管返回 `409 USERS_LAST_SUPER_ADMIN`。禁用或重置密码时吊销目标用户全部活跃会话，角色集合实际变更时在事务提交后失效目标用户权限缓存。
 
 ### `DELETE /api/v1/users/:id`（`users:delete`）
 
 - 响应 `204`（无响应体）。软删除用户，同事务内清空 `user_roles` 并吊销全部活跃会话。
-- 约束：禁止删除自身（`409 USERS_SELF_OPERATION_FORBIDDEN`）；禁止非超管删除超管（`403 USERS_SUPER_ADMIN_PROTECTED`）；禁止删除最后一名活跃超管（`409 USERS_LAST_SUPER_ADMIN`）。
+- 约束：事务内校验操作者未软删除、处于 `active` 且当前会话有效（分别返回 `401` / `403 AUTH_ACCOUNT_DISABLED`）；禁止删除自身（`409 USERS_SELF_OPERATION_FORBIDDEN`）；禁止非超管删除超管（`403 USERS_SUPER_ADMIN_PROTECTED`）；禁止删除最后一名活跃超管（`409 USERS_LAST_SUPER_ADMIN`）。
 
 ## 12. Menus 端点契约
 

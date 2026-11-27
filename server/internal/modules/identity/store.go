@@ -53,6 +53,22 @@ type updateOwnProfileRecord struct {
 	AvatarFileID *uuid.UUID
 }
 
+type detailRow struct {
+	id                uuid.UUID
+	username          string
+	email             string
+	displayName       string
+	avatarFileID      uuid.NullUUID
+	status            string
+	lastLoginAt       pgtype.Timestamptz
+	createdBy         uuid.NullUUID
+	createdByUsername pgtype.Text
+	updatedBy         uuid.NullUUID
+	updatedByUsername pgtype.Text
+	createdAt         pgtype.Timestamptz
+	updatedAt         pgtype.Timestamptz
+}
+
 type store interface {
 	CountUsers(ctx context.Context) (int64, error)
 	CreateUser(ctx context.Context, params createUserRecord) (User, error)
@@ -69,8 +85,7 @@ type store interface {
 	GetUserByIDForUpdate(ctx context.Context, id uuid.UUID) (User, error)
 	UpdateUserProfile(ctx context.Context, rec updateUserProfileRecord) error
 	UpdateOwnProfile(ctx context.Context, rec updateOwnProfileRecord) error
-	UpdateOwnPasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error
-	UpdateUserPasswordByAdmin(ctx context.Context, id uuid.UUID, passwordHash string, updatedBy *uuid.UUID) error
+	UpdateUserPasswordWithActor(ctx context.Context, id uuid.UUID, passwordHash string, updatedBy *uuid.UUID) error
 	SoftDeleteUser(ctx context.Context, id uuid.UUID, updatedBy *uuid.UUID) error
 	CountActiveUsersByIDs(ctx context.Context, ids []uuid.UUID) (int64, error)
 	ListUsernamesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error)
@@ -231,11 +246,20 @@ func (s *pgStore) ListUsers(ctx context.Context, q listUsersQuery) ([]UserDetail
 	}
 	out := make([]UserDetail, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, mapDetailRow(
-			r.ID, r.Username, r.Email, r.DisplayName, uuid.NullUUID{}, r.Status,
-			r.LastLoginAt, r.CreatedBy, r.CreatedByUsername, r.UpdatedBy, r.UpdatedByUsername,
-			r.CreatedAt, r.UpdatedAt,
-		))
+		out = append(out, mapDetailRow(detailRow{
+			id:                r.ID,
+			username:          r.Username,
+			email:             r.Email,
+			displayName:       r.DisplayName,
+			status:            r.Status,
+			lastLoginAt:       r.LastLoginAt,
+			createdBy:         r.CreatedBy,
+			createdByUsername: r.CreatedByUsername,
+			updatedBy:         r.UpdatedBy,
+			updatedByUsername: r.UpdatedByUsername,
+			createdAt:         r.CreatedAt,
+			updatedAt:         r.UpdatedAt,
+		}))
 	}
 	return out, nil
 }
@@ -248,11 +272,21 @@ func (s *pgStore) GetUserDetailByID(ctx context.Context, id uuid.UUID) (UserDeta
 	if err != nil {
 		return UserDetail{}, err
 	}
-	return mapDetailRow(
-		r.ID, r.Username, r.Email, r.DisplayName, r.AvatarFileID, r.Status,
-		r.LastLoginAt, r.CreatedBy, r.CreatedByUsername, r.UpdatedBy, r.UpdatedByUsername,
-		r.CreatedAt, r.UpdatedAt,
-	), nil
+	return mapDetailRow(detailRow{
+		id:                r.ID,
+		username:          r.Username,
+		email:             r.Email,
+		displayName:       r.DisplayName,
+		avatarFileID:      r.AvatarFileID,
+		status:            r.Status,
+		lastLoginAt:       r.LastLoginAt,
+		createdBy:         r.CreatedBy,
+		createdByUsername: r.CreatedByUsername,
+		updatedBy:         r.UpdatedBy,
+		updatedByUsername: r.UpdatedByUsername,
+		createdAt:         r.CreatedAt,
+		updatedAt:         r.UpdatedAt,
+	}), nil
 }
 
 func (s *pgStore) GetUserByIDForUpdate(ctx context.Context, id uuid.UUID) (User, error) {
@@ -315,16 +349,8 @@ func (s *pgStore) UpdateOwnProfile(ctx context.Context, rec updateOwnProfileReco
 	return nil
 }
 
-func (s *pgStore) UpdateOwnPasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error {
-	return s.queries(ctx).UpdateOwnPasswordHash(ctx, dbgen.UpdateOwnPasswordHashParams{
-		ID:           id,
-		PasswordHash: passwordHash,
-		UpdatedBy:    uuid.NullUUID{UUID: id, Valid: true},
-	})
-}
-
-func (s *pgStore) UpdateUserPasswordByAdmin(ctx context.Context, id uuid.UUID, passwordHash string, updatedBy *uuid.UUID) error {
-	return s.queries(ctx).UpdateUserPasswordByAdmin(ctx, dbgen.UpdateUserPasswordByAdminParams{
+func (s *pgStore) UpdateUserPasswordWithActor(ctx context.Context, id uuid.UUID, passwordHash string, updatedBy *uuid.UUID) error {
+	return s.queries(ctx).UpdateUserPasswordWithActor(ctx, dbgen.UpdateUserPasswordWithActorParams{
 		ID:           id,
 		PasswordHash: passwordHash,
 		UpdatedBy:    ptrToNullUUID(updatedBy),
@@ -364,36 +390,25 @@ func (s *pgStore) CountActiveUsersByAvatarFileID(ctx context.Context, fileID uui
 	return s.queries(ctx).CountActiveUsersByAvatarFileID(ctx, fileID)
 }
 
-func mapDetailRow(
-	id uuid.UUID,
-	username, email, displayName string,
-	avatarFileID uuid.NullUUID,
-	status string,
-	lastLoginAt pgtype.Timestamptz,
-	createdBy uuid.NullUUID,
-	createdByUsername pgtype.Text,
-	updatedBy uuid.NullUUID,
-	updatedByUsername pgtype.Text,
-	createdAt, updatedAt pgtype.Timestamptz,
-) UserDetail {
+func mapDetailRow(r detailRow) UserDetail {
 	var lastLoginPtr *time.Time
-	if lastLoginAt.Valid {
-		t := lastLoginAt.Time.UTC()
+	if r.lastLoginAt.Valid {
+		t := r.lastLoginAt.Time.UTC()
 		lastLoginPtr = &t
 	}
 	return UserDetail{
-		ID:           id,
-		Username:     username,
-		Email:        email,
-		DisplayName:  displayName,
-		AvatarFileID: nullUUIDToPtr(avatarFileID),
-		Status:       status,
+		ID:           r.id,
+		Username:     r.username,
+		Email:        r.email,
+		DisplayName:  r.displayName,
+		AvatarFileID: nullUUIDToPtr(r.avatarFileID),
+		Status:       r.status,
 		LastLoginAt:  lastLoginPtr,
 		Roles:        make([]RoleRef, 0),
-		CreatedBy:    toActorRef(createdBy, createdByUsername),
-		UpdatedBy:    toActorRef(updatedBy, updatedByUsername),
-		CreatedAt:    createdAt.Time.UTC(),
-		UpdatedAt:    updatedAt.Time.UTC(),
+		CreatedBy:    toActorRef(r.createdBy, r.createdByUsername),
+		UpdatedBy:    toActorRef(r.updatedBy, r.updatedByUsername),
+		CreatedAt:    r.createdAt.Time.UTC(),
+		UpdatedAt:    r.updatedAt.Time.UTC(),
 	}
 }
 

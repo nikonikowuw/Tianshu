@@ -161,7 +161,6 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			Sessions: identitySessionMgr,
 			Files:    identityFiles,
 			Audit:    &identityAuditAdapter{svc: auditSvc},
-			I18n:     bundle,
 			Log:      log,
 		})
 

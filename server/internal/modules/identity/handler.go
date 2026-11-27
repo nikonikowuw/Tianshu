@@ -59,6 +59,12 @@ func (h *Handler) getUser(c *gin.Context) {
 }
 
 func (h *Handler) createUser(c *gin.Context) {
+	identity, meta, ok := extractAuthIdentityAndMeta(c)
+	if !ok {
+		_ = c.Error(apperr.Unauthorized(apperr.CodeUnauthorized))
+		return
+	}
+
 	var req createUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(err)
@@ -71,16 +77,17 @@ func (h *Handler) createUser(c *gin.Context) {
 		return
 	}
 
-	actorID, meta := extractActorAndMeta(c)
+	actorID := identity.UserID
 	user, err := h.service.CreateUser(c.Request.Context(), CreateUserInput{
-		Username:    req.Username,
-		Email:       req.Email,
-		DisplayName: req.DisplayName,
-		Password:    req.Password,
-		Status:      req.Status,
-		RoleIDs:     roleIDs,
-		ActorID:     actorID,
-		Meta:        meta,
+		Username:       req.Username,
+		Email:          req.Email,
+		DisplayName:    req.DisplayName,
+		Password:       req.Password,
+		Status:         req.Status,
+		RoleIDs:        roleIDs,
+		ActorID:        &actorID,
+		ActorSessionID: identity.SessionID,
+		Meta:           meta,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -92,6 +99,12 @@ func (h *Handler) createUser(c *gin.Context) {
 }
 
 func (h *Handler) updateUser(c *gin.Context) {
+	identity, meta, ok := extractAuthIdentityAndMeta(c)
+	if !ok {
+		_ = c.Error(apperr.Unauthorized(apperr.CodeUnauthorized))
+		return
+	}
+
 	userID, err := parseIDParam(c)
 	if err != nil {
 		_ = c.Error(err)
@@ -114,16 +127,17 @@ func (h *Handler) updateUser(c *gin.Context) {
 		roleIDsPtr = &parsed
 	}
 
-	actorID, meta := extractActorAndMeta(c)
+	actorID := identity.UserID
 	user, err := h.service.UpdateUser(c.Request.Context(), UpdateUserInput{
-		UserID:      userID,
-		Email:       req.Email,
-		DisplayName: req.DisplayName,
-		Status:      req.Status,
-		Password:    req.Password,
-		RoleIDs:     roleIDsPtr,
-		ActorID:     actorID,
-		Meta:        meta,
+		UserID:         userID,
+		Email:          req.Email,
+		DisplayName:    req.DisplayName,
+		Status:         req.Status,
+		Password:       req.Password,
+		RoleIDs:        roleIDsPtr,
+		ActorID:        &actorID,
+		ActorSessionID: identity.SessionID,
+		Meta:           meta,
 	})
 	if err != nil {
 		_ = c.Error(err)
@@ -135,17 +149,24 @@ func (h *Handler) updateUser(c *gin.Context) {
 }
 
 func (h *Handler) deleteUser(c *gin.Context) {
+	identity, meta, ok := extractAuthIdentityAndMeta(c)
+	if !ok {
+		_ = c.Error(apperr.Unauthorized(apperr.CodeUnauthorized))
+		return
+	}
+
 	userID, err := parseIDParam(c)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 
-	actorID, meta := extractActorAndMeta(c)
+	actorID := identity.UserID
 	if err := h.service.DeleteUser(c.Request.Context(), DeleteUserInput{
-		UserID:  userID,
-		ActorID: actorID,
-		Meta:    meta,
+		UserID:         userID,
+		ActorID:        &actorID,
+		ActorSessionID: identity.SessionID,
+		Meta:           meta,
 	}); err != nil {
 		_ = c.Error(err)
 		return

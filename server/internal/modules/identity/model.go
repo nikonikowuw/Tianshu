@@ -109,34 +109,37 @@ type UserListFilter struct {
 
 // CreateUserInput defines the parameters for creating a user account.
 type CreateUserInput struct {
-	Username    string
-	Email       string
-	DisplayName string
-	Password    string
-	Status      string
-	RoleIDs     []uuid.UUID
-	ActorID     *uuid.UUID
-	Meta        RequestMeta
+	Username       string
+	Email          string
+	DisplayName    string
+	Password       string
+	Status         string
+	RoleIDs        []uuid.UUID
+	ActorID        *uuid.UUID
+	ActorSessionID uuid.UUID
+	Meta           RequestMeta
 }
 
 // UpdateUserInput defines partial update fields for a user account.
 // Nil pointer fields indicate omitted inputs that preserve existing values.
 type UpdateUserInput struct {
-	UserID      uuid.UUID
-	Email       *string
-	DisplayName *string
-	Status      *string
-	Password    *string
-	RoleIDs     *[]uuid.UUID
-	ActorID     *uuid.UUID
-	Meta        RequestMeta
+	UserID         uuid.UUID
+	Email          *string
+	DisplayName    *string
+	Status         *string
+	Password       *string
+	RoleIDs        *[]uuid.UUID
+	ActorID        *uuid.UUID
+	ActorSessionID uuid.UUID
+	Meta           RequestMeta
 }
 
 // DeleteUserInput defines parameters for soft-deleting a user account.
 type DeleteUserInput struct {
-	UserID  uuid.UUID
-	ActorID *uuid.UUID
-	Meta    RequestMeta
+	UserID         uuid.UUID
+	ActorID        *uuid.UUID
+	ActorSessionID uuid.UUID
+	Meta           RequestMeta
 }
 
 // UpdateProfileInput defines partial self-service updates for the authenticated user.
