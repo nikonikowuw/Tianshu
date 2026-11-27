@@ -69,8 +69,9 @@ func (o *optionalNullableString) UnmarshalJSON(data []byte) error {
 
 type updateMenuRequest struct {
 	ParentID       optionalNullableString `json:"parentId"`
+	Code           *string                `json:"code" binding:"omitempty,max=64"`
 	Type           *string                `json:"type" binding:"omitempty,oneof=directory menu button"`
-	Title          *string                `json:"title" binding:"omitempty,min=1,max=100"`
+	Title          *string                `json:"title" binding:"omitempty,max=100"`
 	Path           *string                `json:"path" binding:"omitempty,max=255"`
 	Icon           *string                `json:"icon" binding:"omitempty,max=64"`
 	PermissionCode *string                `json:"permissionCode" binding:"omitempty,max=100"`
@@ -127,25 +128,14 @@ func parseOptionalUUID(raw *string, field, errCode string) (*uuid.UUID, error) {
 }
 
 func bindListRolesRequest(c *gin.Context) (RoleListFilter, error) {
-	if fieldErrs := validateRoleQueryParams(c); len(fieldErrs) > 0 {
+	isSystem, fieldErrs := parseRoleQueryExtras(c)
+	if len(fieldErrs) > 0 {
 		return RoleListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
 	}
 
 	var req listRolesRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
 		return RoleListFilter{}, err
-	}
-
-	var isSystem *bool
-	if raw := strings.TrimSpace(req.IsSystem); raw != "" {
-		parsed, err := parseStrictBool(raw)
-		if err != nil {
-			return RoleListFilter{}, apperr.Validation([]apperr.FieldError{{
-				Field:   "isSystem",
-				Message: ErrCodeInvalidBool,
-			}})
-		}
-		isSystem = &parsed
 	}
 
 	page := pagination.DefaultPage
@@ -190,8 +180,11 @@ func extractActorAndMeta(c *gin.Context) (*uuid.UUID, RequestMeta) {
 	}
 }
 
-func validateRoleQueryParams(c *gin.Context) []apperr.FieldError {
-	var errs []apperr.FieldError
+func parseRoleQueryExtras(c *gin.Context) (*bool, []apperr.FieldError) {
+	var (
+		isSystem *bool
+		errs     []apperr.FieldError
+	)
 	for _, name := range []string{"page", "pageSize"} {
 		if raw, exists := c.GetQuery(name); exists {
 			if strings.TrimSpace(raw) == "" {
@@ -207,15 +200,18 @@ func validateRoleQueryParams(c *gin.Context) []apperr.FieldError {
 	}
 	if raw, exists := c.GetQuery("isSystem"); exists {
 		if trimmed := strings.TrimSpace(raw); trimmed != "" {
-			if _, err := parseStrictBool(trimmed); err != nil {
+			parsed, err := parseStrictBool(trimmed)
+			if err != nil {
 				errs = append(errs, apperr.FieldError{
 					Field:   "isSystem",
 					Message: ErrCodeInvalidBool,
 				})
+			} else {
+				isSystem = &parsed
 			}
 		}
 	}
-	return errs
+	return isSystem, errs
 }
 
 func parseStrictBool(raw string) (bool, error) {

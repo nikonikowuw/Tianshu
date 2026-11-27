@@ -165,10 +165,13 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			Log:      log,
 		})
 
-		accessSvc = access.NewService(pool, tx, memCache, log, access.ServiceDeps{
+		accessSvc = access.NewService(pool, access.ServiceDeps{
+			Tx:     tx,
+			Cache:  memCache,
 			I18n:   bundle,
 			Audit:  &accessAuditAdapter{svc: auditSvc},
 			Actors: &accessActorAdapter{svc: identitySvc},
+			Log:    log,
 		})
 		identityAccess.svc = accessSvc
 		if err := accessSvc.SyncCatalog(ctx); err != nil {

@@ -255,6 +255,7 @@ func (h *Handler) updateMenu(c *gin.Context) {
 		MenuID:         menuID,
 		ParentID:       parentID,
 		ClearParent:    clearParent,
+		Code:           req.Code,
 		Type:           req.Type,
 		Title:          req.Title,
 		Path:           req.Path,

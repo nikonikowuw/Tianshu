@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -42,47 +43,50 @@ var roleCodePattern = regexp.MustCompile(roleCodeRegexSource)
 
 // Service coordinates RBAC catalog seeding, role CRUD, role assignment, and cached permission checks.
 type Service struct {
-	store  store
-	tx     TxRunner
-	cache  cache.Cache
-	i18n   *i18n.Bundle
-	audit  AuditRecorder
-	actors ActorResolver
-	log    *slog.Logger
+	store    store
+	tx       TxRunner
+	cache    cache.Cache
+	i18n     *i18n.Bundle
+	audit    AuditRecorder
+	actors   ActorResolver
+	log      *slog.Logger
+	cacheMu  sync.Mutex
+	cacheGen map[uuid.UUID]uint64
 }
 
 // ServiceDeps holds optional cross-cutting dependencies for access.Service.
 type ServiceDeps struct {
+	Tx     TxRunner
+	Cache  cache.Cache
 	I18n   *i18n.Bundle
 	Audit  AuditRecorder
 	Actors ActorResolver
+	Log    *slog.Logger
 }
 
 // NewService creates a new access Service backed by PostgreSQL.
-func NewService(pool *pgxpool.Pool, tx TxRunner, c cache.Cache, log *slog.Logger, deps ...ServiceDeps) *Service {
+func NewService(pool *pgxpool.Pool, deps ...ServiceDeps) *Service {
 	var d ServiceDeps
 	if len(deps) > 0 {
 		d = deps[0]
 	}
-	return newServiceWithStore(newStore(pool), tx, c, log, d)
+	return newServiceWithStore(newStore(pool), d)
 }
 
-func newServiceWithStore(s store, tx TxRunner, c cache.Cache, log *slog.Logger, deps ...ServiceDeps) *Service {
+func newServiceWithStore(s store, d ServiceDeps) *Service {
+	log := d.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	var d ServiceDeps
-	if len(deps) > 0 {
-		d = deps[0]
-	}
 	return &Service{
-		store:  s,
-		tx:     tx,
-		cache:  c,
-		i18n:   d.I18n,
-		audit:  d.Audit,
-		actors: d.Actors,
-		log:    log,
+		store:    s,
+		tx:       d.Tx,
+		cache:    d.Cache,
+		i18n:     d.I18n,
+		audit:    d.Audit,
+		actors:   d.Actors,
+		log:      log,
+		cacheGen: make(map[uuid.UUID]uint64),
 	}
 }
 
@@ -130,6 +134,7 @@ func (s *Service) ListRoles(ctx context.Context, filter RoleListFilter) (paginat
 	query := listRolesQuery{
 		Q:                  q,
 		MatchedSystemCodes: s.matchSystemRoleCodes(q),
+		SuperAdminName:     s.resolveSystemRoleSortName(ctx),
 		IsSystem:           filter.IsSystem,
 		Sort:               normalizeRoleSort(filter.Sort),
 		Order:              normalizeRoleOrder(filter.Order),
@@ -234,6 +239,9 @@ func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (Role, 
 
 		for _, permCode := range perms {
 			if grantErr := s.store.GrantRolePermission(txCtx, role.ID, permCode); grantErr != nil {
+				if errors.Is(grantErr, errInvalidPermission) {
+					return apperr.Validation([]apperr.FieldError{{Field: "permissions", Message: ErrCodeInvalidPermissionCode}})
+				}
 				return apperr.Internal(fmt.Errorf("grant permission %s to role %s: %w", permCode, role.ID, grantErr))
 			}
 		}
@@ -243,7 +251,7 @@ func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (Role, 
 		role.UserCount = 0
 		created = role
 
-		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditActionCreate, role.ID.String(), map[string]any{
+		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditResourceRole, auditActionCreate, role.ID.String(), map[string]any{
 			"code":        role.Code,
 			"name":        role.Name,
 			"permissions": perms,
@@ -344,6 +352,9 @@ func (s *Service) UpdateRole(ctx context.Context, input UpdateRoleInput) (Role, 
 			}
 			for _, permCode := range nextPerms {
 				if grantErr := s.store.GrantRolePermission(txCtx, existing.ID, permCode); grantErr != nil {
+					if errors.Is(grantErr, errInvalidPermission) {
+						return apperr.Validation([]apperr.FieldError{{Field: "permissions", Message: ErrCodeInvalidPermissionCode}})
+					}
 					return apperr.Internal(fmt.Errorf("grant permission %s to role %s: %w", permCode, existing.ID, grantErr))
 				}
 			}
@@ -385,7 +396,7 @@ func (s *Service) UpdateRole(ctx context.Context, input UpdateRoleInput) (Role, 
 		if updatePerms {
 			meta["permissions"] = finalPerms
 		}
-		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditActionUpdate, saved.ID.String(), meta)
+		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditResourceRole, auditActionUpdate, saved.ID.String(), meta)
 	})
 	if err != nil {
 		return Role{}, err
@@ -419,7 +430,7 @@ func (s *Service) DeleteRole(ctx context.Context, input DeleteRoleInput) error {
 			return apperr.Internal(fmt.Errorf("delete role %s: %w", existing.ID, delErr))
 		}
 
-		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditActionDelete, existing.ID.String(), map[string]any{
+		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditResourceRole, auditActionDelete, existing.ID.String(), map[string]any{
 			"code": existing.Code,
 			"name": existing.Name,
 		})
@@ -529,7 +540,8 @@ func (s *Service) ReplaceUserRoles(ctx context.Context, userID uuid.UUID, roleID
 // GetUserAccess returns the current roles and permissions for userID using read-through caching.
 func (s *Service) GetUserAccess(ctx context.Context, userID uuid.UUID) (UserAccess, error) {
 	key := userCacheKey(userID)
-	if s.cache != nil {
+	_, inTx := database.TxFromContext(ctx)
+	if s.cache != nil && !inTx {
 		raw, err := s.cache.Get(ctx, key)
 		if err == nil {
 			var cached UserAccess
@@ -541,13 +553,27 @@ func (s *Service) GetUserAccess(ctx context.Context, userID uuid.UUID) (UserAcce
 		}
 	}
 
-	roles, err := s.store.ListUserRoleCodes(ctx, userID)
+	genBefore := s.readCacheGen(userID)
+
+	var (
+		roles []string
+		perms []string
+	)
+	err := s.withinTx(ctx, func(txCtx context.Context) error {
+		var rErr error
+		roles, rErr = s.store.ListUserRoleCodes(txCtx, userID)
+		if rErr != nil {
+			return apperr.Internal(fmt.Errorf("list user roles: %w", rErr))
+		}
+		var pErr error
+		perms, pErr = s.store.ListUserPermissions(txCtx, userID)
+		if pErr != nil {
+			return apperr.Internal(fmt.Errorf("list user permissions: %w", pErr))
+		}
+		return nil
+	})
 	if err != nil {
-		return UserAccess{}, apperr.Internal(fmt.Errorf("list user roles: %w", err))
-	}
-	perms, err := s.store.ListUserPermissions(ctx, userID)
-	if err != nil {
-		return UserAccess{}, apperr.Internal(fmt.Errorf("list user permissions: %w", err))
+		return UserAccess{}, err
 	}
 
 	result := ensureNonNilSlices(UserAccess{
@@ -555,11 +581,9 @@ func (s *Service) GetUserAccess(ctx context.Context, userID uuid.UUID) (UserAcce
 		Permissions: perms,
 	})
 
-	if s.cache != nil {
+	if s.cache != nil && !inTx {
 		if encoded, marshalErr := json.Marshal(result); marshalErr == nil {
-			if setErr := s.cache.Set(ctx, key, encoded, userAccessCacheTTL); setErr != nil {
-				s.log.Warn("access cache set failed", "user_id", userID, "error", setErr)
-			}
+			s.writeCacheIfUnchanged(ctx, userID, key, genBefore, encoded)
 		}
 	}
 	return result, nil
@@ -580,16 +604,44 @@ func (s *Service) InvalidateUserCache(ctx context.Context, userIDs ...uuid.UUID)
 		return
 	}
 	keys := make([]string, 0, len(userIDs))
+	validIDs := make([]uuid.UUID, 0, len(userIDs))
 	for _, id := range userIDs {
 		if id != uuid.Nil {
+			validIDs = append(validIDs, id)
 			keys = append(keys, userCacheKey(id))
 		}
 	}
 	if len(keys) == 0 {
 		return
 	}
+
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if s.cacheGen == nil {
+		s.cacheGen = make(map[uuid.UUID]uint64, len(validIDs))
+	}
+	for _, id := range validIDs {
+		s.cacheGen[id]++
+	}
 	if err := s.cache.Delete(ctx, keys...); err != nil {
 		s.log.Warn("access cache invalidate failed", "count", len(keys), "error", err)
+	}
+}
+
+func (s *Service) readCacheGen(userID uuid.UUID) uint64 {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	return s.cacheGen[userID]
+}
+
+func (s *Service) writeCacheIfUnchanged(ctx context.Context, userID uuid.UUID, key string, expectedGen uint64, encoded []byte) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if s.cacheGen[userID] != expectedGen {
+		return
+	}
+	if setErr := s.cache.Set(ctx, key, encoded, userAccessCacheTTL); setErr != nil {
+		s.log.Warn("access cache set failed", "user_id", userID, "error", setErr)
 	}
 }
 
@@ -636,10 +688,26 @@ func (s *Service) matchSystemRoleCodes(q string) []string {
 	return matched
 }
 
+func (s *Service) resolveSystemRoleSortName(ctx context.Context) string {
+	if s.i18n == nil {
+		return RoleCodeSuperAdmin
+	}
+	locale := i18n.LocaleFromContext(ctx)
+	for _, r := range SystemRoles() {
+		if r.Code == RoleCodeSuperAdmin {
+			if translated := s.i18n.Translate(locale, r.NameKey, nil); translated != "" && translated != r.NameKey {
+				return translated
+			}
+		}
+	}
+	return RoleCodeSuperAdmin
+}
+
 func (s *Service) recordAudit(
 	ctx context.Context,
 	actorID *uuid.UUID,
 	meta RequestMeta,
+	resource string,
 	action string,
 	resourceID string,
 	metadata map[string]any,
@@ -660,7 +728,7 @@ func (s *Service) recordAudit(
 		ActorID:       actorID,
 		ActorUsername: actorUsername,
 		Action:        action,
-		Resource:      auditResourceRole,
+		Resource:      resource,
 		ResourceID:    resourceID,
 		Status:        auditStatusSuccess,
 		IPAddress:     meta.IPAddress,

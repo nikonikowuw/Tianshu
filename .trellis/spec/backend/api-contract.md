@@ -111,7 +111,8 @@
 | `PROFILE_INVALID_AVATAR`         | 422  | 指定的头像文件不存在、非就绪图片或不归属当前用户 |
 | `PROFILE_SESSION_NOT_FOUND`      | 404  | 目标活跃会话不存在、已失效或不属于当前用户 |
 | `PROFILE_CURRENT_SESSION_REVOKE_FORBIDDEN` | 409 | 禁止经会话下线接口吊销当前设备会话（应走 `/auth/logout`） |
-| `ROLES_SYSTEM_IMMUTABLE`         | 409  | 系统角色不可改/删              |
+| `ACCESS_ROLE_NOT_FOUND`         | 404  | 角色不存在                     |
+| `ROLES_SYSTEM_IMMUTABLE`        | 409  | 系统角色不可改/删              |
 | `ROLES_CODE_CONFLICT`       | 409  | 角色编码已存在                 |
 | `ROLES_IN_USE`              | 409  | 角色仍绑定用户                 |
 | `MENUS_NOT_FOUND`           | 404  | 菜单节点不存在                 |
@@ -191,7 +192,38 @@
 - 前端手写 DTO 与本文对齐；不引入 OpenAPI 双向代码生成。
 - 破坏性变更必须新开 `/api/v2`，或在 PRD/本文件明确迁移窗口；新增字段不算破坏性变更。
 
-## 11. Users 与 Role Options 端点契约
+## 11. Roles、Permissions 与 Users 端点契约
+
+### `GET /api/v1/permissions`（`roles:read`）
+
+- 响应 `200`：`{ "groups": [{ "module": "dashboard", "label": "仪表盘", "permissions": [{ "code": "dashboard:read", "module": "dashboard", "name": "查看仪表盘", "description": "..." }] }] }`；分组标题与权限名称/描述按 `Accept-Language` 实时翻译，空数组序列化为 `[]`。
+
+### `GET /api/v1/roles`（`roles:read`）
+
+- 查询参数：
+  - `page`（默认 `1`）、`pageSize`（默认 `20`，范围 `10..100`）
+  - `q`（最大 100 字符）：大小写不敏感 `ILIKE` 匹配 `code`、`name`、`description`，并匹配系统内置角色的中英译名/译述
+  - `isSystem`（严格布尔值 `true` / `false`，非法值返 `422`）
+  - `sort`（白名单：`created_at` / `updated_at` / `code` / `name`）、`order`（`asc` / `desc`）；默认排序：`is_system DESC, created_at DESC, id DESC`（按 `name` 排序时系统内置角色按当前语言译名参与排序）
+- 响应 `200`：`Paginated<RoleDTO>`，`RoleDTO` 字段：`id`, `code`, `name`, `description`（系统角色按 `Accept-Language` 翻译）, `isSystem`, `userCount`, `permissionCount`, `permissions`（`string[]`，空为 `[]`）, `createdBy` / `updatedBy`（UUID 字符串或 `null`）, `createdAt`, `updatedAt`（RFC3339）。
+
+### `GET /api/v1/roles/:id`（`roles:read`）
+
+- 响应 `200`：`RoleDTO`；不存在返回 `404 ACCESS_ROLE_NOT_FOUND`。
+
+### `POST /api/v1/roles`（`roles:create`）
+
+- 请求：`{ code, name, description?, permissions[] }`（`code` 2–64 位小写字母开头 `[a-z0-9_-]`，`name` 1–100 字符，`description` ≤500 字符，`permissions` 为已注册权限码集合，自动去重排序）。
+- 响应 `201`：`RoleDTO`。编码冲突返 `409 ROLES_CODE_CONFLICT`；未知权限码或非法字段返 `422 VALIDATION_FAILED`；同事务写 `role.create` 审计。
+
+### `PATCH /api/v1/roles/:id`（`roles:update`）
+
+- 请求（可选指针语义，`code` 不可修改）：`{ name?, description?, permissions? }`。
+- 响应 `200`：`RoleDTO`。系统内置角色禁止修改（`409 ROLES_SYSTEM_IMMUTABLE`）；不存在返 `404 ACCESS_ROLE_NOT_FOUND`；权限变更在最外层事务提交后主动失效关联用户权限缓存，同事务写 `role.update` 审计。
+
+### `DELETE /api/v1/roles/:id`（`roles:delete`）
+
+- 响应 `204`（无响应体）。系统内置角色禁止删除（`409 ROLES_SYSTEM_IMMUTABLE`）；仍绑定用户的角色禁止删除（`409 ROLES_IN_USE`）；不存在返 `404 ACCESS_ROLE_NOT_FOUND`；同事务写 `role.delete` 审计。
 
 ### `GET /api/v1/roles/options`
 

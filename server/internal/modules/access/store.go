@@ -23,6 +23,7 @@ const (
 type listRolesQuery struct {
 	Q                  string
 	MatchedSystemCodes []string
+	SuperAdminName     string
 	IsSystem           *bool
 	Sort               string
 	Order              string
@@ -152,10 +153,17 @@ func (s *pgStore) EnsureSystemRole(ctx context.Context, id uuid.UUID, def System
 }
 
 func (s *pgStore) GrantRolePermission(ctx context.Context, roleID uuid.UUID, permCode string) error {
-	return s.queries(ctx).GrantRolePermission(ctx, dbgen.GrantRolePermissionParams{
+	err := s.queries(ctx).GrantRolePermission(ctx, dbgen.GrantRolePermissionParams{
 		RoleID:         roleID,
 		PermissionCode: permCode,
 	})
+	if isForeignKeyViolation(err, "role_permissions_role_id_fkey") {
+		return errRoleNotFound
+	}
+	if isForeignKeyViolation(err, "role_permissions_permission_code_fkey") {
+		return errInvalidPermission
+	}
+	return err
 }
 
 func (s *pgStore) GetRoleIDByCode(ctx context.Context, code string) (uuid.UUID, error) {
@@ -204,6 +212,7 @@ func (s *pgStore) ListRoles(ctx context.Context, q listRolesQuery) ([]Role, erro
 	rows, err := s.queries(ctx).ListRoles(ctx, dbgen.ListRolesParams{
 		Q:                  escapeLikePattern(q.Q),
 		MatchedSystemCodes: nonNilStrings(q.MatchedSystemCodes),
+		SuperAdminName:     q.SuperAdminName,
 		HasIsSystem:        hasIsSystem,
 		IsSystem:           isSystem,
 		SortBy:             q.Sort,
@@ -477,6 +486,12 @@ func (s *pgStore) CreateMenu(ctx context.Context, rec createMenuRecord) (Menu, e
 		if isUniqueViolation(err) {
 			return Menu{}, errMenuCodeConflict
 		}
+		if isForeignKeyViolation(err, "menus_parent_id_fkey") {
+			return Menu{}, errMenuInvalidParent
+		}
+		if isForeignKeyViolation(err, "menus_permission_code_fkey") {
+			return Menu{}, errInvalidPermission
+		}
 		return Menu{}, err
 	}
 	return mapDBMenu(r), nil
@@ -500,18 +515,28 @@ func (s *pgStore) UpdateMenu(ctx context.Context, rec updateMenuRecord) (Menu, e
 		return Menu{}, errMenuNotFound
 	}
 	if err != nil {
+		if isForeignKeyViolation(err, "menus_parent_id_fkey") {
+			return Menu{}, errMenuInvalidParent
+		}
+		if isForeignKeyViolation(err, "menus_permission_code_fkey") {
+			return Menu{}, errInvalidPermission
+		}
 		return Menu{}, err
 	}
 	return mapDBMenu(r), nil
 }
 
 func (s *pgStore) UpdateMenuOrder(ctx context.Context, id uuid.UUID, parentID *uuid.UUID, sortOrder int32, actorID *uuid.UUID) error {
-	return s.queries(ctx).UpdateMenuOrder(ctx, dbgen.UpdateMenuOrderParams{
+	err := s.queries(ctx).UpdateMenuOrder(ctx, dbgen.UpdateMenuOrderParams{
 		ID:        id,
 		ParentID:  ptrToNullUUID(parentID),
 		SortOrder: sortOrder,
 		UpdatedBy: ptrToNullUUID(actorID),
 	})
+	if isForeignKeyViolation(err, "menus_parent_id_fkey") {
+		return errMenuInvalidParent
+	}
+	return err
 }
 
 func (s *pgStore) CountMenuChildren(ctx context.Context, id uuid.UUID) (int64, error) {
@@ -519,7 +544,11 @@ func (s *pgStore) CountMenuChildren(ctx context.Context, id uuid.UUID) (int64, e
 }
 
 func (s *pgStore) DeleteMenu(ctx context.Context, id uuid.UUID) error {
-	return s.queries(ctx).DeleteMenu(ctx, id)
+	err := s.queries(ctx).DeleteMenu(ctx, id)
+	if isForeignKeyViolation(err, "menus_parent_id_fkey") {
+		return errMenuHasChildren
+	}
+	return err
 }
 
 func mapDBMenu(r dbgen.Menu) Menu {

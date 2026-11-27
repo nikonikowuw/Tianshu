@@ -172,6 +172,7 @@ type UpdateMenuInput struct {
 	MenuID         uuid.UUID
 	ParentID       *uuid.UUID
 	ClearParent    bool
+	Code           *string
 	Type           *string
 	Title          *string
 	Path           *string

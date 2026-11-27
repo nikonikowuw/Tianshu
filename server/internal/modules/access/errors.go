@@ -19,24 +19,31 @@ const (
 	ErrCodeInvalidNumber         = "ACCESS_INVALID_NUMBER"
 	ErrCodeInvalidBool           = "ACCESS_INVALID_BOOL"
 
-	ErrCodeMenuNotFound        = "MENUS_NOT_FOUND"
-	ErrCodeMenuCodeConflict    = "MENUS_CODE_CONFLICT"
-	ErrCodeMenuSystemImmutable = "MENUS_SYSTEM_IMMUTABLE"
-	ErrCodeMenuHasChildren     = "MENUS_HAS_CHILDREN"
-	ErrCodeMenuCycleDetected   = "MENUS_CYCLE_DETECTED"
-	ErrCodeMenuInvalidParent   = "MENUS_INVALID_PARENT"
-	ErrCodeInvalidMenuType     = "ACCESS_INVALID_MENU_TYPE"
-	ErrCodeInvalidMenuTitle    = "ACCESS_INVALID_MENU_TITLE"
-	ErrCodeInvalidMenuPath     = "ACCESS_INVALID_MENU_PATH"
-	ErrCodeInvalidMenuStatus   = "ACCESS_INVALID_MENU_STATUS"
+	ErrCodeMenuNotFound         = "MENUS_NOT_FOUND"
+	ErrCodeMenuCodeConflict     = "MENUS_CODE_CONFLICT"
+	ErrCodeMenuSystemImmutable  = "MENUS_SYSTEM_IMMUTABLE"
+	ErrCodeMenuHasChildren      = "MENUS_HAS_CHILDREN"
+	ErrCodeMenuCycleDetected    = "MENUS_CYCLE_DETECTED"
+	ErrCodeMenuInvalidParent    = "MENUS_INVALID_PARENT"
+	ErrCodeInvalidMenuCode      = "ACCESS_INVALID_MENU_CODE"
+	ErrCodeMenuCodeImmutable    = "ACCESS_MENU_CODE_IMMUTABLE"
+	ErrCodeInvalidMenuType      = "ACCESS_INVALID_MENU_TYPE"
+	ErrCodeInvalidMenuTitle     = "ACCESS_INVALID_MENU_TITLE"
+	ErrCodeInvalidMenuPath      = "ACCESS_INVALID_MENU_PATH"
+	ErrCodeInvalidMenuIcon      = "ACCESS_INVALID_MENU_ICON"
+	ErrCodeInvalidMenuStatus    = "ACCESS_INVALID_MENU_STATUS"
+	ErrCodeDuplicateMenuReorder = "ACCESS_DUPLICATE_MENU_ID"
 )
 
 // Internal store sentinels translated by Service into apperr.Error.
 var (
-	errRoleNotFound     = errors.New("role not found")
-	errRoleCodeConflict = errors.New("role code already exists")
-	errMenuNotFound     = errors.New("menu not found")
-	errMenuCodeConflict = errors.New("menu code already exists")
+	errRoleNotFound      = errors.New("role not found")
+	errRoleCodeConflict  = errors.New("role code already exists")
+	errMenuNotFound      = errors.New("menu not found")
+	errMenuCodeConflict  = errors.New("menu code already exists")
+	errMenuInvalidParent = errors.New("menu parent not found")
+	errMenuHasChildren   = errors.New("menu still has children")
+	errInvalidPermission = errors.New("permission code not found")
 )
 
 func roleNotFoundError() *apperr.Error {

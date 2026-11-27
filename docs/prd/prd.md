@@ -89,7 +89,7 @@ flowchart TD
 
 ### 3.4 声明式权限码 RBAC（单租户）
 
-- **声明与同步**：权限码以常量形式在 Go 代码中声明，按标准动作细粒度拆分（`dashboard:read`、`users:read`、`users:create`、`users:update`、`users:delete`、`roles:read`、`roles:create`、`roles:update`、`roles:delete`、`audit:read`、`files:read`、`files:upload`、`files:delete`），服务启动时自动 upsert 到 `permissions` 表。
+- **声明与同步**：权限码以常量形式在 Go 代码中声明，按标准动作细粒度拆分（`dashboard:read`、`users:read`、`users:create`、`users:update`、`users:delete`、`roles:read`、`roles:create`、`roles:update`、`roles:delete`、`menus:read`、`menus:create`、`menus:update`、`menus:delete`、`audit:read`、`files:read`、`files:upload`、`files:delete`），服务启动时自动 upsert 到 `permissions` 表。
 - **超管保护**：系统内置 `super_admin` 角色（`is_system = true`），拥有全量权限，禁止删除该角色、禁止移除或禁用系统中最后一名活跃超级管理员。
 - **缓存与失效**：用户聚合权限通过 `Cache` 接口缓存（默认进程内内存，配置 Redis 后自动切换）；当角色权限变更或用户角色变更时主动失效对应缓存。
 - **前端联动**：登录后调用 `GET /api/v1/auth/me` 获取用户档案与 `permissions: string[]`，驱动侧边栏菜单过滤、TanStack Router 路由守卫与 `<PermissionGuard>` 操作按钮显隐。
@@ -268,6 +268,7 @@ flowchart TD
 | `permissions` | 声明式权限码目录 | `code (PK)`, `module`, `name_key`, `description_key`, `updated_at`（按 key 从语言包解析双语文案） |
 | `user_roles` | 用户-角色关联 | `user_id (FK CASCADE)`, `role_id (FK CASCADE)`, `PK(user_id, role_id)` |
 | `role_permissions` | 角色-权限关联 | `role_id (FK CASCADE)`, `permission_code (FK CASCADE)`, `PK(role_id, permission_code)` |
+| `menus` | 动态菜单与按钮权限树 | `id`, `parent_id (FK RESTRICT)`, `type (directory/menu/button)`, `code (UNIQUE)`, `title`, `title_key`, `path`, `icon`, `permission_code (FK SET NULL)`, `sort_order`, `visible`, `status`, `is_system`, `created_by`, `updated_by`, `created_at`, `updated_at` |
 | `user_sessions` | Refresh Token 会话 | `id`, `user_id (FK CASCADE)`, `refresh_token_hash (UNIQUE)`, `user_agent`, `ip_address`, `expires_at`, `revoked_at`, `last_used_at`, `created_at` |
 | `refresh_token_history` | Refresh Token 轮换历史 | `token_hash (PK)`, `session_id (FK CASCADE)`, `replaced_at`, `expires_at` |
 | `audit_logs` | 审计与登录日志 | `id`, `actor_id`, `actor_username`, `action`, `resource`, `resource_id`, `status`, `ip_address`, `user_agent`, `request_id`, `metadata (JSONB)`, `created_at` |

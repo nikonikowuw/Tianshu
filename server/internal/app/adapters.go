@@ -224,7 +224,17 @@ func (a *identityAccessAdapter) ListUserIDsByRoleCode(ctx context.Context, code 
 }
 
 func (a *identityAccessAdapter) ReplaceUserRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
-	return a.svc.ReplaceUserRoles(ctx, userID, roleIDs)
+	return mapReplaceUserRolesErr(a.svc.ReplaceUserRoles(ctx, userID, roleIDs))
+}
+
+func mapReplaceUserRolesErr(err error) error {
+	if appErr, ok := apperr.As(err); ok && appErr.Code == access.ErrCodeRoleNotFound {
+		return apperr.Validation([]apperr.FieldError{{
+			Field:   "roleIds",
+			Message: identity.ErrCodeInvalidRole,
+		}})
+	}
+	return err
 }
 
 func toIdentityRoleRefs(in []access.RoleRef) []identity.RoleRef {
