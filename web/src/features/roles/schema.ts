@@ -30,6 +30,7 @@ export const rolesSearchSchema = z.object({
   q: z
     .string()
     .trim()
+    .max(100)
     .transform((v) => (v === '' ? undefined : v))
     .optional()
     .catch(undefined),

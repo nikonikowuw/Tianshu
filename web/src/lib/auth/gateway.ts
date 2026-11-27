@@ -80,19 +80,27 @@ async function performSingleFlightRefresh(): Promise<string | null> {
   return inFlightRefresh
 }
 
-export function createAuthGateway(onSessionCleared: () => void): AuthGateway {
-  const syncProfile = async (): Promise<void> => {
-    const token = useAuthStore.getState().accessToken
-    if (!token) return
-    const res = await apiClient.get<MeResponse>('/auth/me')
-    useAuthStore.getState().setSession({
-      accessToken: token,
-      user: res.data.user,
-      roles: res.data.roles ?? [],
-      permissions: res.data.permissions ?? [],
-    })
-  }
+export async function syncCurrentProfile(): Promise<void> {
+  const token = useAuthStore.getState().accessToken
+  if (!token) return
+  const res = await apiClient.get<MeResponse>('/auth/me')
+  useAuthStore.getState().setSession({
+    accessToken: token,
+    user: res.data.user,
+    roles: res.data.roles ?? [],
+    permissions: res.data.permissions ?? [],
+  })
+}
 
+export async function syncCurrentProfileIfHasRole(
+  roleCode: string
+): Promise<void> {
+  const { accessToken, roles } = useAuthStore.getState()
+  if (!accessToken || !roles.includes(roleCode)) return
+  await syncCurrentProfile()
+}
+
+export function createAuthGateway(onSessionCleared: () => void): AuthGateway {
   return {
     getStatus: () => useAuthStore.getState().status,
 
@@ -116,7 +124,7 @@ export function createAuthGateway(onSessionCleared: () => void): AuthGateway {
       }
 
       try {
-        await syncProfile()
+        await syncCurrentProfile()
         return true
       } catch {
         useAuthStore.getState().clearSession({ broadcast: false })
@@ -125,7 +133,7 @@ export function createAuthGateway(onSessionCleared: () => void): AuthGateway {
       }
     },
 
-    syncProfile,
+    syncProfile: syncCurrentProfile,
 
     signOut: async () => {
       try {

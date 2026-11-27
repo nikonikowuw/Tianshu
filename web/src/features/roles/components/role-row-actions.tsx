@@ -8,6 +8,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { RoleItem } from '../types'
 
 type RoleRowActionsProps = {
@@ -32,6 +37,26 @@ export function RoleRowActions({
   const showDelete = canDelete && !role.isSystem
   const deleteDisabled = role.userCount > 0
 
+  const deleteItem = (
+    <DropdownMenuItem
+      disabled={deleteDisabled}
+      aria-disabled={deleteDisabled || undefined}
+      aria-describedby={
+        deleteDisabled ? `role-delete-disabled-${role.id}` : undefined
+      }
+      className='text-destructive focus:text-destructive'
+      onSelect={() => onDelete(role)}
+    >
+      <Trash2 className='size-4' />
+      <span>{t('rowActions.delete')}</span>
+      {deleteDisabled && (
+        <span id={`role-delete-disabled-${role.id}`} className='sr-only'>
+          {t('rowActions.deleteDisabledInUse')}
+        </span>
+      )}
+    </DropdownMenuItem>
+  )
+
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
@@ -51,6 +76,7 @@ export function RoleRowActions({
         align='end'
         className='w-44'
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
       >
         <DropdownMenuItem onSelect={() => onView(role)}>
           <Eye className='size-4' />
@@ -65,29 +91,18 @@ export function RoleRowActions({
         {showDelete && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              disabled={deleteDisabled}
-              aria-disabled={deleteDisabled || undefined}
-              aria-describedby={
-                deleteDisabled ? `role-delete-disabled-${role.id}` : undefined
-              }
-              title={
-                deleteDisabled ? t('rowActions.deleteDisabledInUse') : undefined
-              }
-              className='text-destructive focus:text-destructive'
-              onSelect={() => onDelete(role)}
-            >
-              <Trash2 className='size-4' />
-              <span>{t('rowActions.delete')}</span>
-              {deleteDisabled && (
-                <span
-                  id={`role-delete-disabled-${role.id}`}
-                  className='sr-only'
-                >
+            {deleteDisabled ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className='cursor-not-allowed'>{deleteItem}</div>
+                </TooltipTrigger>
+                <TooltipContent side='left'>
                   {t('rowActions.deleteDisabledInUse')}
-                </span>
-              )}
-            </DropdownMenuItem>
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              deleteItem
+            )}
           </>
         )}
       </DropdownMenuContent>

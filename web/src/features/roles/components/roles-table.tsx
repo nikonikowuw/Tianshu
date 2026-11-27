@@ -9,7 +9,7 @@ import {
 } from '@tanstack/react-table'
 import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
-import { normalizeApiError } from '@/lib/api/error'
+import { formatServerErrorMessage } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -199,13 +199,14 @@ export function RolesTable({
     [t]
   )
 
-  const apiError = isError ? normalizeApiError(error) : null
+  const errorMessage = isError ? formatServerErrorMessage(error) : null
 
   return (
     <div className='flex flex-1 flex-col gap-4'>
       <DataTableToolbar
         table={table}
         searchPlaceholder={t('searchPlaceholder')}
+        searchMaxLength={100}
         filters={filterConfigs}
         hasActiveFilters={hasAnyFilter}
         onReset={handleResetAll}
@@ -223,7 +224,7 @@ export function RolesTable({
               size='sm'
               className='h-8'
               onClick={() => void refetch()}
-              aria-label={tCommon('retry')}
+              aria-label={tCommon('refresh')}
             >
               <RefreshCw className='size-3.5' />
             </Button>
@@ -231,12 +232,12 @@ export function RolesTable({
         }
       />
 
-      {apiError && (
+      {errorMessage && (
         <Alert variant='destructive'>
           <AlertCircle className='size-4' />
           <AlertTitle>{t('error.loadFailed')}</AlertTitle>
           <AlertDescription className='flex flex-wrap items-center justify-between gap-2'>
-            <span>{apiError.message || tCommon('retry')}</span>
+            <span>{errorMessage}</span>
             <Button
               type='button'
               variant='outline'
@@ -313,6 +314,7 @@ export function RolesTable({
                   className='group/row cursor-pointer focus-visible:bg-muted/60 focus-visible:outline-hidden'
                   onClick={() => onViewRole(row.original)}
                   onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
                       onViewRole(row.original)
@@ -335,7 +337,7 @@ export function RolesTable({
                   ))}
                 </TableRow>
               ))
-            ) : (
+            ) : isError ? null : (
               <TableRow className='hover:bg-transparent'>
                 <TableCell
                   colSpan={table.getVisibleLeafColumns().length}

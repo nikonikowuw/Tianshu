@@ -12,8 +12,7 @@
     "updatedAt": "更新时间"
   },
   "badges": {
-    "system": "系统内置",
-    "custom": "自定义"
+    "system": "系统内置"
   },
   "filters": {
     "type": "角色类型",
@@ -51,6 +50,8 @@
     "otherPermissions": "其他未挂载权限",
     "expandAll": "展开",
     "collapseAll": "折叠",
+    "expandNode": "展开 {{label}}",
+    "collapseNode": "折叠 {{label}}",
     "nodeTypes": {
       "directory": "目录",
       "menu": "菜单",
