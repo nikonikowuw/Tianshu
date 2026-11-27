@@ -36,6 +36,18 @@ driver = "local" # local | s3
 local_root = "./data/uploads"
 max_file_size_bytes = 10485760   # 10 MiB
 max_avatar_size_bytes = 2097152  # 2 MiB
+signed_url_ttl = "5m"
+signed_url_secret = ""           # optional >=32-byte dedicated secret; empty falls back to auth.jwt_secret
+allowed_mime_types = []          # optional extra MIME types beyond built-in allowlist
+
+[storage.s3]
+endpoint = "http://localhost:9000" # set for MinIO / R2 / custom S3 endpoint
+region = "us-east-1"
+bucket = "tianshu"
+access_key = ""                    # inject via TIANSHU_STORAGE__S3__ACCESS_KEY in production
+secret_key = ""                    # inject via TIANSHU_STORAGE__S3__SECRET_KEY in production
+use_path_style = true
+auto_create_bucket = false         # true creates the bucket on startup; false requires an existing bucket (e.g. `mc mb local/tianshu`)
 
 [auth]
 # Production requires a strong random secret (>= 32 bytes) via TIANSHU_AUTH__JWT_SECRET.

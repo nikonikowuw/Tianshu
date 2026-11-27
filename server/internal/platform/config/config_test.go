@@ -58,3 +58,72 @@ func TestBootstrapAdminEnvAliasesAndPartialValidation(t *testing.T) {
 		t.Fatalf("expected enabled bootstrap config, got %+v", cfg.Bootstrap)
 	}
 }
+
+func TestStorageValidation(t *testing.T) {
+	t.Run("rejects unknown driver", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Storage.Driver = "gcs"
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for unknown storage driver")
+		}
+	})
+
+	t.Run("s3 requires bucket and credentials", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Storage.Driver = "s3"
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error when s3 bucket/credentials are missing")
+		}
+
+		cfg.Storage.S3.Bucket = "tianshu"
+		cfg.Storage.S3.AccessKey = "tianshu"
+		cfg.Storage.S3.SecretKey = "tianshu123456"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected dev s3 config to validate, got %v", err)
+		}
+	})
+
+	t.Run("production rejects default s3 credentials", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.App.Env = "production"
+		cfg.Auth.JWTSecret = "super-strong-production-secret-at-least-32-bytes"
+		cfg.Storage.Driver = "s3"
+		cfg.Storage.S3.Bucket = "prod-bucket"
+		cfg.Storage.S3.AccessKey = "tianshu"
+		cfg.Storage.S3.SecretKey = "tianshu123456"
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected production validation error for default s3 credentials")
+		}
+
+		cfg.Storage.S3.AccessKey = "prod-access-key"
+		cfg.Storage.S3.SecretKey = "prod-secret-key"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected strong production s3 config to validate, got %v", err)
+		}
+	})
+
+	t.Run("signed url secret must be strong when configured", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Storage.SignedURLSecret = "short"
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for short signed_url_secret")
+		}
+		cfg.Storage.SignedURLSecret = "dedicated-signed-url-secret-at-least-32-bytes"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected strong signed_url_secret to validate, got %v", err)
+		}
+	})
+
+	t.Run("production rejects weak s3 credentials even when default driver is local", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.App.Env = "production"
+		cfg.Auth.JWTSecret = "super-strong-production-secret-at-least-32-bytes"
+		cfg.Storage.Driver = "local"
+		cfg.Storage.S3.Bucket = "legacy-bucket"
+		cfg.Storage.S3.AccessKey = "minioadmin"
+		cfg.Storage.S3.SecretKey = "minioadmin"
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected production validation error when weak s3 credentials are configured under local driver")
+		}
+	})
+}

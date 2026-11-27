@@ -60,6 +60,8 @@ Vitest 的默认值为 `headless ??= isCI`，即仅 CI 环境无头、本地直�
 
 E2E 使用独立测试库并按场景重置数据；等待条件使用框架断言，禁止固定 `sleep`；CI 失败必须上传 trace 与 screenshot artifact。
 
+当前实现：`web/playwright.config.ts` + `web/e2e/*.e2e.ts`，`pnpm test:e2e` 自动拉起 Vite（`15173`）与 Go 服务（`18080`）。`web/e2e/start-backend.sh` 默认重置 `public` schema 并运行迁移，必须用 `TIANSHU_E2E_DSN` 指向专用 E2E 库；脚本对非 `*e2e*`/`*test*` 库名默认拒绝重置。E2E 关闭 TanStack devtools（`VITE_DISABLE_DEVTOOLS=true`），避免右下角浮层遮挡 Sheet 操作。用例使用唯一文件名隔离并在结束时删除，选择器优先 `data-testid` / role / label。
+
 ## 3. 静态检查与工具链规范
 
 - **TypeScript**：开启 `strict`；禁止无理由使用 `any`、`@ts-ignore`、`@ts-expect-error`；`pnpm build` 必须先通过 `tsc -b`。

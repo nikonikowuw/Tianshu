@@ -65,7 +65,8 @@
   5. 语言切换（前端文案 + 后端错误/权限名称）；
   6. 文件上传/预览/删除；
   7. 登出后刷新不能恢复登录态。
-- E2E 使用独立测试库；每个场景前重置数据，不要依赖上一个场景。
+- E2E 使用独立测试库；`web/e2e/start-backend.sh` 默认重置 `public` 后运行迁移，不要依赖上一个场景。仅允许指向专用 E2E 库；非 `*e2e*`/`*test*` 库名需显式 `E2E_ALLOW_RESET=1`，避免误删开发库。
+- S3/MinIO 真实链路由 `TIANSHU_TEST_S3_ENDPOINT` 门控：设置后运行 `TestS3IntegrationPutGetDelete`（`TIANSHU_TEST_S3_ACCESS_KEY` / `TIANSHU_TEST_S3_SECRET_KEY` 必填，默认 bucket `tianshu-e2e`）；未设置时该测试跳过，不得把 httptest 假 S3 当成真实兼容性验证。
 - 选择器优先 role/label；不要用 CSS 层级或文本硬编码（i18n 会变）。
 - 等待网络/动画用框架提供的条件，不用固定 `sleep`。
 - 失败时保留 trace/screenshot；CI artifact 上传。

@@ -8,6 +8,7 @@ import (
 	"tianshu/internal/modules/access"
 	"tianshu/internal/modules/audit"
 	"tianshu/internal/modules/auth"
+	"tianshu/internal/modules/files"
 	"tianshu/internal/modules/identity"
 	"tianshu/internal/modules/setup"
 )
@@ -258,6 +259,57 @@ type identityAuditAdapter struct {
 var _ identity.AuditRecorder = (*identityAuditAdapter)(nil)
 
 func (a *identityAuditAdapter) Record(ctx context.Context, entry identity.AuditEntry) error {
+	return a.svc.Record(ctx, audit.RecordInput{
+		ActorID:       entry.ActorID,
+		ActorUsername: entry.ActorUsername,
+		Action:        entry.Action,
+		Resource:      entry.Resource,
+		ResourceID:    entry.ResourceID,
+		Status:        entry.Status,
+		IPAddress:     entry.IPAddress,
+		UserAgent:     entry.UserAgent,
+		Metadata:      entry.Metadata,
+	})
+}
+
+// filesActorAdapter bridges identity.Service into files.ActorResolver.
+type filesActorAdapter struct {
+	svc *identity.Service
+}
+
+var _ files.ActorResolver = (*filesActorAdapter)(nil)
+
+func (a *filesActorAdapter) GetUsername(ctx context.Context, userID uuid.UUID) (string, error) {
+	user, err := a.svc.GetByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return user.Username, nil
+}
+
+func (a *filesActorAdapter) ListUsernamesByIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]string, error) {
+	return a.svc.ListUsernamesByIDs(ctx, userIDs)
+}
+
+// filesAvatarRefAdapter bridges identity.Service into files.AvatarRefChecker.
+type filesAvatarRefAdapter struct {
+	svc *identity.Service
+}
+
+var _ files.AvatarRefChecker = (*filesAvatarRefAdapter)(nil)
+
+func (a *filesAvatarRefAdapter) IsAvatarFileInUse(ctx context.Context, fileID uuid.UUID) (bool, error) {
+	return a.svc.IsAvatarFileInUse(ctx, fileID)
+}
+
+// filesAuditAdapter bridges audit.Service into files.AuditRecorder.
+type filesAuditAdapter struct {
+	svc *audit.Service
+}
+
+var _ files.AuditRecorder = (*filesAuditAdapter)(nil)
+
+func (a *filesAuditAdapter) Record(ctx context.Context, entry files.AuditEntry) error {
 	return a.svc.Record(ctx, audit.RecordInput{
 		ActorID:       entry.ActorID,
 		ActorUsername: entry.ActorUsername,

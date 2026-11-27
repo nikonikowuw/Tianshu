@@ -12,6 +12,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countActiveUsersByAvatarFileID = `-- name: CountActiveUsersByAvatarFileID :one
+SELECT count(*)::bigint
+FROM users
+WHERE deleted_at IS NULL
+  AND avatar_file_id = $1::uuid
+`
+
+func (q *Queries) CountActiveUsersByAvatarFileID(ctx context.Context, fileID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveUsersByAvatarFileID, fileID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countActiveUsersByIDs = `-- name: CountActiveUsersByIDs :one
 SELECT count(*)::bigint
 FROM users
@@ -300,6 +314,37 @@ func (q *Queries) GetUserForAuthByIdentifier(ctx context.Context, username strin
 		&i.Status,
 	)
 	return i, err
+}
+
+const listUsernamesByIDs = `-- name: ListUsernamesByIDs :many
+SELECT id, username
+FROM users
+WHERE id = ANY($1::uuid[])
+`
+
+type ListUsernamesByIDsRow struct {
+	ID       uuid.UUID
+	Username string
+}
+
+func (q *Queries) ListUsernamesByIDs(ctx context.Context, ids []uuid.UUID) ([]ListUsernamesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listUsernamesByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsernamesByIDsRow
+	for rows.Next() {
+		var i ListUsernamesByIDsRow
+		if err := rows.Scan(&i.ID, &i.Username); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listUsers = `-- name: ListUsers :many

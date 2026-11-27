@@ -168,6 +168,7 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
                 <FormLabel>{t('auth:signIn.identifier')}</FormLabel>
                 <FormControl>
                   <Input
+                    data-testid='sign-in-identifier'
                     className='h-10'
                     autoComplete='username'
                     autoCapitalize='none'
@@ -189,6 +190,7 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
                 <FormLabel>{t('auth:signIn.password')}</FormLabel>
                 <FormControl>
                   <PasswordInput
+                    data-testid='sign-in-password'
                     inputClassName='h-10'
                     autoComplete='current-password'
                     placeholder={t('auth:signIn.passwordPlaceholder')}
@@ -202,6 +204,7 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
 
           <Button
             type='submit'
+            data-testid='sign-in-submit'
             size='lg'
             className='mt-2 h-10 w-full font-medium'
             disabled={isLocked}

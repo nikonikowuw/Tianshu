@@ -1,0 +1,92 @@
+{
+  "title": "Files",
+  "description": "Manage images and documents stored in local disk or S3/MinIO object storage.",
+  "uploadFile": "Upload File",
+  "searchPlaceholder": "Search by filename...",
+  "filters": {
+    "category": "Category",
+    "driver": "Storage Driver"
+  },
+  "categories": {
+    "image": "Image",
+    "document": "Document"
+  },
+  "drivers": {
+    "local": "Local",
+    "s3": "S3 / MinIO"
+  },
+  "columns": {
+    "name": "File Name",
+    "type": "Type",
+    "size": "Size",
+    "driver": "Storage",
+    "uploader": "Uploader",
+    "createdAt": "Uploaded At"
+  },
+  "rowActions": {
+    "openMenu": "Open actions menu",
+    "preview": "Inspect details",
+    "download": "Download",
+    "delete": "Delete"
+  },
+  "empty": {
+    "noData": "No files uploaded yet",
+    "noResults": "No files match the current filters",
+    "systemUploader": "System"
+  },
+  "error": {
+    "loadTitle": "Failed to load files",
+    "retry": "Retry",
+    "previewFailed": "Unable to load image preview. Retry or download directly."
+  },
+  "uploadDialog": {
+    "title": "Upload Files",
+    "description": "Drag and drop files here or browse from your device. Size and type limits are enforced by the server.",
+    "dropzoneTitle": "Click to browse or drag files here",
+    "dropzoneHint": "Supports images (JPG / PNG / WebP / GIF) and documents (PDF / TXT / CSV / DOCX / XLSX / PPTX), plus any administrator-configured types. SVG is blocked.",
+    "selectFiles": "Choose Files",
+    "removeFile": "Remove {{name}}",
+    "queueTitle": "Upload Queue ({{count}})",
+    "clearFinished": "Clear Finished",
+    "status": {
+      "pending": "Pending",
+      "uploading": "Uploading {{progress}}%",
+      "success": "Uploaded",
+      "error": "Failed"
+    },
+    "tooLargeHint": "File exceeds the {{size}} limit",
+    "rateLimitBanner": "Too many uploads. Try again in {{seconds}}s.",
+    "startUpload": "Start Upload",
+    "uploading": "Uploading...",
+    "done": "Done"
+  },
+  "detail": {
+    "title": "File Details",
+    "description": "Inspect file metadata, preview safe images, or download as an attachment.",
+    "preview": "Preview",
+    "documentPreviewNotice": "Documents are forced to download as attachments for security and are not rendered inline.",
+    "originalName": "Original Name",
+    "mimeType": "MIME Type",
+    "category": "Category",
+    "size": "File Size",
+    "bytesUnit": "{{bytes}} bytes",
+    "driver": "Storage Driver",
+    "uploader": "Uploader",
+    "createdAt": "Uploaded At",
+    "sha256": "SHA-256 Checksum",
+    "copySha256": "Copy SHA-256",
+    "copied": "Copied to clipboard",
+    "download": "Download",
+    "delete": "Delete File"
+  },
+  "deleteDialog": {
+    "title": "Delete File",
+    "description": "Are you sure you want to permanently delete \"{{name}}\"? Both metadata and the stored object will be removed.",
+    "confirm": "Delete"
+  },
+  "toast": {
+    "uploaded": "Uploaded {{count}} file(s)",
+    "deleted": "File deleted",
+    "downloadStarted": "Download started"
+  }
+}

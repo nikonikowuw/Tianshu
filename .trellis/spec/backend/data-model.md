@@ -120,10 +120,12 @@
 
 - 列：`id`、`uploader_id`、`storage_driver`、`object_key`、`original_name`、`mime_type`、`size_bytes`、`sha256`、`status`、`created_at`、`updated_at`。
 - `uploader_id` `ON DELETE SET NULL`；`object_key` 唯一；`sha256` 可加索引用于去重。
-- `status`：`pending` / `ready` / `failed`；上传先落 pending，存储成功后置 ready，失败/超时由 janitor 清理。
-- `avatar_file_id` 引用本表；删除文件前检查用户头像引用，拒绝或先置空。
-- 索引：`idx_files_uploader_id_created_at`、`idx_files_sha256`、`idx_files_status`。
+- `status`：`pending` / `ready` / `failed` / `deleting`；上传先落 `pending`，存储成功后置 `ready`，删除先事务标记 `deleting` 再删存储对象与行；超时 `pending`、`failed` 与待补偿 `deleting` 均由 janitor 定期清理。
+- `avatar_file_id` 引用本表；删除文件前检查未删除用户头像引用，命中返回 `409 FILES_IN_USE`。
+- 索引：`idx_files_uploader_id_created_at`、`idx_files_sha256`、`idx_files_status`、`idx_files_status_created_at`（`(status, created_at DESC, id DESC)`）、`idx_files_original_name_trgm`（`gin (original_name gin_trgm_ops)`，支撑前导通配搜索）、`idx_files_cleanup_scan`（`(storage_driver, status, updated_at, id)` 部分索引，支撑 Janitor 扫描）；`users` 表另配部分索引 `idx_users_avatar_file_id` 加速引用检查。
 - `storage_driver` 必须参与读路径；不能只按全局配置选驱动，否则切换 local/s3 后旧文件读不到。
+- `idx_files_original_name_trgm` 依赖 `pg_trgm`：迁移会优先在 `public` 创建扩展；若迁移角色无 `CREATE EXTENSION` 权限，需由 DBA 预装 `pg_trgm`，否则迁移失败而不是静默退回慢查询。
+- 未来实现 profile 头像更新时，必须在同一事务内对目标 `files` 行加 `FOR SHARE/UPDATE`，避免与文件删除并发时依赖 `ON DELETE SET NULL` 静默清空头像。
 
 ## 5. 删除与引用策略
 

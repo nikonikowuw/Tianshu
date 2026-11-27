@@ -8,6 +8,7 @@ import (
 
 	"tianshu/internal/modules/access"
 	"tianshu/internal/modules/auth"
+	"tianshu/internal/modules/files"
 	"tianshu/internal/modules/identity"
 	"tianshu/internal/platform/httpserver"
 	"tianshu/internal/shared/apperr"
@@ -26,6 +27,9 @@ func (a *App) registerRoutes() {
 	apiV1 := a.engine.Group("/api/v1")
 	if a.setupHandler != nil {
 		a.setupHandler.RegisterPublicRoutes(apiV1)
+	}
+	if a.filesHandler != nil {
+		a.filesHandler.RegisterPublicRoutes(apiV1)
 	}
 	if a.authHandler != nil {
 		a.authHandler.RegisterPublicRoutes(apiV1)
@@ -59,6 +63,13 @@ func (a *App) registerRoutes() {
 				authedV1,
 				access.RequirePermission(a.access, access.PermAuditRead),
 			)
+		}
+		if a.filesHandler != nil && a.access != nil {
+			a.filesHandler.RegisterRoutes(authedV1, files.RoutePermissions{
+				RequireRead:   access.RequirePermission(a.access, access.PermFilesRead),
+				RequireUpload: access.RequirePermission(a.access, access.PermFilesUpload),
+				RequireDelete: access.RequirePermission(a.access, access.PermFilesDelete),
+			})
 		}
 	}
 

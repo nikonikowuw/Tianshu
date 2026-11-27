@@ -163,7 +163,7 @@ func recoveryMiddleware(log *slog.Logger, bundle *i18n.Bundle) gin.HandlerFunc {
 				reqLog.Error("http panic recovered",
 					"panic", rec,
 					"method", c.Request.Method,
-					"path", c.Request.URL.Path,
+					"path", requestLogPath(c),
 				)
 				lang := i18n.LocaleFromContext(c.Request.Context())
 				msg := translate(bundle, lang, apperr.CodeInternal, nil)
@@ -185,12 +185,27 @@ func loggerMiddleware(log *slog.Logger) gin.HandlerFunc {
 		reqLog := logger.FromContext(c.Request.Context(), log)
 		reqLog.Info("http request",
 			"method", c.Request.Method,
-			"path", c.Request.URL.Path,
+			"path", requestLogPath(c),
 			"status", c.Writer.Status(),
 			"latency_ms", time.Since(start).Milliseconds(),
 			"client_ip", c.ClientIP(),
 		)
 	}
+}
+
+// requestLogPath returns the matched route template so bearer credentials embedded in path
+// parameters (for example signed file URLs) never reach access or recovery logs.
+func requestLogPath(c *gin.Context) string {
+	if route := c.FullPath(); route != "" {
+		return route
+	}
+	const signedPrefix = "/api/v1/files/signed/"
+	if strings.HasPrefix(c.Request.URL.Path, signedPrefix) {
+		// NoRoute/405 requests still carry the bearer token in the path; never fall
+		// back to the raw URL for the signed-content prefix.
+		return signedPrefix + ":token"
+	}
+	return c.Request.URL.Path
 }
 
 func securityHeadersMiddleware() gin.HandlerFunc {
@@ -219,7 +234,7 @@ func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
 				c.Header("Access-Control-Allow-Origin", origin)
 				c.Header("Vary", "Origin")
 				c.Header("Access-Control-Allow-Credentials", "true")
-				c.Header("Access-Control-Expose-Headers", headerRequestID+", Retry-After")
+				c.Header("Access-Control-Expose-Headers", headerRequestID+", Retry-After, Content-Disposition")
 				c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept-Language, X-Request-Id")
 				c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			}

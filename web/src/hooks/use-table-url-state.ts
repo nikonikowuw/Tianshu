@@ -133,7 +133,9 @@ export function useTableUrlState(
   const onPaginationChange: OnChangeFn<PaginationState> = useCallback(
     (updater) => {
       const next = typeof updater === 'function' ? updater(pagination) : updater
-      const nextPage = next.pageIndex + 1
+      const pageSizeChanged = next.pageSize !== pagination.pageSize
+      // 页大小变化时必须回到第一页，避免保留旧 pageIndex 后落在无效/错位页。
+      const nextPage = pageSizeChanged ? defaultPage : next.pageIndex + 1
       const nextPageSize = next.pageSize
       navigate({
         search: (prev) => ({

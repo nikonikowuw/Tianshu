@@ -115,8 +115,15 @@
 | `MENUS_HAS_CHILDREN`        | 409  | 菜单仍包含子节点               |
 | `MENUS_CYCLE_DETECTED`      | 409  | 菜单父级不能指向自身或子孙节点 |
 | `MENUS_INVALID_PARENT`      | 422  | 父级菜单不存在或类型不兼容     |
-| `FILES_TYPE_NOT_ALLOWED`    | 400  | MIME/类型不允许                |
+| `FILES_NOT_FOUND`           | 404  | 文件不存在或未就绪             |
+| `FILES_TYPE_NOT_ALLOWED`    | 400  | MIME/类型不允许或与扩展名不匹配 |
 | `FILES_TOO_LARGE`           | 413  | 文件过大                       |
+| `FILES_EMPTY_FILE`          | 400  | 不允许上传空文件               |
+| `FILES_MISSING_FILE`        | 400  | 缺少上传文件字段               |
+| `FILES_INVALID_IMAGE`       | 400  | 头像图片损坏或像素尺寸超限     |
+| `FILES_IN_USE`              | 409  | 文件正被未删除用户头像引用     |
+| `FILES_INVALID_SIGNED_URL`  | 401  | 签名访问链接无效或已过期       |
+| `FILES_STORAGE_UNAVAILABLE` | 503  | 对应存储驱动当前未配置/不可用  |
 | `RATE_LIMITED`              | 429  | 限流                           |
 | `INTERNAL_ERROR`            | 500  | 未预期错误                     |
 
@@ -225,7 +232,21 @@
 - `PUT /api/v1/menus/reorder`（`menus:update`）：批量调整菜单节点父级与排序 `{ "items": [{ "id", "parentId", "sortOrder" }] }`，返回 `200 { "items": [MenuTreeNode...] }`。
 - `DELETE /api/v1/menus/:id`（`menus:delete`）：删除自定义叶子菜单节点，返回 `204`。
 
-## 13. 暂不纳入 v1
+## 13. Files 端点契约
+
+- `GET /api/v1/files/config`（已登录即可）：返回上传策略 `{ "maxFileSizeBytes", "maxAvatarSizeBytes", "allowedExtensions" }`，供前端文件选择器与大小提示使用；前端不得硬编码后端可配置的上限与类型。
+- `POST /api/v1/files`（`files:upload` + 限流 20 次/分钟/用户）：`multipart/form-data` 字段 `file`；执行有界读取、内容嗅探 + 扩展名交叉校验（显式拒绝 `image/svg+xml` 与 HTML/JS）、SHA-256 计算、`pending`→`ready` 两阶段持久化与 `file.upload` 审计；返回 `201 FileDTO`。
+- `POST /api/v1/files/avatar`（已登录即可 + 限流 20 次/分钟/用户）：`multipart/form-data` 字段 `file`；上限默认 2 MiB，仅允许安全位图格式并经纯 Go 缩放至 ≤512px 重编码为 PNG 剥离全部 EXIF 元数据；返回 `201 FileDTO`。
+- `GET /api/v1/files`（`files:read`）：查询 `status = 'ready'` 分页列表，支持 `page`、`pageSize`、`q`（文件名 `ILIKE`）、`category`（`image` / `document`）、`mimeType`、`driver`（`local` / `s3`）、`sort`（白名单 `created_at` / `original_name` / `size_bytes`）、`order`（`asc` / `desc`）；默认排序 `created_at DESC, id DESC`；返回 `200 Paginated<FileDTO>`。
+- `GET /api/v1/files/:id`（`files:read`）：返回 `200 FileDTO`，不存在返回 `404 FILES_NOT_FOUND`。
+- `GET /api/v1/files/:id/content`（`files:read`，可选 `?download=1`）：按记录的 `storage_driver` 路由驱动流式输出；图片默认 `inline`（`?download=1` 为 `attachment`），非允许图片文档强制 `Content-Disposition: attachment`，始终附带 `X-Content-Type-Options: nosniff`。
+- `POST /api/v1/files/:id/signed-url`（`files:read`，可选 `{ "disposition": "inline" | "attachment" }`）：签发短时 HMAC-SHA256 访问链接 `{ "url": "/api/v1/files/signed/<token>", "expiresAt": "..." }`（默认 5 分钟；文档强制 `attachment`）。
+- `GET /api/v1/files/signed/:token`（公开验签路由，免 Bearer）：校验 HMAC 签名与过期时间后流式输出，使用与 `/content` 相同的安全响应头策略；无效或过期返回 `401 FILES_INVALID_SIGNED_URL`。
+- `DELETE /api/v1/files/:id`（`files:delete`）：事务内校验无未删除用户头像引用（命中返回 `409 FILES_IN_USE`）后标为 `deleting` 并写 `file.delete` 审计；事务提交后删除存储对象再物理删行，存储失败由后台 Janitor 重试清理；返回 `204`。
+
+`FileDTO` 字段：`id`、`originalName`、`mimeType`、`category`（`image` / `document`）、`sizeBytes`、`sha256`、`storageDriver`（`local` / `s3`）、`isImage`、`uploader`（`{ id, username }` 或 `null`）、`createdAt` / `updatedAt`（RFC3339）。`SignedFileURLDTO` 字段：`url`、`expiresAt`（RFC3339）。`UploadPolicyDTO` 字段：`maxFileSizeBytes`、`maxAvatarSizeBytes`、`allowedExtensions`（含点号、升序、无重复）。
+
+## 14. 暂不纳入 v1
 
 - 通用 `Idempotency-Key` 重放表：Setup 用数据库咨询锁/唯一约束保证幂等；文件上传用 SHA-256 去重作为后续增强。
 - GraphQL、gRPC 对外接口、批量导入接口。

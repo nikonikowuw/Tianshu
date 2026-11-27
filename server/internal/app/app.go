@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"tianshu/internal/modules/access"
 	"tianshu/internal/modules/audit"
 	"tianshu/internal/modules/auth"
+	"tianshu/internal/modules/files"
 	"tianshu/internal/modules/identity"
 	"tianshu/internal/modules/setup"
 	"tianshu/internal/platform/cache"
@@ -38,13 +40,15 @@ type App struct {
 	db              *pgxpool.Pool
 	tx              *database.TxManager
 	cache           cache.Cache
-	storage         storage.Storage
+	storage         *storage.Registry
 	access          *access.Service
 	accessHandler   *access.Handler
 	identity        *identity.Service
 	identityHandler *identity.Handler
 	audit           *audit.Service
 	auditHandler    *audit.Handler
+	files           *files.Service
+	filesHandler    *files.Handler
 	authHandler     *auth.Handler
 	setupHandler    *setup.Handler
 	engine          *gin.Engine
@@ -79,6 +83,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	if err := bundle.RegisterFS("audit", audit.LocalesFS, "locales"); err != nil {
 		return nil, fmt.Errorf("register audit locales: %w", err)
 	}
+	if err := bundle.RegisterFS("files", files.LocalesFS, "locales"); err != nil {
+		return nil, fmt.Errorf("register files locales: %w", err)
+	}
 	if err := bundle.Validate(); err != nil {
 		return nil, fmt.Errorf("validate i18n bundle: %w", err)
 	}
@@ -112,6 +119,15 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 
 	memCache := cache.NewMemory()
 
+	storeReg, err := initStorage(ctx, cfg.Storage, log)
+	if err != nil {
+		if pool != nil {
+			pool.Close()
+		}
+		_ = memCache.Close()
+		return nil, err
+	}
+
 	var (
 		accessSvc       *access.Service
 		accessHandler   *access.Handler
@@ -119,6 +135,8 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		identityHandler *identity.Handler
 		auditSvc        *audit.Service
 		auditHandler    *audit.Handler
+		filesSvc        *files.Service
+		filesHandler    *files.Handler
 		authHandler     *auth.Handler
 		setupHandler    *setup.Handler
 	)
@@ -179,15 +197,32 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		)
 		identitySessionRevoker.svc = authSvc
 		authHandler = auth.NewHandler(authSvc, cfg.CORS.AllowedOrigins)
-	}
 
-	store, err := initStorage(cfg.Storage)
-	if err != nil {
-		if pool != nil {
-			pool.Close()
+		signedURLSecret := strings.TrimSpace(cfg.Storage.SignedURLSecret)
+		if signedURLSecret == "" {
+			// Empty falls back to the JWT secret so existing deployments keep working;
+			// production clusters should set a dedicated secret for independent rotation.
+			signedURLSecret = cfg.Auth.JWTSecret
 		}
-		_ = memCache.Close()
-		return nil, err
+		filesSvc = files.NewService(
+			pool,
+			storeReg,
+			files.ServiceConfig{
+				MaxFileSizeBytes:   cfg.Storage.MaxFileSizeBytes,
+				MaxAvatarSizeBytes: cfg.Storage.MaxAvatarSizeBytes,
+				AllowedMIMETypes:   cfg.Storage.AllowedMIMETypes,
+				SignedURLSecret:    signedURLSecret,
+				SignedURLTTL:       cfg.Storage.SignedURLTTL,
+			},
+			files.ServiceDeps{
+				Tx:        tx,
+				Actors:    &filesActorAdapter{svc: identitySvc},
+				AvatarRef: &filesAvatarRefAdapter{svc: identitySvc},
+				Audit:     &filesAuditAdapter{svc: auditSvc},
+				Log:       log,
+			},
+		)
+		filesHandler = files.NewHandler(filesSvc)
 	}
 
 	engine, err := httpserver.NewEngine(httpserver.Options{
@@ -214,13 +249,15 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		db:              pool,
 		tx:              tx,
 		cache:           memCache,
-		storage:         store,
+		storage:         storeReg,
 		access:          accessSvc,
 		accessHandler:   accessHandler,
 		identity:        identitySvc,
 		identityHandler: identityHandler,
 		audit:           auditSvc,
 		auditHandler:    auditHandler,
+		files:           filesSvc,
+		filesHandler:    filesHandler,
 		authHandler:     authHandler,
 		setupHandler:    setupHandler,
 		engine:          engine,
@@ -254,6 +291,13 @@ func (a *App) Run(ctx context.Context) error {
 			a.runAuditRetentionJanitor(janitorCtx)
 		}()
 	}
+	if a.files != nil {
+		janitorWG.Add(1)
+		go func() {
+			defer janitorWG.Done()
+			a.runFileOrphanJanitor(janitorCtx)
+		}()
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -268,19 +312,30 @@ func (a *App) Run(ctx context.Context) error {
 	select {
 	case err := <-errCh:
 		janitorCancel()
+		janitorWG.Wait()
 		_ = a.Close(context.Background())
 		runErr = err
 	case <-ctx.Done():
-		janitorCancel()
 		shutdownTimeout := a.cfg.Server.ShutdownTimeout
 		if shutdownTimeout <= 0 {
 			shutdownTimeout = 10 * time.Second
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		runErr = a.Close(shutdownCtx)
+
+		var errs []error
+		if a.server != nil {
+			if err := a.server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errs = append(errs, fmt.Errorf("shutdown http server: %w", err))
+			}
+		}
+		janitorCancel()
+		janitorWG.Wait()
+		if err := a.closeResources(); err != nil {
+			errs = append(errs, err)
+		}
+		runErr = errors.Join(errs...)
 	}
-	janitorWG.Wait()
 	return runErr
 }
 
@@ -306,6 +361,32 @@ func (a *App) runAuditRetentionJanitor(ctx context.Context) {
 	}
 }
 
+func (a *App) runFileOrphanJanitor(ctx context.Context) {
+	const (
+		janitorInterval = 30 * time.Minute
+		pendingTTL      = 15 * time.Minute
+		batchLimit      = int32(100)
+	)
+	ticker := time.NewTicker(janitorInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			cleaned, err := a.files.CleanupOrphans(cleanCtx, pendingTTL, batchLimit)
+			cancel()
+			if err != nil && !errors.Is(err, context.Canceled) {
+				a.log.Warn("file orphan cleanup failed", "error", err)
+			} else if cleaned > 0 {
+				a.log.Info("file orphan cleanup completed", "cleaned", cleaned)
+			}
+		}
+	}
+}
+
 // Close gracefully drains HTTP connections and releases platform resources.
 func (a *App) Close(ctx context.Context) error {
 	var errs []error
@@ -314,6 +395,14 @@ func (a *App) Close(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("shutdown http server: %w", err))
 		}
 	}
+	if err := a.closeResources(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func (a *App) closeResources() error {
+	var errs []error
 	if a.cache != nil {
 		if err := a.cache.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close cache: %w", err))
@@ -325,11 +414,46 @@ func (a *App) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func initStorage(cfg config.StorageConfig) (storage.Storage, error) {
-	switch cfg.Driver {
-	case "", "local":
-		return storage.NewLocal(cfg.LocalRoot)
-	default:
-		return nil, fmt.Errorf("unsupported storage driver %q (s3 driver pending module wiring)", cfg.Driver)
+func initStorage(ctx context.Context, cfg config.StorageConfig, log *slog.Logger) (*storage.Registry, error) {
+	activeDriver := strings.ToLower(strings.TrimSpace(cfg.Driver))
+	if activeDriver == "" {
+		activeDriver = storage.DriverLocal
 	}
+
+	var drivers []storage.Storage
+	if activeDriver == storage.DriverLocal || strings.TrimSpace(cfg.LocalRoot) != "" {
+		localRoot := strings.TrimSpace(cfg.LocalRoot)
+		if localRoot == "" {
+			localRoot = "./data/uploads"
+		}
+		localStore, err := storage.NewLocal(localRoot)
+		if err != nil {
+			if activeDriver == storage.DriverLocal {
+				return nil, fmt.Errorf("init local storage: %w", err)
+			}
+			if log != nil {
+				log.Warn("skipping secondary local storage driver registration", "local_root", localRoot, "error", err)
+			}
+		} else {
+			drivers = append(drivers, localStore)
+		}
+	}
+
+	if activeDriver == storage.DriverS3 || cfg.S3.Configured() {
+		s3Store, err := storage.NewS3(ctx, storage.S3Config{
+			Endpoint:         cfg.S3.Endpoint,
+			Region:           cfg.S3.Region,
+			Bucket:           cfg.S3.Bucket,
+			AccessKey:        cfg.S3.AccessKey,
+			SecretKey:        cfg.S3.SecretKey,
+			UsePathStyle:     cfg.S3.UsePathStyle,
+			AutoCreateBucket: cfg.S3.AutoCreateBucket,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("init s3 storage: %w", err)
+		}
+		drivers = append(drivers, s3Store)
+	}
+
+	return storage.NewRegistry(activeDriver, drivers...)
 }

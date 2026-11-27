@@ -52,7 +52,7 @@
 
 - Refresh/Logout 使用 Cookie，必须校验 `Origin`（或 `Referer`）在白名单内；SameSite=Lax 不能替代 Origin 校验。
 - CORS 使用精确 origin 白名单 + `Access-Control-Allow-Credentials: true`；禁止 `*` 与 credentials 组合。
-- 暴露 `X-Request-Id` 与 `Retry-After`（后者供前端读取 429 退避窗口）；允许 `Authorization`、`Content-Type`、`Accept-Language`、`X-Request-Id` 请求头。
+- 暴露 `X-Request-Id`、`Retry-After` 与 `Content-Disposition`（供前端读取请求追踪 ID、429 退避窗口与下载文件名）；允许 `Authorization`、`Content-Type`、`Accept-Language`、`X-Request-Id` 请求头。
 - 生产前后端同源（Go embed），通常不需要 CORS；开发环境通过 Vite proxy 也可避开跨域。CORS 只作为显式配置能力保留。
 - Cookie 不使用 `__Host-` 前缀时，Path 必须固定 `/api/v1/auth`；不要给 Cookie 设置过宽的 Domain。
 - 禁止把 Refresh Token 放在响应体、URL 或前端可读存储。
@@ -83,7 +83,7 @@
 - 文件名只用于展示；存储 key 用 UUID，禁止路径拼接和 `..`。
 - 图片 re-encode：头像上传使用纯 Go 图片库执行 re-encode（缩放至合理尺寸上限如 512×512 并剥离 EXIF/GPS 元数据）；通用文件模块图片 MVP 不做强制 re-encode，依靠白名单、`nosniff`、禁用 SVG 内联与签名 URL 防护。
 - 响应头 `X-Content-Type-Options: nosniff`；不要对用户上传内容执行脚本。
-- 文件内容访问优先短时签名 URL；若走 Bearer `/content`，前端用 fetch+Blob，禁止把 Token 拼进 URL。
+- 文件内容访问优先短时签名 URL；若走 Bearer `/content`，前端用 fetch+Blob，禁止把 Token 拼进 URL。签名 URL 的 token 属于 bearer 凭证，访问/Recovery 日志只记录路由模板（如 `/api/v1/files/signed/:token`），不得记录完整路径；生产建议通过 `storage.signed_url_secret` 使用独立密钥，留空时回落 `auth.jwt_secret`。
 - 上传采用 pending/ready 状态或补偿清理，避免存储成功、DB 失败留下孤儿对象；删除时同样处理双写失败。
 - 被头像引用的文件不能硬删；先置空 `avatar_file_id` 或拒绝删除。
 - 病毒扫描、图片压缩是可选增强，不作为 MVP 阻塞项。

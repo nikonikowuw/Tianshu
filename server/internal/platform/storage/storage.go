@@ -10,6 +10,12 @@ import (
 	"strings"
 )
 
+// DriverLocal and DriverS3 are the canonical storage driver identifiers persisted in files.storage_driver.
+const (
+	DriverLocal = "local"
+	DriverS3    = "s3"
+)
+
 var (
 	// ErrNotFound is returned when an object key does not exist.
 	ErrNotFound = errors.New("storage object not found")
@@ -53,7 +59,7 @@ func NewLocal(baseDir string) (*Local, error) {
 
 // Driver returns "local".
 func (l *Local) Driver() string {
-	return "local"
+	return DriverLocal
 }
 
 // Put writes r atomically to key under baseDir.
@@ -137,15 +143,23 @@ func (l *Local) Stat(_ context.Context, key string) (ObjectInfo, error) {
 	return ObjectInfo{Key: key, Size: info.Size()}, nil
 }
 
+func validateKey(key string) (string, error) {
+	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, "\\") || strings.ContainsRune(key, '\x00') {
+		return "", ErrInvalidKey
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(key))
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
+		return "", ErrInvalidKey
+	}
+	return cleaned, nil
+}
+
 func (l *Local) resolvePath(key string) (string, error) {
-	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, "\\") {
-		return "", ErrInvalidKey
+	cleaned, err := validateKey(key)
+	if err != nil {
+		return "", err
 	}
-	cleaned := filepath.Clean(key)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return "", ErrInvalidKey
-	}
-	full := filepath.Join(l.baseDir, cleaned)
+	full := filepath.Join(l.baseDir, filepath.FromSlash(cleaned))
 	rel, err := filepath.Rel(l.baseDir, full)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", ErrInvalidKey

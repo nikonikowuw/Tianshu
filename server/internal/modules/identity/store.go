@@ -62,6 +62,8 @@ type store interface {
 	UpdateUserPasswordByAdmin(ctx context.Context, id uuid.UUID, passwordHash string, updatedBy *uuid.UUID) error
 	SoftDeleteUser(ctx context.Context, id uuid.UUID, updatedBy *uuid.UUID) error
 	CountActiveUsersByIDs(ctx context.Context, ids []uuid.UUID) (int64, error)
+	ListUsernamesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error)
+	CountActiveUsersByAvatarFileID(ctx context.Context, fileID uuid.UUID) (int64, error)
 }
 
 type pgStore struct {
@@ -267,6 +269,25 @@ func (s *pgStore) CountActiveUsersByIDs(ctx context.Context, ids []uuid.UUID) (i
 		return 0, nil
 	}
 	return s.queries(ctx).CountActiveUsersByIDs(ctx, ids)
+}
+
+func (s *pgStore) ListUsernamesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	if len(ids) == 0 {
+		return make(map[uuid.UUID]string), nil
+	}
+	rows, err := s.queries(ctx).ListUsernamesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]string, len(rows))
+	for _, r := range rows {
+		out[r.ID] = r.Username
+	}
+	return out, nil
+}
+
+func (s *pgStore) CountActiveUsersByAvatarFileID(ctx context.Context, fileID uuid.UUID) (int64, error) {
+	return s.queries(ctx).CountActiveUsersByAvatarFileID(ctx, fileID)
 }
 
 func mapDetailRow(

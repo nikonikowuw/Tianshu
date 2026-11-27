@@ -1,4 +1,4 @@
-.PHONY: dev test lint build docker
+.PHONY: dev test test-e2e lint build docker
 
 # Thin wrapper delegating Go/embed build details to server/Makefile.
 
@@ -8,6 +8,9 @@ dev:
 test:
 	@$(MAKE) -C server test
 	pnpm --dir web test
+
+test-e2e:
+	pnpm --dir web test:e2e
 
 lint:
 	@$(MAKE) -C server lint

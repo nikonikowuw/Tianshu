@@ -167,3 +167,14 @@ FROM users
 WHERE deleted_at IS NULL
   AND status = 'active'
   AND id = ANY(@ids::uuid[]);
+
+-- name: ListUsernamesByIDs :many
+SELECT id, username
+FROM users
+WHERE id = ANY(@ids::uuid[]);
+
+-- name: CountActiveUsersByAvatarFileID :one
+SELECT count(*)::bigint
+FROM users
+WHERE deleted_at IS NULL
+  AND avatar_file_id = @file_id::uuid;

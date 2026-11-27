@@ -33,7 +33,10 @@
     "authRefreshReplay": "令牌重放告警 (auth.refresh_replay)",
     "roleCreate": "创建角色 (role.create)",
     "roleUpdate": "更新角色 (role.update)",
-    "roleDelete": "删除角色 (role.delete)"
+    "roleDelete": "删除角色 (role.delete)",
+    "fileUpload": "上传文件 (file.upload)",
+    "fileUploadAvatar": "上传头像 (file.upload_avatar)",
+    "fileDelete": "删除文件 (file.delete)"
   },
   "resources": {
     "system": "系统 (system)",

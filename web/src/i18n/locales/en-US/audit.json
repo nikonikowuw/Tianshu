@@ -33,7 +33,10 @@
     "authRefreshReplay": "Token Replay Alert (auth.refresh_replay)",
     "roleCreate": "Create Role (role.create)",
     "roleUpdate": "Update Role (role.update)",
-    "roleDelete": "Delete Role (role.delete)"
+    "roleDelete": "Delete Role (role.delete)",
+    "fileUpload": "Upload File (file.upload)",
+    "fileUploadAvatar": "Upload Avatar (file.upload_avatar)",
+    "fileDelete": "Delete File (file.delete)"
   },
   "resources": {
     "system": "System (system)",

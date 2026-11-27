@@ -338,6 +338,32 @@ var systemMenuCatalog = []SystemMenuDef{
 		PermissionCode: PermAuditRead,
 		SortOrder:      40,
 	},
+	{
+		ParentCode:     "dir_system",
+		Code:           "menu_files",
+		Type:           MenuTypeMenu,
+		TitleKey:       "ACCESS_MENU_FILES",
+		Path:           "/files",
+		Icon:           "Folder",
+		PermissionCode: PermFilesRead,
+		SortOrder:      50,
+	},
+	{
+		ParentCode:     "menu_files",
+		Code:           "btn_files_upload",
+		Type:           MenuTypeButton,
+		TitleKey:       "ACCESS_PERM_FILES_UPLOAD_NAME",
+		PermissionCode: PermFilesUpload,
+		SortOrder:      10,
+	},
+	{
+		ParentCode:     "menu_files",
+		Code:           "btn_files_delete",
+		Type:           MenuTypeButton,
+		TitleKey:       "ACCESS_PERM_FILES_DELETE_NAME",
+		PermissionCode: PermFilesDelete,
+		SortOrder:      20,
+	},
 }
 
 // SystemMenus returns a defensive copy of the built-in navigation menu tree.

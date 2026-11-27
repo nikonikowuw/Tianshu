@@ -198,6 +198,9 @@ export function AuditLogsTable({
           { label: t('actions.roleCreate'), value: 'role.create' },
           { label: t('actions.roleUpdate'), value: 'role.update' },
           { label: t('actions.roleDelete'), value: 'role.delete' },
+          { label: t('actions.fileUpload'), value: 'file.upload' },
+          { label: t('actions.fileUploadAvatar'), value: 'file.upload_avatar' },
+          { label: t('actions.fileDelete'), value: 'file.delete' },
         ],
       },
       {

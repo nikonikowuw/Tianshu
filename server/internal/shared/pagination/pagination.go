@@ -1,5 +1,7 @@
 package pagination
 
+import "math"
+
 const (
 	// DefaultPage is the 1-based fallback page index.
 	DefaultPage = 1
@@ -37,9 +39,16 @@ func Normalize(page, pageSize int) Params {
 }
 
 // Offset returns the SQL OFFSET for the normalized page.
+// Absurdly large pages are clamped to MaxInt32 instead of overflowing into a negative
+// OFFSET, which PostgreSQL rejects and would surface as an internal error.
 func (p Params) Offset() int32 {
 	n := Normalize(p.Page, p.PageSize)
-	return int32((n.Page - 1) * n.PageSize)
+	pages := int64(n.Page) - 1
+	limit := int64(n.PageSize)
+	if pages > int64(math.MaxInt32)/limit {
+		return math.MaxInt32
+	}
+	return int32(pages * limit)
 }
 
 // Limit returns the SQL LIMIT for the normalized page size.

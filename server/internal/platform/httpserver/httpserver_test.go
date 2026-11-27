@@ -1,6 +1,7 @@
 package httpserver_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -68,6 +69,54 @@ func TestRequestIDAndHealthEndpoints(t *testing.T) {
 	}
 	if got := recBad.Header().Get("X-Request-Id"); got == "" || got == "bad id!" {
 		t.Fatalf("X-Request-Id = %q, expected server-generated ID", got)
+	}
+}
+
+func TestAccessLogRedactsPathParameters(t *testing.T) {
+	var logBuffer bytes.Buffer
+	bundle, err := i18n.NewBundle()
+	if err != nil {
+		t.Fatalf("NewBundle() error = %v", err)
+	}
+	engine, err := httpserver.NewEngine(httpserver.Options{
+		Env:    "test",
+		Logger: logger.New("test", "info", &logBuffer),
+		I18n:   bundle,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	engine.GET("/api/v1/files/signed/:token", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	const token = "sensitive-signed-token-value"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/files/signed/"+token, nil)
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	logged := logBuffer.String()
+	if strings.Contains(logged, token) {
+		t.Fatalf("access log leaked signed URL token: %s", logged)
+	}
+	if !strings.Contains(logged, "/api/v1/files/signed/:token") {
+		t.Fatalf("access log = %q, want matched route template", logged)
+	}
+
+	// NoRoute/405 paths never get a matched template; the fallback must still redact.
+	logBuffer.Reset()
+	unmatched := httptest.NewRequest(http.MethodPost, "/api/v1/files/signed/"+token+"/extra", nil)
+	unmatchedRec := httptest.NewRecorder()
+	engine.ServeHTTP(unmatchedRec, unmatched)
+	unmatchedLogged := logBuffer.String()
+	if strings.Contains(unmatchedLogged, token) {
+		t.Fatalf("unmatched access log leaked signed URL token: %s", unmatchedLogged)
+	}
+	if !strings.Contains(unmatchedLogged, "/api/v1/files/signed/:token") {
+		t.Fatalf("unmatched access log = %q, want redacted signed prefix", unmatchedLogged)
 	}
 }
 
@@ -170,7 +219,7 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 		if rec.Code != http.StatusConflict {
 			t.Fatalf("status = %d, want 409", rec.Code)
 		}
-		wantExpose := "X-Request-Id, Retry-After"
+		wantExpose := "X-Request-Id, Retry-After, Content-Disposition"
 		if got := rec.Header().Get("Access-Control-Expose-Headers"); got != wantExpose {
 			t.Fatalf("Access-Control-Expose-Headers = %q, want %q", got, wantExpose)
 		}

@@ -107,6 +107,32 @@ func (s *Service) CountUsers(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
+// ListUsernamesByIDs returns a map of user ID to username for batch actor/uploader projections.
+// Soft-deleted users are included so historical references retain their original username.
+func (s *Service) ListUsernamesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	deduped := dedupeUUIDs(ids)
+	if len(deduped) == 0 {
+		return make(map[uuid.UUID]string), nil
+	}
+	m, err := s.store.ListUsernamesByIDs(ctx, deduped)
+	if err != nil {
+		return nil, apperr.Internal(fmt.Errorf("list usernames by ids: %w", err))
+	}
+	return m, nil
+}
+
+// IsAvatarFileInUse reports whether any non-deleted user currently references fileID as their avatar.
+func (s *Service) IsAvatarFileInUse(ctx context.Context, fileID uuid.UUID) (bool, error) {
+	if fileID == uuid.Nil {
+		return false, nil
+	}
+	count, err := s.store.CountActiveUsersByAvatarFileID(ctx, fileID)
+	if err != nil {
+		return false, apperr.Internal(fmt.Errorf("check avatar file references: %w", err))
+	}
+	return count > 0, nil
+}
+
 // CreateInitialAdmin creates the first active administrator account using UUIDv7 and Argon2id.
 // Callers are expected to coordinate transaction and advisory locking at the orchestration boundary.
 func (s *Service) CreateInitialAdmin(ctx context.Context, input CreateInitialAdminInput) (User, error) {
