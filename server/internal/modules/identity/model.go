@@ -75,6 +75,14 @@ type AuthCredentials struct {
 	PasswordHash string
 }
 
+// CompleteLoginInput carries parameters for atomically verifying active user state,
+// optionally upgrading a matching Argon2id password hash, and updating last_login_at inside a login transaction.
+type CompleteLoginInput struct {
+	UserID               uuid.UUID
+	ExpectedPasswordHash string
+	UpgradedPasswordHash string
+}
+
 // userPasswordRecord is the internal credential snapshot used only during self-service password verification.
 type userPasswordRecord struct {
 	ID           uuid.UUID

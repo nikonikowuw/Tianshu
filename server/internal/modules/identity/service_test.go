@@ -144,6 +144,14 @@ func (f *fakeStore) UpdateUserPasswordHash(_ context.Context, id uuid.UUID, hash
 	return nil
 }
 
+func (f *fakeStore) UpdateUserPasswordHashIfMatches(_ context.Context, id uuid.UUID, expectedHash, newHash string) (int64, error) {
+	if r, ok := f.users[id]; ok && r.deletedAt == nil && r.user.Status == StatusActive && r.passwordHash == expectedHash {
+		r.passwordHash = newHash
+		return 1, nil
+	}
+	return 0, nil
+}
+
 func (f *fakeStore) filterRows(q listUsersQuery) []*fakeUserRow {
 	out := make([]*fakeUserRow, 0, len(f.users))
 	needle := strings.ToLower(q.Q)
@@ -1164,6 +1172,20 @@ func TestServiceReadMethodsHelpersAndErrorNormalization(t *testing.T) {
 		}
 		if err := fx.svc.UpdatePasswordHash(t.Context(), fx.mgrID, "hash:rehashed"); err != nil || fx.store.users[fx.mgrID].passwordHash != "hash:rehashed" {
 			t.Fatalf("UpdatePasswordHash failed: err=%v", err)
+		}
+		if err := fx.svc.CompleteLogin(t.Context(), CompleteLoginInput{
+			UserID:               fx.mgrID,
+			ExpectedPasswordHash: "hash:rehashed",
+			UpgradedPasswordHash: "hash:rehashed-v2",
+		}); err != nil || fx.store.users[fx.mgrID].passwordHash != "hash:rehashed-v2" {
+			t.Fatalf("CompleteLogin CAS rehash failed: err=%v hash=%q", err, fx.store.users[fx.mgrID].passwordHash)
+		}
+		if err := fx.svc.CompleteLogin(t.Context(), CompleteLoginInput{
+			UserID:               fx.mgrID,
+			ExpectedPasswordHash: "hash:stale",
+			UpgradedPasswordHash: "hash:should-not-overwrite",
+		}); err == nil || fx.store.users[fx.mgrID].passwordHash != "hash:rehashed-v2" {
+			t.Fatalf("CompleteLogin stale hash should fail without clobbering: err=%v hash=%q", err, fx.store.users[fx.mgrID].passwordHash)
 		}
 
 		// Soft-delete mgrID and confirm ListUsernamesByIDs preserves historical username while GetAuthCredentials hides it.

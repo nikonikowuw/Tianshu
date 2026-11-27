@@ -34,7 +34,7 @@ WHERE id = $1;
 
 -- name: InsertRefreshTokenHistory :exec
 INSERT INTO refresh_token_history (token_hash, session_id, replaced_at, expires_at)
-VALUES ($1, $2, now(), $3)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT (token_hash) DO NOTHING;
 
 -- name: GetRefreshTokenHistoryByHash :one

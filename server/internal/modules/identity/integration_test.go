@@ -697,12 +697,12 @@ func (b *authIdentityBridge) GetByID(ctx context.Context, userID uuid.UUID) (aut
 	}, nil
 }
 
-func (b *authIdentityBridge) RecordLogin(ctx context.Context, userID uuid.UUID) error {
-	return b.svc.RecordLogin(ctx, userID)
-}
-
-func (b *authIdentityBridge) UpdatePasswordHash(ctx context.Context, userID uuid.UUID, newHash string) error {
-	return b.svc.UpdatePasswordHash(ctx, userID, newHash)
+func (b *authIdentityBridge) CompleteLogin(ctx context.Context, input auth.CompleteLoginInput) error {
+	return b.svc.CompleteLogin(ctx, identity.CompleteLoginInput{
+		UserID:               input.UserID,
+		ExpectedPasswordHash: input.ExpectedPasswordHash,
+		UpgradedPasswordHash: input.UpgradedPasswordHash,
+	})
 }
 
 type authAccessBridge struct {

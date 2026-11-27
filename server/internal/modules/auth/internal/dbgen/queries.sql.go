@@ -163,18 +163,24 @@ func (q *Queries) GetSessionByRefreshHashForUpdate(ctx context.Context, refreshT
 
 const insertRefreshTokenHistory = `-- name: InsertRefreshTokenHistory :exec
 INSERT INTO refresh_token_history (token_hash, session_id, replaced_at, expires_at)
-VALUES ($1, $2, now(), $3)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT (token_hash) DO NOTHING
 `
 
 type InsertRefreshTokenHistoryParams struct {
-	TokenHash string
-	SessionID uuid.UUID
-	ExpiresAt pgtype.Timestamptz
+	TokenHash  string
+	SessionID  uuid.UUID
+	ReplacedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
 }
 
 func (q *Queries) InsertRefreshTokenHistory(ctx context.Context, arg InsertRefreshTokenHistoryParams) error {
-	_, err := q.db.Exec(ctx, insertRefreshTokenHistory, arg.TokenHash, arg.SessionID, arg.ExpiresAt)
+	_, err := q.db.Exec(ctx, insertRefreshTokenHistory,
+		arg.TokenHash,
+		arg.SessionID,
+		arg.ReplacedAt,
+		arg.ExpiresAt,
+	)
 	return err
 }
 

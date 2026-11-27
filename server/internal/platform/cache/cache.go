@@ -60,13 +60,23 @@ func (m *Memory) Get(_ context.Context, key string) ([]byte, error) {
 	return slices.Clone(entry.data), nil
 }
 
+const memorySweepThreshold = 4096
+
 // Set stores a cloned copy of value under key with optional TTL (<= 0 means no expiration).
 func (m *Memory) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
+	now := m.now()
 	var expiresAt time.Time
 	if ttl > 0 {
-		expiresAt = m.now().Add(ttl)
+		expiresAt = now.Add(ttl)
 	}
 	m.mu.Lock()
+	if len(m.entries) >= memorySweepThreshold {
+		for k, entry := range m.entries {
+			if !entry.expiresAt.IsZero() && now.After(entry.expiresAt) {
+				delete(m.entries, k)
+			}
+		}
+	}
 	m.entries[key] = memoryEntry{
 		data:      slices.Clone(value),
 		expiresAt: expiresAt,

@@ -241,7 +241,11 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		)
 		identitySessionMgr.svc = authSvc
 		filesAvatarCaller.auth = authSvc
-		authHandler = auth.NewHandler(authSvc, cfg.CORS.AllowedOrigins)
+		var authAllowedOrigins []string
+		if cfg.CORS.Enabled {
+			authAllowedOrigins = cfg.CORS.AllowedOrigins
+		}
+		authHandler = auth.NewHandler(authSvc, authAllowedOrigins)
 
 		dashboardSvc := dashboard.NewService(pool)
 		dashboardHandler = dashboard.NewHandler(dashboardSvc)

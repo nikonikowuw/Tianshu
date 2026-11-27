@@ -10,16 +10,17 @@ import (
 
 // RegisterPublicRoutes mounts public login, refresh, and logout endpoints under rg.
 func (h *Handler) RegisterPublicRoutes(rg *gin.RouterGroup) {
+	sameOrigin := requireSameOrigin(h.allowedOrigins, h.service.cookieSecure())
 	g := rg.Group("/auth")
 	g.POST("/login",
 		httpserver.RateLimitMiddleware(httpserver.RateLimitConfig{
-			Limit:  h.service.LoginRateLimit(),
+			Limit:  h.service.loginRateLimit(),
 			Window: time.Minute,
 		}),
 		h.login,
 	)
 	g.POST("/refresh",
-		RequireSameOrigin(h.allowedOrigins),
+		sameOrigin,
 		httpserver.RateLimitMiddleware(httpserver.RateLimitConfig{
 			Limit:  30,
 			Window: time.Minute,
@@ -27,7 +28,11 @@ func (h *Handler) RegisterPublicRoutes(rg *gin.RouterGroup) {
 		h.refresh,
 	)
 	g.POST("/logout",
-		RequireSameOrigin(h.allowedOrigins),
+		sameOrigin,
+		httpserver.RateLimitMiddleware(httpserver.RateLimitConfig{
+			Limit:  30,
+			Window: time.Minute,
+		}),
 		h.logout,
 	)
 }

@@ -92,9 +92,11 @@
 | code                        | HTTP | 说明                           |
 | --------------------------- | ---- | ------------------------------ |
 | `VALIDATION_FAILED`         | 422  | 字段校验失败                   |
+| `AUTH_UNAUTHORIZED`         | 401  | 未登录或认证凭证无效           |
 | `AUTH_INVALID_CREDENTIALS`  | 401  | 用户名/邮箱或密码错误          |
 | `AUTH_ACCOUNT_DISABLED`     | 403  | 账号被禁用                     |
 | `AUTH_FORBIDDEN`            | 403  | 无权限                         |
+| `AUTH_ORIGIN_REJECTED`      | 403  | Cookie 认证端点请求来源不在允许范围内 |
 | `AUTH_TOKEN_EXPIRED`        | 401  | Access Token 过期              |
 | `AUTH_REFRESH_REUSED`       | 401  | Refresh Token 重放，会话已吊销 |
 | `SETUP_ALREADY_INITIALIZED` | 409  | Setup 已完成                   |

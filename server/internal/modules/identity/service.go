@@ -235,6 +235,38 @@ func (s *Service) UpdatePasswordHash(ctx context.Context, id uuid.UUID, newHash 
 	return nil
 }
 
+// CompleteLogin locks the user row FOR UPDATE within the caller's login transaction,
+// re-verifies that the user is active and non-deleted with an unchanged password hash,
+// optionally applies a compare-and-swap password rehash, and updates last_login_at.
+func (s *Service) CompleteLogin(ctx context.Context, input CompleteLoginInput) error {
+	locked, err := s.store.GetUserPasswordHashByIDForUpdate(ctx, input.UserID)
+	if errors.Is(err, errUserNotFound) {
+		return userNotFoundError()
+	}
+	if err != nil {
+		return apperr.Internal(fmt.Errorf("lock user %s for login: %w", input.UserID, err))
+	}
+	if locked.Status == StatusDisabled {
+		return accountDisabledError()
+	}
+	if locked.PasswordHash != input.ExpectedPasswordHash {
+		return apperr.Unauthorized(apperr.CodeUnauthorized)
+	}
+	if input.UpgradedPasswordHash != "" {
+		updated, upErr := s.store.UpdateUserPasswordHashIfMatches(ctx, locked.ID, input.ExpectedPasswordHash, input.UpgradedPasswordHash)
+		if upErr != nil {
+			return apperr.Internal(fmt.Errorf("upgrade password hash %s: %w", locked.ID, upErr))
+		}
+		if updated == 0 {
+			return apperr.Unauthorized(apperr.CodeUnauthorized)
+		}
+	}
+	if err := s.store.UpdateUserLastLogin(ctx, locked.ID); err != nil {
+		return apperr.Internal(fmt.Errorf("update last login %s: %w", locked.ID, err))
+	}
+	return nil
+}
+
 // ListUsers returns a paginated list of non-deleted users with their roles and audit actors.
 func (s *Service) ListUsers(ctx context.Context, filter UserListFilter) (pagination.Result[UserDetail], error) {
 	q := strings.TrimSpace(filter.Q)

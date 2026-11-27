@@ -24,7 +24,7 @@ type store interface {
 	GetSessionByRefreshHashForUpdate(ctx context.Context, tokenHash string) (sessionRecord, error)
 	GetSessionByIDForUpdate(ctx context.Context, sessionID uuid.UUID) (sessionRecord, error)
 	RotateSessionRefreshToken(ctx context.Context, sessionID uuid.UUID, newHash, ua, ip string, expiresAt time.Time) error
-	InsertRefreshTokenHistory(ctx context.Context, tokenHash string, sessionID uuid.UUID, expiresAt time.Time) error
+	InsertRefreshTokenHistory(ctx context.Context, tokenHash string, sessionID uuid.UUID, replacedAt, expiresAt time.Time) error
 	GetRefreshTokenHistoryByHash(ctx context.Context, tokenHash string) (refreshHistoryRecord, error)
 	RevokeSession(ctx context.Context, sessionID uuid.UUID) (revokedSession, bool, error)
 	RevokeSessionByRefreshHash(ctx context.Context, tokenHash string) (revokedSession, bool, error)
@@ -104,12 +104,13 @@ func (s *pgStore) InsertRefreshTokenHistory(
 	ctx context.Context,
 	tokenHash string,
 	sessionID uuid.UUID,
-	expiresAt time.Time,
+	replacedAt, expiresAt time.Time,
 ) error {
 	return s.queries(ctx).InsertRefreshTokenHistory(ctx, dbgen.InsertRefreshTokenHistoryParams{
-		TokenHash: tokenHash,
-		SessionID: sessionID,
-		ExpiresAt: pgtype.Timestamptz{Time: expiresAt.UTC(), Valid: true},
+		TokenHash:  tokenHash,
+		SessionID:  sessionID,
+		ReplacedAt: pgtype.Timestamptz{Time: replacedAt.UTC(), Valid: true},
+		ExpiresAt:  pgtype.Timestamptz{Time: expiresAt.UTC(), Valid: true},
 	})
 }
 

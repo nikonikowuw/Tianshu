@@ -22,12 +22,19 @@ type UserAccess struct {
 	Permissions []string
 }
 
+// CompleteLoginInput carries parameters for atomically verifying active user state,
+// optionally upgrading a matching password hash, and updating last_login_at inside a login transaction.
+type CompleteLoginInput struct {
+	UserID               uuid.UUID
+	ExpectedPasswordHash string
+	UpgradedPasswordHash string
+}
+
 // IdentityProvider is the minimal dependency on identity.Service, wired via internal/app adapter.
 type IdentityProvider interface {
 	GetAuthCredentials(ctx context.Context, identifier string) (UserCredentials, error)
 	GetByID(ctx context.Context, userID uuid.UUID) (User, error)
-	RecordLogin(ctx context.Context, userID uuid.UUID) error
-	UpdatePasswordHash(ctx context.Context, userID uuid.UUID, newHash string) error
+	CompleteLogin(ctx context.Context, input CompleteLoginInput) error
 }
 
 // AccessProvider is the minimal dependency on access.Service, wired via internal/app adapter.
