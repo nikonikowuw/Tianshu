@@ -53,7 +53,7 @@ export class ApiError extends Error {
 状态机固定为 `unknown | authenticated | unauthenticated`，仅存内存：
 
 1. **启动恢复（`ensureSession`）**：调用 `POST /auth/refresh` 获取 Access Token → 调用 `GET /auth/me` 加载用户、角色与权限码；失败置为 `unauthenticated`。
-2. **登录 / Setup 初始化**：提交凭据后写入 Access Token → 拉取 `/auth/me` → invalidate Setup 状态 → 跳转合法 `redirect` 或 `/`。Setup 页为免令牌极简向导，不再渲染 `setupToken` 输入框；是否可用仅由 `GET /setup/status` 的 `initialized` 判定。
+2. **登录 / Setup 初始化**：Setup 页为免令牌极简向导，不再渲染 `setupToken` 输入框；是否可用仅由 `GET /setup/status` 的 `initialized` 判定，初始化完成后更新并 invalidate Setup 状态并引导至登录页；登录提交凭据后将响应返回的用户、角色、权限码与 Access Token 写入内存会话（`ensureSession` 启动恢复时再拉取 `/auth/me`），并跳转合法 `redirect` 或 `/`。
 3. **单飞刷新（Single-Flight Refresh）**：
    - `ensureSession()` 与 `401` 拦截刷新共用同一把单飞锁：并发触发时只发一次 `POST /auth/refresh`，其余请求复用同一个 Promise；
    - 刷新成功后重放原请求一次；刷新请求本身及其重放失败不再触发二次刷新，防止死循环；

@@ -31,10 +31,16 @@ export const Route = createFileRoute('/(auth)/sign-in')({
     if (context.auth.getStatus() === 'unknown') {
       const ok = await context.auth.ensureSession()
       if (ok) {
-        throw redirect({ to: sanitizeRedirect(search.redirect), replace: true })
+        throw redirect({
+          href: sanitizeRedirect(search.redirect),
+          replace: true,
+        })
       }
     } else if (context.auth.getStatus() === 'authenticated') {
-      throw redirect({ to: sanitizeRedirect(search.redirect), replace: true })
+      throw redirect({
+        href: sanitizeRedirect(search.redirect),
+        replace: true,
+      })
     }
   },
   component: function SignInRouteComponent() {

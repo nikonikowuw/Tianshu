@@ -26,12 +26,28 @@ type MeResponse = {
 
 let inFlightRefresh: Promise<string | null> | null = null
 
+function hasControlChars(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code <= 0x1f || code === 0x7f) {
+      return true
+    }
+  }
+  return false
+}
+
 export function isSafeRedirect(target: string | undefined): target is string {
   if (!target) return false
   if (!target.startsWith('/')) return false
   if (target.startsWith('//')) return false
-  if (target.includes('://')) return false
-  return true
+  if (target.includes('\\') || target.includes('://')) return false
+  if (hasControlChars(target)) return false
+  try {
+    const parsed = new URL(target, 'https://tianshu.invalid')
+    return parsed.origin === 'https://tianshu.invalid'
+  } catch {
+    return false
+  }
 }
 
 export function sanitizeRedirect(target: string | undefined): string {

@@ -87,7 +87,11 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
     })
   }, [form])
 
+  const isSubmitting = loginMutation.isPending
+  const isLocked = isSubmitting || cooldown.isCoolingDown
+
   const onSubmit = async (values: SignInFormValues) => {
+    if (isLocked) return
     setFormError(null)
     try {
       await loginMutation.mutateAsync({
@@ -99,7 +103,7 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
         return
       }
       const target = sanitizeRedirect(redirectTo)
-      await navigate({ to: target, replace: true })
+      await navigate({ href: target, replace: true })
     } catch (error) {
       const apiErr = normalizeApiError(error)
 
@@ -131,9 +135,6 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
       handleServerError(apiErr)
     }
   }
-
-  const isSubmitting = loginMutation.isPending
-  const isLocked = isSubmitting || cooldown.isCoolingDown
 
   return (
     <AuthShell
@@ -170,6 +171,7 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
                   <Input
                     data-testid='sign-in-identifier'
                     className='h-10'
+                    disabled={isSubmitting}
                     autoComplete='username'
                     autoCapitalize='none'
                     spellCheck={false}
@@ -192,6 +194,7 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
                   <PasswordInput
                     data-testid='sign-in-password'
                     inputClassName='h-10'
+                    disabled={isSubmitting}
                     autoComplete='current-password'
                     placeholder={t('auth:signIn.passwordPlaceholder')}
                     {...field}
@@ -212,7 +215,7 @@ export function SignIn({ redirectTo, onSuccess }: SignInProps) {
           >
             {isSubmitting ? (
               <>
-                <Loader2 className='size-4 animate-spin' />
+                <Loader2 className='size-4 animate-spin' aria-hidden='true' />
                 {t('auth:signIn.submitting')}
               </>
             ) : (
