@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { enUS, zhCN } from 'date-fns/locale'
 import { CalendarIcon } from 'lucide-react'
 import { type DateRange } from 'react-day-picker'
 import { cn } from '@/lib/utils'
@@ -12,26 +13,12 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
+import { formatDateOnly, parseDateOnly } from '../date'
 
 type AuditDateRangeFilterProps = {
   from?: string
   to?: string
   onChange: (next: { from?: string; to?: string }) => void
-}
-
-function parseDateOnly(value?: string): Date | undefined {
-  if (!value) return undefined
-  const [y, m, d] = value.split('-').map(Number)
-  if (!y || !m || !d) return undefined
-  const parsed = new Date(y, m - 1, d)
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed
-}
-
-function formatDateOnly(date: Date): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
 }
 
 function formatDisplayDate(dateStr: string, locale: string): string {
@@ -50,12 +37,13 @@ export function AuditDateRangeFilter({
 }: AuditDateRangeFilterProps) {
   const { t, i18n } = useTranslation('audit')
   const [open, setOpen] = useState(false)
+  const calendarLocale = i18n.language.startsWith('zh') ? zhCN : enUS
 
   const selected: DateRange | undefined =
     from || to
       ? {
-          from: parseDateOnly(from),
-          to: parseDateOnly(to),
+          from: parseDateOnly(from) ?? undefined,
+          to: parseDateOnly(to) ?? undefined,
         }
       : undefined
 
@@ -137,6 +125,7 @@ export function AuditDateRangeFilter({
             const nextTo = range.to ? formatDateOnly(range.to) : undefined
             onChange({ from: nextFrom, to: nextTo })
           }}
+          locale={calendarLocale}
           numberOfMonths={1}
         />
         {(from || to) && (

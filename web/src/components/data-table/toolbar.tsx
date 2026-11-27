@@ -11,6 +11,7 @@ type DataTableToolbarProps<TData> = {
   table: Table<TData>
   searchPlaceholder?: string
   searchKey?: string
+  searchMaxLength?: number
   debounceMs?: number
   filters?: {
     columnId: string
@@ -31,6 +32,7 @@ export function DataTableToolbar<TData>({
   table,
   searchPlaceholder,
   searchKey,
+  searchMaxLength,
   debounceMs = 300,
   filters = [],
   extraFilters,
@@ -99,6 +101,7 @@ export function DataTableToolbar<TData>({
           placeholder={searchPlaceholder ?? t('table.filterPlaceholder')}
           aria-label={searchPlaceholder ?? t('table.filterPlaceholder')}
           value={draftValue}
+          maxLength={searchMaxLength}
           onChange={(event) => handleSearchChange(event.target.value)}
           className='h-8 w-44 sm:w-56 lg:w-72'
         />
