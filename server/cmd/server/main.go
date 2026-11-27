@@ -10,6 +10,7 @@ import (
 
 	"tianshu/internal/app"
 	"tianshu/internal/platform/config"
+	"tianshu/internal/platform/httpserver"
 )
 
 func main() {
@@ -33,6 +34,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	httpserver.ConfigureMode(cfg.App.Env)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

@@ -252,11 +252,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 
 	engine, err := httpserver.NewEngine(httpserver.Options{
-		Env:            cfg.App.Env,
-		TrustedProxies: cfg.Server.TrustedProxies,
-		CORS:           cfg.CORS,
-		Logger:         log,
-		I18n:           bundle,
+		Env:                cfg.App.Env,
+		TrustedProxies:     cfg.Server.TrustedProxies,
+		CORS:               cfg.CORS,
+		Logger:             log,
+		I18n:               bundle,
+		RedactPathPrefixes: []string{"/api/v1/files/signed/"},
 	})
 	if err != nil {
 		if pool != nil {

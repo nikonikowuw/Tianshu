@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/knadh/koanf/parsers/toml/v2"
 	"github.com/knadh/koanf/providers/env/v2"
 	"github.com/knadh/koanf/providers/file"
@@ -14,8 +15,9 @@ import (
 )
 
 const (
-	defaultDevJWTSecret = "dev-only-change-me-at-least-32-bytes-secret"
-	minJWTSecretLength  = 32
+	defaultDevJWTSecret   = "dev-only-change-me-at-least-32-bytes-secret"
+	defaultDevDatabaseDSN = "postgres://tianshu:tianshu@localhost:5432/tianshu?sslmode=disable"
+	minJWTSecretLength    = 32
 )
 
 // DefaultPaths lists candidate TOML config files loaded in ascending precedence when no explicit path is provided.
@@ -161,7 +163,7 @@ func Default() Config {
 			ShutdownTimeout: 10 * time.Second,
 		},
 		Database: DatabaseConfig{
-			DSN:             "postgres://tianshu:tianshu@localhost:5432/tianshu?sslmode=disable",
+			DSN:             defaultDevDatabaseDSN,
 			AutoMigrate:     true,
 			MaxConns:        25,
 			MinConns:        2,
@@ -285,8 +287,15 @@ func (c Config) Validate() error {
 		return errors.New("server.addr must not be empty")
 	}
 
-	if len(c.Auth.JWTSecret) < minJWTSecretLength {
-		return fmt.Errorf("auth.jwt_secret must be at least %d bytes", minJWTSecretLength)
+	if err := c.validateDatabase(); err != nil {
+		return err
+	}
+	if err := c.validateCache(); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(c.Auth.JWTSecret) == "" || len(c.Auth.JWTSecret) < minJWTSecretLength {
+		return fmt.Errorf("auth.jwt_secret must be at least %d non-whitespace bytes", minJWTSecretLength)
 	}
 	if c.IsProduction() && c.Auth.JWTSecret == defaultDevJWTSecret {
 		return errors.New("auth.jwt_secret must not use the default development secret in production")
@@ -342,8 +351,13 @@ func (c Config) validateStorage() error {
 	if c.Storage.SignedURLTTL <= 0 {
 		return errors.New("storage.signed_url_ttl must be > 0")
 	}
-	if secret := strings.TrimSpace(c.Storage.SignedURLSecret); secret != "" && len(secret) < minJWTSecretLength {
-		return fmt.Errorf("storage.signed_url_secret must be at least %d bytes", minJWTSecretLength)
+	if secret := strings.TrimSpace(c.Storage.SignedURLSecret); secret != "" {
+		if len(secret) < minJWTSecretLength {
+			return fmt.Errorf("storage.signed_url_secret must be at least %d bytes", minJWTSecretLength)
+		}
+		if c.IsProduction() && secret == defaultDevJWTSecret {
+			return errors.New("storage.signed_url_secret must not use the default development secret in production")
+		}
 	}
 
 	if driver == "s3" && !c.Storage.S3.Configured() {
@@ -354,6 +368,43 @@ func (c Config) validateStorage() error {
 	}
 
 	return nil
+}
+
+func (c Config) validateDatabase() error {
+	dsn := strings.TrimSpace(c.Database.DSN)
+	if dsn == "" {
+		return errors.New("database.dsn must not be empty")
+	}
+	connCfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return fmt.Errorf("invalid database.dsn: %w", err)
+	}
+	if c.IsProduction() {
+		if dsn == defaultDevDatabaseDSN || isWeakDBPassword(connCfg.Password) {
+			return errors.New("database.dsn must configure a strong non-default password in production")
+		}
+	}
+	return nil
+}
+
+func (c Config) validateCache() error {
+	driver := strings.ToLower(strings.TrimSpace(c.Cache.Driver))
+	switch driver {
+	case "", "memory":
+		return nil
+	default:
+		return fmt.Errorf("invalid cache.driver %q (only memory is currently supported)", c.Cache.Driver)
+	}
+}
+
+func isWeakDBPassword(password string) bool {
+	trimmed := strings.TrimSpace(password)
+	switch strings.ToLower(trimmed) {
+	case "", "tianshu", "postgres", "password", "123456", "admin", "root":
+		return true
+	default:
+		return false
+	}
 }
 
 func isWeakS3Credential(accessKey, secretKey string) bool {

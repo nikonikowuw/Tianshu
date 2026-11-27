@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,20 +22,31 @@ import (
 	"tianshu/internal/shared/apperr"
 )
 
-func newTestEngine(t *testing.T) *gin.Engine {
+func TestMain(m *testing.M) {
+	httpserver.ConfigureMode("test")
+	os.Exit(m.Run())
+}
+
+func newTestBundle(t *testing.T) *i18n.Bundle {
 	t.Helper()
 	bundle, err := i18n.NewBundle()
 	if err != nil {
 		t.Fatalf("NewBundle() error = %v", err)
 	}
+	return bundle
+}
+
+func newTestEngine(t *testing.T) *gin.Engine {
+	t.Helper()
 	engine, err := httpserver.NewEngine(httpserver.Options{
 		Env:    "test",
 		Logger: logger.New("test", "error", io.Discard),
-		I18n:   bundle,
+		I18n:   newTestBundle(t),
 		CORS: config.CORSConfig{
 			Enabled:        true,
 			AllowedOrigins: []string{"https://admin.example.com"},
 		},
+		RedactPathPrefixes: []string{"/api/v1/files/signed/"},
 	})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
@@ -74,14 +87,12 @@ func TestRequestIDAndHealthEndpoints(t *testing.T) {
 
 func TestAccessLogRedactsPathParameters(t *testing.T) {
 	var logBuffer bytes.Buffer
-	bundle, err := i18n.NewBundle()
-	if err != nil {
-		t.Fatalf("NewBundle() error = %v", err)
-	}
+	bundle := newTestBundle(t)
 	engine, err := httpserver.NewEngine(httpserver.Options{
-		Env:    "test",
-		Logger: logger.New("test", "info", &logBuffer),
-		I18n:   bundle,
+		Env:                "test",
+		Logger:             logger.New("test", "info", &logBuffer),
+		I18n:               bundle,
+		RedactPathPrefixes: []string{"/api/v1/files/signed/"},
 	})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
@@ -106,17 +117,23 @@ func TestAccessLogRedactsPathParameters(t *testing.T) {
 		t.Fatalf("access log = %q, want matched route template", logged)
 	}
 
-	// NoRoute/405 paths never get a matched template; the fallback must still redact.
-	logBuffer.Reset()
-	unmatched := httptest.NewRequest(http.MethodPost, "/api/v1/files/signed/"+token+"/extra", nil)
-	unmatchedRec := httptest.NewRecorder()
-	engine.ServeHTTP(unmatchedRec, unmatched)
-	unmatchedLogged := logBuffer.String()
-	if strings.Contains(unmatchedLogged, token) {
-		t.Fatalf("unmatched access log leaked signed URL token: %s", unmatchedLogged)
-	}
-	if !strings.Contains(unmatchedLogged, "/api/v1/files/signed/:token") {
-		t.Fatalf("unmatched access log = %q, want redacted signed prefix", unmatchedLogged)
+	// NoRoute/405/uncleaned paths never get a matched template; fallback must clean & redact.
+	for _, rawPath := range []string{
+		"/api/v1/files/signed/" + token + "/extra",
+		"//api/v1/files/signed/" + token,
+		"/api/v1/files/signed/../signed/" + token,
+	} {
+		logBuffer.Reset()
+		unmatched := httptest.NewRequest(http.MethodPost, rawPath, nil)
+		unmatchedRec := httptest.NewRecorder()
+		engine.ServeHTTP(unmatchedRec, unmatched)
+		unmatchedLogged := logBuffer.String()
+		if strings.Contains(unmatchedLogged, token) {
+			t.Fatalf("unmatched access log (%s) leaked signed URL token: %s", rawPath, unmatchedLogged)
+		}
+		if !strings.Contains(unmatchedLogged, "/api/v1/files/signed/:token") {
+			t.Fatalf("unmatched access log (%s) = %q, want redacted signed prefix", rawPath, unmatchedLogged)
+		}
 	}
 }
 
@@ -143,7 +160,11 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 		Email string `json:"email" binding:"required,email"`
 		Name  string `json:"name" binding:"required,min=3"`
 	}
+	type queryParams struct {
+		Page int `form:"page"`
+	}
 
+	bundle := newTestBundle(t)
 	r := newTestEngine(t)
 	r.POST("/api/v1/demo", func(c *gin.Context) {
 		var req payload
@@ -153,8 +174,25 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 		}
 		c.JSON(http.StatusOK, req)
 	})
+	r.GET("/api/v1/query-demo", func(c *gin.Context) {
+		var q queryParams
+		if err := c.ShouldBindQuery(&q); err != nil {
+			_ = c.Error(err)
+			return
+		}
+		c.Status(http.StatusOK)
+	})
+	r.POST("/api/v1/too-large", func(c *gin.Context) {
+		_ = c.Error(&http.MaxBytesError{Limit: 1024})
+	})
 	r.GET("/api/v1/conflict", func(c *gin.Context) {
 		_ = c.Error(apperr.Conflict(apperr.CodeConflict))
+	})
+	r.GET("/api/v1/internal-app", func(c *gin.Context) {
+		_ = c.Error(apperr.Internal(errors.New("secret sql constraint detail")))
+	})
+	r.GET("/api/v1/internal-raw", func(c *gin.Context) {
+		_ = c.Error(errors.New("raw internal panic detail"))
 	})
 
 	t.Run("malformed JSON returns 400 without errors field", func(t *testing.T) {
@@ -173,6 +211,9 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 		if body["code"] != apperr.CodeBadRequest {
 			t.Fatalf("code = %v, want %s", body["code"], apperr.CodeBadRequest)
 		}
+		if _, hasErrors := body["errors"]; hasErrors {
+			t.Fatalf("400 error body must not carry errors field: %v", body)
+		}
 		if _, hasReqID := body["request_id"]; hasReqID {
 			t.Fatalf("error body must not duplicate request_id: %v", body)
 		}
@@ -181,36 +222,91 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 		}
 	})
 
-	t.Run("validation failure returns 422 with JSON field names and English locale", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/demo", strings.NewReader(`{"email":"bad","name":"a"}`))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept-Language", "en-US")
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, req)
+	t.Run("invalid query number maps to 400 and MaxBytesError maps to 413", func(t *testing.T) {
+		reqQuery := httptest.NewRequest(http.MethodGet, "/api/v1/query-demo?page=abc", nil)
+		recQuery := httptest.NewRecorder()
+		r.ServeHTTP(recQuery, reqQuery)
+		if recQuery.Code != http.StatusBadRequest {
+			t.Fatalf("invalid query status = %d, want 400 (body=%s)", recQuery.Code, recQuery.Body.String())
+		}
 
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("status = %d, want 422", rec.Code)
+		reqLarge := httptest.NewRequest(http.MethodPost, "/api/v1/too-large", nil)
+		recLarge := httptest.NewRecorder()
+		r.ServeHTTP(recLarge, reqLarge)
+		if recLarge.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("MaxBytesError status = %d, want 413 (body=%s)", recLarge.Code, recLarge.Body.String())
 		}
-		var body struct {
-			Code    string              `json:"code"`
-			Message string              `json:"message"`
-			Errors  []apperr.FieldError `json:"errors"`
+		var largeBody map[string]any
+		if err := json.Unmarshal(recLarge.Body.Bytes(), &largeBody); err != nil {
+			t.Fatalf("unmarshal 413 body: %v", err)
 		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatalf("unmarshal error = %v", err)
-		}
-		if body.Code != apperr.CodeValidationFailed {
-			t.Fatalf("code = %q, want %s", body.Code, apperr.CodeValidationFailed)
-		}
-		if len(body.Errors) != 2 || body.Errors[0].Field != "email" || body.Errors[1].Field != "name" {
-			t.Fatalf("errors = %+v, want sorted email and name fields", body.Errors)
-		}
-		if !strings.Contains(body.Errors[0].Message, "email") {
-			t.Fatalf("expected English email message, got %q", body.Errors[0].Message)
+		if largeBody["code"] != apperr.CodeTooLarge {
+			t.Fatalf("413 code = %v, want %s", largeBody["code"], apperr.CodeTooLarge)
 		}
 	})
 
-	t.Run("CORS exposes X-Request-Id and Retry-After for allowed origin", func(t *testing.T) {
+	t.Run("validation failure returns 422 with JSON field names in en-US and zh-CN", func(t *testing.T) {
+		for _, lang := range []string{i18n.LangEnUS, i18n.LangZhCN} {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/demo", strings.NewReader(`{"email":"bad","name":"a"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept-Language", lang)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("[%s] status = %d, want 422", lang, rec.Code)
+			}
+			var body struct {
+				Code    string              `json:"code"`
+				Message string              `json:"message"`
+				Errors  []apperr.FieldError `json:"errors"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("[%s] unmarshal error = %v", lang, err)
+			}
+			if body.Code != apperr.CodeValidationFailed {
+				t.Fatalf("[%s] code = %q, want %s", lang, body.Code, apperr.CodeValidationFailed)
+			}
+			if wantMsg := bundle.Translate(lang, apperr.CodeValidationFailed, nil); body.Message != wantMsg {
+				t.Fatalf("[%s] message = %q, want %q", lang, body.Message, wantMsg)
+			}
+			if len(body.Errors) != 2 || body.Errors[0].Field != "email" || body.Errors[1].Field != "name" {
+				t.Fatalf("[%s] errors = %+v, want sorted email and name fields", lang, body.Errors)
+			}
+			if wantEmail := bundle.Translate(lang, "VALIDATION_EMAIL", nil); body.Errors[0].Message != wantEmail {
+				t.Fatalf("[%s] email error message = %q, want %q", lang, body.Errors[0].Message, wantEmail)
+			}
+		}
+	})
+
+	t.Run("500 internal and raw errors never leak underlying causes", func(t *testing.T) {
+		for _, path := range []string{"/api/v1/internal-app", "/api/v1/internal-raw"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Accept-Language", i18n.LangEnUS)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("%s status = %d, want 500", path, rec.Code)
+			}
+			raw := rec.Body.String()
+			if strings.Contains(raw, "secret sql") || strings.Contains(raw, "raw internal") {
+				t.Fatalf("%s leaked internal error detail: %s", path, raw)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("unmarshal 500 body: %v", err)
+			}
+			if body["code"] != apperr.CodeInternal {
+				t.Fatalf("%s code = %v, want %s", path, body["code"], apperr.CodeInternal)
+			}
+			if wantMsg := bundle.Translate(i18n.LangEnUS, apperr.CodeInternal, nil); body["message"] != wantMsg {
+				t.Fatalf("%s message = %v, want %q", path, body["message"], wantMsg)
+			}
+		}
+	})
+
+	t.Run("security headers and CORS behaviors", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/conflict", nil)
 		req.Header.Set("Origin", "https://admin.example.com")
 		rec := httptest.NewRecorder()
@@ -219,9 +315,101 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 		if rec.Code != http.StatusConflict {
 			t.Fatalf("status = %d, want 409", rec.Code)
 		}
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+		}
+		if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+			t.Fatalf("X-Frame-Options = %q, want DENY", got)
+		}
+		if got := rec.Header().Get("Referrer-Policy"); got != "strict-origin-when-cross-origin" {
+			t.Fatalf("Referrer-Policy = %q", got)
+		}
+		if got := rec.Header().Get("Permissions-Policy"); got == "" {
+			t.Fatal("missing Permissions-Policy header")
+		}
+		if got := rec.Header().Get("Vary"); got != "Origin" {
+			t.Fatalf("Vary = %q, want Origin", got)
+		}
 		wantExpose := "X-Request-Id, Retry-After, Content-Disposition"
 		if got := rec.Header().Get("Access-Control-Expose-Headers"); got != wantExpose {
 			t.Fatalf("Access-Control-Expose-Headers = %q, want %q", got, wantExpose)
 		}
+
+		// Preflight OPTIONS for allowed origin returns 204.
+		preflight := httptest.NewRequest(http.MethodOptions, "/api/v1/conflict", nil)
+		preflight.Header.Set("Origin", "https://admin.example.com")
+		preflightRec := httptest.NewRecorder()
+		r.ServeHTTP(preflightRec, preflight)
+		if preflightRec.Code != http.StatusNoContent {
+			t.Fatalf("OPTIONS status = %d, want 204", preflightRec.Code)
+		}
+		if got := preflightRec.Header().Get("Access-Control-Allow-Origin"); got != "https://admin.example.com" {
+			t.Fatalf("Access-Control-Allow-Origin = %q, want allowed origin", got)
+		}
+
+		// Disallowed origin must still emit Vary: Origin and omit Allow-Origin.
+		evil := httptest.NewRequest(http.MethodGet, "/api/v1/conflict", nil)
+		evil.Header.Set("Origin", "https://evil.example.net")
+		evilRec := httptest.NewRecorder()
+		r.ServeHTTP(evilRec, evil)
+		if got := evilRec.Header().Get("Vary"); got != "Origin" {
+			t.Fatalf("disallowed origin Vary = %q, want Origin", got)
+		}
+		if got := evilRec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Fatalf("disallowed origin Access-Control-Allow-Origin = %q, want empty", got)
+		}
 	})
+}
+
+func TestRecoveryMiddleware(t *testing.T) {
+	bundle := newTestBundle(t)
+	var logBuf bytes.Buffer
+	r, err := httpserver.NewEngine(httpserver.Options{
+		Env:    "test",
+		Logger: logger.New("test", "error", &logBuf),
+		I18n:   bundle,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	r.GET("/panic-before-write", func(*gin.Context) {
+		panic("boom-secret-detail")
+	})
+	r.GET("/panic-after-write", func(c *gin.Context) {
+		c.String(http.StatusOK, "partial-stream")
+		panic("mid-stream-boom")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/panic-before-write", nil)
+	req.Header.Set("Accept-Language", i18n.LangEnUS)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("panic status = %d, want 500", rec.Code)
+	}
+	if rec.Header().Get("X-Request-Id") == "" {
+		t.Fatal("missing X-Request-Id header on panic response")
+	}
+	if strings.Contains(rec.Body.String(), "boom-secret-detail") {
+		t.Fatalf("panic response leaked panic value: %s", rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal panic JSON: %v", err)
+	}
+	if body["code"] != apperr.CodeInternal || body["message"] != bundle.Translate(i18n.LangEnUS, apperr.CodeInternal, nil) {
+		t.Fatalf("unexpected panic body: %v", body)
+	}
+
+	// When headers/body are already written, recovery must not corrupt the stream with JSON.
+	reqAfter := httptest.NewRequest(http.MethodGet, "/panic-after-write", nil)
+	recAfter := httptest.NewRecorder()
+	r.ServeHTTP(recAfter, reqAfter)
+	if recAfter.Body.String() != "partial-stream" {
+		t.Fatalf("panic after write altered body = %q, want partial-stream", recAfter.Body.String())
+	}
+	if !strings.Contains(logBuf.String(), "http panic recovered") || !strings.Contains(logBuf.String(), strconv.Quote("mid-stream-boom")) && !strings.Contains(logBuf.String(), "mid-stream-boom") {
+		t.Fatalf("expected recovery log entry, got %q", logBuf.String())
+	}
 }

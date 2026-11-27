@@ -1,7 +1,6 @@
 package storage_test
 
 import (
-	"context"
 	"errors"
 	"io"
 	"net/http/httptest"
@@ -20,7 +19,7 @@ func TestRegistryRoutesByPersistedDriver(t *testing.T) {
 	srv := httptest.NewServer(newFakeS3Server())
 	defer srv.Close()
 
-	s3Store, err := storage.NewS3(context.Background(), storage.S3Config{
+	s3Store, err := storage.NewS3(t.Context(), storage.S3Config{
 		Endpoint:         srv.URL,
 		Region:           "us-east-1",
 		Bucket:           "tianshu",
@@ -35,7 +34,7 @@ func TestRegistryRoutesByPersistedDriver(t *testing.T) {
 	}
 
 	// Upload a file while local was active, then switch default to s3.
-	if _, err := localStore.Put(context.Background(), "legacy.txt", strings.NewReader("from-local")); err != nil {
+	if _, err := localStore.Put(t.Context(), "legacy.txt", strings.NewReader("from-local")); err != nil {
 		t.Fatalf("local Put() error = %v", err)
 	}
 
@@ -49,7 +48,7 @@ func TestRegistryRoutesByPersistedDriver(t *testing.T) {
 	}
 
 	// Write uses default (s3).
-	if _, err := reg.Default().Put(context.Background(), "new.txt", strings.NewReader("from-s3")); err != nil {
+	if _, err := reg.Default().Put(t.Context(), "new.txt", strings.NewReader("from-s3")); err != nil {
 		t.Fatalf("s3 Put() error = %v", err)
 	}
 
@@ -58,7 +57,7 @@ func TestRegistryRoutesByPersistedDriver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Driver(local) error = %v", err)
 	}
-	rc, err := legacyDriver.Get(context.Background(), "legacy.txt")
+	rc, err := legacyDriver.Get(t.Context(), "legacy.txt")
 	if err != nil {
 		t.Fatalf("local Get() error = %v", err)
 	}
