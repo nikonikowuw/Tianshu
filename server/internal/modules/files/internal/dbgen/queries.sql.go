@@ -67,15 +67,18 @@ func (q *Queries) CountReadyFiles(ctx context.Context, arg CountReadyFilesParams
 	return column_1, err
 }
 
-const deleteFileRow = `-- name: DeleteFileRow :exec
+const deleteFileRow = `-- name: DeleteFileRow :execrows
 DELETE FROM files
 WHERE id = $1
   AND status IN ('failed', 'deleting')
 `
 
-func (q *Queries) DeleteFileRow(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteFileRow, id)
-	return err
+func (q *Queries) DeleteFileRow(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFileRow, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getFileByIDForShare = `-- name: GetFileByIDForShare :one
@@ -218,21 +221,28 @@ SELECT id, uploader_id, storage_driver, object_key, original_name, mime_type, si
 FROM files
 WHERE storage_driver = ANY($1::text[])
   AND (
-      status IN ('failed', 'deleting')
-      OR (status = 'pending' AND updated_at < $2::timestamptz)
+      status = 'failed'
+      OR (status = 'deleting' AND updated_at < $2::timestamptz)
+      OR (status = 'pending' AND updated_at < $3::timestamptz)
   )
 ORDER BY updated_at ASC, id ASC
-LIMIT $3
+LIMIT $4
 `
 
 type ListCleanupCandidatesParams struct {
-	Drivers       []string
-	PendingCutoff pgtype.Timestamptz
-	BatchLimit    int32
+	Drivers        []string
+	DeletingCutoff pgtype.Timestamptz
+	PendingCutoff  pgtype.Timestamptz
+	BatchLimit     int32
 }
 
 func (q *Queries) ListCleanupCandidates(ctx context.Context, arg ListCleanupCandidatesParams) ([]File, error) {
-	rows, err := q.db.Query(ctx, listCleanupCandidates, arg.Drivers, arg.PendingCutoff, arg.BatchLimit)
+	rows, err := q.db.Query(ctx, listCleanupCandidates,
+		arg.Drivers,
+		arg.DeletingCutoff,
+		arg.PendingCutoff,
+		arg.BatchLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

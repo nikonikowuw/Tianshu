@@ -61,7 +61,7 @@ SET updated_at = now()
 WHERE id = $1
   AND status IN ('failed', 'deleting');
 
--- name: DeleteFileRow :exec
+-- name: DeleteFileRow :execrows
 DELETE FROM files
 WHERE id = $1
   AND status IN ('failed', 'deleting');
@@ -108,7 +108,8 @@ SELECT id, uploader_id, storage_driver, object_key, original_name, mime_type, si
 FROM files
 WHERE storage_driver = ANY(@drivers::text[])
   AND (
-      status IN ('failed', 'deleting')
+      status = 'failed'
+      OR (status = 'deleting' AND updated_at < @deleting_cutoff::timestamptz)
       OR (status = 'pending' AND updated_at < @pending_cutoff::timestamptz)
   )
 ORDER BY updated_at ASC, id ASC

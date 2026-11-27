@@ -271,17 +271,17 @@
 
 ## 13. Files 端点契约
 
-- `GET /api/v1/files/config`（已登录即可）：返回上传策略 `{ "maxFileSizeBytes", "maxAvatarSizeBytes", "allowedExtensions" }`，供前端文件选择器与大小提示使用；前端不得硬编码后端可配置的上限与类型。
-- `POST /api/v1/files`（`files:upload` + 限流 20 次/分钟/用户）：`multipart/form-data` 字段 `file`；执行有界读取、内容嗅探 + 扩展名交叉校验（显式拒绝 `image/svg+xml` 与 HTML/JS）、SHA-256 计算、`pending`→`ready` 两阶段持久化与 `file.upload` 审计；返回 `201 FileDTO`。
-- `POST /api/v1/files/avatar`（已登录即可 + 限流 20 次/分钟/用户）：`multipart/form-data` 字段 `file`；上限默认 2 MiB，仅允许安全位图格式并经纯 Go 缩放至 ≤512px 重编码为 PNG 剥离全部 EXIF 元数据；返回 `201 FileDTO`。
-- `GET /api/v1/files`（`files:read`）：查询 `status = 'ready'` 分页列表，支持 `page`、`pageSize`、`q`（文件名 `ILIKE`）、`category`（`image` / `document`）、`mimeType`、`driver`（`local` / `s3`）、`sort`（白名单 `created_at` / `original_name` / `size_bytes`）、`order`（`asc` / `desc`）；默认排序 `created_at DESC, id DESC`；返回 `200 Paginated<FileDTO>`。
+- `GET /api/v1/files/config`（已登录即可）：返回上传策略 `{ "maxFileSizeBytes", "maxAvatarSizeBytes", "allowedExtensions" }`，供前端文件选择器与大小提示使用；前端不得硬编码后端可配置的上限与类型。配置扩展 `storage.allowed_mime_types` 仅接受可映射安全扩展名的类型，忽略含危险/可执行扩展名或无法安全映射的类型。
+- `POST /api/v1/files`（`files:upload` + 限流 20 次/分钟/用户）：`multipart/form-data` 字段 `file`；执行有界读取（含 `MaxBytesError` 与 `multipart.ErrMessageTooLarge` 统一返 `413 FILES_TOO_LARGE`）、文件名清洗后内容嗅探 + 扩展名交叉校验（显式拒绝 `image/svg+xml` 与 HTML/JS）、SHA-256 计算、`pending`→`ready` 两阶段持久化与 `file.upload` 审计；返回 `201 FileDTO`。
+- `POST /api/v1/files/avatar`（已登录且账号活跃、会话未吊销 + 限流 20 次/分钟/用户）：`multipart/form-data` 字段 `file`；上限默认 2 MiB，仅允许安全位图格式并经纯 Go 缩放至 ≤512px 重编码为 PNG 剥离全部 EXIF 元数据，写 `file.upload_avatar` 审计；返回 `201 FileDTO`。
+- `GET /api/v1/files`（`files:read`）：查询 `status = 'ready'` 分页列表，支持 `page`、`pageSize`、`q`（文件名 `ILIKE`，合法 UTF-8 且不含 NUL、≤100 字符）、`category`（`image` / `document`）、`mimeType`（≤20 项，每项为合法 UTF-8、不含 NUL 且 ≤128 字符）、`driver`（`local` / `s3`）、`sort`（白名单 `created_at` / `original_name` / `size_bytes`）、`order`（`asc` / `desc`）；多值筛选兼容重复键与逗号分隔；默认排序 `created_at DESC, id DESC`；参数非法返回 `422 VALIDATION_FAILED`（字段级错误码含 `FILES_INVALID_PAGE`、`FILES_INVALID_PAGE_SIZE`、`FILES_QUERY_TOO_LONG`、`FILES_INVALID_CATEGORY`、`FILES_INVALID_DRIVER`、`FILES_TOO_MANY_MIME_FILTERS`、`VALIDATION_ONE_OF`、`VALIDATION_DEFAULT`）；返回 `200 Paginated<FileDTO>`。
 - `GET /api/v1/files/:id`（`files:read`）：返回 `200 FileDTO`，不存在返回 `404 FILES_NOT_FOUND`。
-- `GET /api/v1/files/:id/content`（`files:read`，可选 `?download=1`）：按记录的 `storage_driver` 路由驱动流式输出；图片默认 `inline`（`?download=1` 为 `attachment`），非允许图片文档强制 `Content-Disposition: attachment`，始终附带 `X-Content-Type-Options: nosniff`。
-- `POST /api/v1/files/:id/signed-url`（`files:read`，可选 `{ "disposition": "inline" | "attachment" }`）：签发短时 HMAC-SHA256 访问链接 `{ "url": "/api/v1/files/signed/<token>", "expiresAt": "..." }`（默认 5 分钟；文档强制 `attachment`）。
+- `GET /api/v1/files/:id/content`（`files:read`，可选 `?download=1` 或 `?download=true`）：按记录的 `storage_driver` 路由驱动流式输出；内置安全位图默认 `inline`（带下载参数为 `attachment`），非内置安全位图强制 `Content-Disposition: attachment`（`filename*` 按 RFC 8187 编码），始终附带 `X-Content-Type-Options: nosniff`、`Content-Security-Policy: default-src 'none'; sandbox` 与 `Cache-Control: private, no-store`。
+- `POST /api/v1/files/:id/signed-url`（`files:read`，可选 `{ "disposition": "inline" | "attachment" }`，非法值返 `422` `disposition: FILES_INVALID_DISPOSITION`）：签发短时 HMAC-SHA256 访问链接 `{ "url": "/api/v1/files/signed/<token>", "expiresAt": "..." }`（默认 5 分钟；非内置安全位图强制 `attachment`）。
 - `GET /api/v1/files/signed/:token`（公开验签路由，免 Bearer）：校验 HMAC 签名与过期时间后流式输出，使用与 `/content` 相同的安全响应头策略；无效或过期返回 `401 FILES_INVALID_SIGNED_URL`。
-- `DELETE /api/v1/files/:id`（`files:delete`）：事务内校验无未删除用户头像引用（命中返回 `409 FILES_IN_USE`）后标为 `deleting` 并写 `file.delete` 审计；事务提交后删除存储对象再物理删行，存储失败由后台 Janitor 重试清理；返回 `204`。
+- `DELETE /api/v1/files/:id`（`files:delete`）：事务内校验无未删除用户头像引用（命中返回 `409 FILES_IN_USE`）后标为 `deleting` 并写 `file.delete` 审计；事务提交后删除存储对象再物理删行，存储失败由后台 Janitor 经宽限期后重试清理；返回 `204`。
 
-`FileDTO` 字段：`id`、`originalName`、`mimeType`、`category`（`image` / `document`）、`sizeBytes`、`sha256`、`storageDriver`（`local` / `s3`）、`isImage`、`uploader`（`{ id, username }` 或 `null`）、`createdAt` / `updatedAt`（RFC3339）。`SignedFileURLDTO` 字段：`url`、`expiresAt`（RFC3339）。`UploadPolicyDTO` 字段：`maxFileSizeBytes`、`maxAvatarSizeBytes`、`allowedExtensions`（含点号、升序、无重复）。
+`FileDTO` 字段：`id`、`originalName`、`mimeType`、`category`（`image` / `document`）、`sizeBytes`、`sha256`、`storageDriver`（`local` / `s3`）、`isImage`（与 `category === 'image'` 口径一致）、`uploader`（`{ id, username }` 或 `null`）、`createdAt` / `updatedAt`（RFC3339）。`SignedFileURLDTO` 字段：`url`、`expiresAt`（RFC3339）。`UploadPolicyDTO` 字段：`maxFileSizeBytes`、`maxAvatarSizeBytes`、`allowedExtensions`（含点号、升序、无重复）。
 
 ## 14. Profile & Sessions 端点契约
 

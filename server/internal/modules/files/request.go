@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	maxSearchQueryLen = 100
-	maxMultiFilterLen = 20
+	maxSearchQueryLen    = 100
+	maxMultiFilterLen    = 20
+	maxMIMETypeFilterLen = 128
 )
 
 type createSignedURLRequest struct {
@@ -36,55 +37,88 @@ func parseListFilter(c *gin.Context) (ListFilter, error) {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "pageSize", Message: ErrCodeInvalidPageSize})
 	}
 
-	q := strings.TrimSpace(c.Query("q"))
-	if utf8.RuneCountInString(q) > maxSearchQueryLen {
+	raw := ListFilter{
+		Pagination: pagination.Normalize(page, pageSize),
+		Q:          c.Query("q"),
+		Categories: splitMultiValues(c.QueryArray("category")),
+		MIMETypes:  splitMultiValues(c.QueryArray("mimeType")),
+		Drivers:    splitMultiValues(c.QueryArray("driver")),
+		Sort:       c.Query("sort"),
+		Order:      c.Query("order"),
+	}
+
+	normalized, filterErrs := validateAndNormalizeFilterFields(raw)
+	fieldErrs = append(fieldErrs, filterErrs...)
+	if len(fieldErrs) > 0 {
+		return ListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+	}
+	return normalized, nil
+}
+
+func validateAndNormalizeFilterFields(filter ListFilter) (ListFilter, []apperr.FieldError) {
+	var fieldErrs []apperr.FieldError
+	out := filter
+
+	out.Q = strings.TrimSpace(filter.Q)
+	if !isValidFilterText(out.Q) {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "q", Message: "VALIDATION_DEFAULT"})
+	} else if utf8.RuneCountInString(out.Q) > maxSearchQueryLen {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "q", Message: ErrCodeQueryTooLong})
 	}
 
-	categories := parseMultiQuery(c, "category")
-	for _, cat := range categories {
+	out.Categories = normalizeMultiValues(filter.Categories)
+	for _, cat := range out.Categories {
 		if cat != CategoryImage && cat != CategoryDocument {
 			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "category", Message: ErrCodeInvalidCategory})
 			break
 		}
 	}
 
-	drivers := parseMultiQuery(c, "driver")
-	for _, drv := range drivers {
+	out.Drivers = normalizeMultiValues(filter.Drivers)
+	for _, drv := range out.Drivers {
 		if drv != storage.DriverLocal && drv != storage.DriverS3 {
 			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "driver", Message: ErrCodeInvalidDriver})
 			break
 		}
 	}
 
-	mimeTypes := parseMultiQuery(c, "mimeType")
-	if len(mimeTypes) > maxMultiFilterLen {
+	out.MIMETypes = normalizeMultiValues(filter.MIMETypes)
+	if len(out.MIMETypes) > maxMultiFilterLen {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "mimeType", Message: ErrCodeTooManyMIMEFilters})
+	} else {
+		for _, mt := range out.MIMETypes {
+			if !isValidFilterText(mt) || utf8.RuneCountInString(mt) > maxMIMETypeFilterLen {
+				fieldErrs = append(fieldErrs, apperr.FieldError{Field: "mimeType", Message: "VALIDATION_DEFAULT"})
+				break
+			}
+		}
 	}
 
-	sortBy := strings.TrimSpace(c.Query("sort"))
-	if sortBy != "" && sortBy != SortCreatedAt && sortBy != SortOriginalName && sortBy != SortSizeBytes {
+	sortBy := strings.TrimSpace(filter.Sort)
+	if sortBy == "" {
+		sortBy = SortCreatedAt
+	}
+	if sortBy != SortCreatedAt && sortBy != SortOriginalName && sortBy != SortSizeBytes {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "sort", Message: "VALIDATION_ONE_OF"})
+	} else {
+		out.Sort = sortBy
 	}
 
-	order := strings.ToLower(strings.TrimSpace(c.Query("order")))
-	if order != "" && order != OrderAsc && order != OrderDesc {
+	order := strings.ToLower(strings.TrimSpace(filter.Order))
+	if order == "" {
+		order = OrderDesc
+	}
+	if order != OrderAsc && order != OrderDesc {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "order", Message: "VALIDATION_ONE_OF"})
+	} else {
+		out.Order = order
 	}
 
-	if len(fieldErrs) > 0 {
-		return ListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
-	}
+	return out, fieldErrs
+}
 
-	return ListFilter{
-		Pagination: pagination.Normalize(page, pageSize),
-		Q:          q,
-		Categories: categories,
-		MIMETypes:  mimeTypes,
-		Drivers:    drivers,
-		Sort:       sortBy,
-		Order:      order,
-	}, nil
+func isValidFilterText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, 0)
 }
 
 func parseOptionalInt(raw string, fallback int) (int, bool) {
@@ -99,25 +133,33 @@ func parseOptionalInt(raw string, fallback int) (int, bool) {
 	return v, true
 }
 
-func parseMultiQuery(c *gin.Context, key string) []string {
-	rawValues := c.QueryArray(key)
+func splitMultiValues(rawValues []string) []string {
+	if len(rawValues) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(rawValues))
+	for _, item := range rawValues {
+		out = append(out, strings.Split(item, ",")...)
+	}
+	return out
+}
+
+func normalizeMultiValues(rawValues []string) []string {
 	if len(rawValues) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(rawValues))
 	seen := make(map[string]struct{}, len(rawValues))
-	for _, item := range rawValues {
-		for _, part := range strings.Split(item, ",") {
-			norm := strings.ToLower(strings.TrimSpace(part))
-			if norm == "" {
-				continue
-			}
-			if _, exists := seen[norm]; exists {
-				continue
-			}
-			seen[norm] = struct{}{}
-			out = append(out, norm)
+	for _, part := range rawValues {
+		norm := strings.ToLower(strings.TrimSpace(part))
+		if norm == "" {
+			continue
 		}
+		if _, exists := seen[norm]; exists {
+			continue
+		}
+		seen[norm] = struct{}{}
+		out = append(out, norm)
 	}
 	return out
 }

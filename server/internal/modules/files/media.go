@@ -85,6 +85,59 @@ var forbiddenExts = map[string]struct{}{
 	".xml":   {},
 }
 
+// unsafeExtraExts are never accepted when mapping configured extra AllowedMIMETypes to extensions.
+var unsafeExtraExts = map[string]struct{}{
+	".exe":   {},
+	".dll":   {},
+	".bat":   {},
+	".cmd":   {},
+	".com":   {},
+	".msi":   {},
+	".sh":    {},
+	".bash":  {},
+	".zsh":   {},
+	".ps1":   {},
+	".vbs":   {},
+	".vbe":   {},
+	".hta":   {},
+	".jar":   {},
+	".php":   {},
+	".phtml": {},
+	".jsp":   {},
+	".asp":   {},
+	".aspx":  {},
+	".cgi":   {},
+	".pl":    {},
+	".py":    {},
+	".rb":    {},
+	".scr":   {},
+	".pif":   {},
+	".lnk":   {},
+	".reg":   {},
+	".wsf":   {},
+	".wsh":   {},
+}
+
+// curatedExtraMIMEExtensions maps common safe non-builtin MIME types to deterministic extensions
+// so extra storage.allowed_mime_types work consistently across platforms regardless of OS mime.types.
+var curatedExtraMIMEExtensions = map[string][]string{
+	"application/json":         {".json"},
+	"application/zip":          {".zip"},
+	"application/gzip":         {".gz"},
+	"application/x-tar":        {".tar"},
+	"application/rtf":          {".rtf"},
+	"text/markdown":            {".md"},
+	"image/bmp":                {".bmp"},
+	"image/tiff":               {".tif", ".tiff"},
+	"image/avif":               {".avif"},
+	"audio/mpeg":               {".mp3"},
+	"audio/wav":                {".wav"},
+	"audio/ogg":                {".ogg"},
+	"video/mp4":                {".mp4"},
+	"video/webm":               {".webm"},
+	"application/octet-stream": nil, // Explicitly unmapped: raw binary must not bypass extension checks.
+}
+
 type preparedUpload struct {
 	file         *os.File
 	path         string
@@ -154,6 +207,37 @@ func buildAllowedExtensions(allowed map[string]mimeRule) []string {
 	return out
 }
 
+func resolveSafeExtraExtensions(mimeType string) []string {
+	var rawExts []string
+	if curated, ok := curatedExtraMIMEExtensions[mimeType]; ok {
+		rawExts = curated
+	} else if detected, err := mime.ExtensionsByType(mimeType); err == nil {
+		rawExts = detected
+	}
+
+	seen := make(map[string]struct{}, len(rawExts))
+	out := make([]string, 0, len(rawExts))
+	for _, raw := range rawExts {
+		ext := strings.ToLower(strings.TrimSpace(raw))
+		if !strings.HasPrefix(ext, ".") || len(ext) < 2 {
+			continue
+		}
+		if _, blocked := forbiddenExts[ext]; blocked {
+			continue
+		}
+		if _, unsafe := unsafeExtraExts[ext]; unsafe {
+			continue
+		}
+		if _, dup := seen[ext]; dup {
+			continue
+		}
+		seen[ext] = struct{}{}
+		out = append(out, ext)
+	}
+	slices.Sort(out)
+	return out
+}
+
 func buildAllowedMIMEMap(extra []string) map[string]mimeRule {
 	allowed := make(map[string]mimeRule, len(builtinMIMETypes)+len(extra))
 	for k, v := range builtinMIMETypes {
@@ -167,8 +251,16 @@ func buildAllowedMIMEMap(extra []string) map[string]mimeRule {
 		if _, blocked := forbiddenMIMETypes[norm]; blocked {
 			continue
 		}
-		if _, exists := allowed[norm]; !exists {
-			allowed[norm] = mimeRule{canonicalExt: ".bin"}
+		if _, exists := allowed[norm]; exists {
+			continue
+		}
+		exts := resolveSafeExtraExtensions(norm)
+		if len(exts) == 0 {
+			continue
+		}
+		allowed[norm] = mimeRule{
+			canonicalExt: exts[0],
+			allowedExts:  exts,
 		}
 	}
 	return allowed
@@ -228,45 +320,46 @@ func prepareGeneralUpload(
 		sizeBytes: size,
 		sha256:    sum,
 	}
+	keep := false
+	defer func() {
+		if !keep {
+			p.Close()
+		}
+	}()
 
-	ext := strings.ToLower(path.Ext(cleanBaseName(filename)))
+	ext := extractSanitizedExt(filename)
 	if _, blocked := forbiddenExts[ext]; blocked {
-		p.Close()
 		return nil, errFileTypeNotAllowed()
 	}
 
 	detected, err := sniffVerifiedMIME(tmp, size, ext)
 	if err != nil {
-		p.Close()
 		return nil, err
 	}
 	if _, blocked := forbiddenMIMETypes[detected]; blocked {
-		p.Close()
 		return nil, errFileTypeNotAllowed()
 	}
 
 	rule, ok := allowed[detected]
-	if !ok {
-		p.Close()
+	if !ok || len(rule.allowedExts) == 0 {
 		return nil, errFileTypeNotAllowed()
 	}
-	if ext != "" && len(rule.allowedExts) > 0 && !slices.Contains(rule.allowedExts, ext) {
-		p.Close()
+	if ext != "" && !slices.Contains(rule.allowedExts, ext) {
 		return nil, errFileTypeNotAllowed()
 	}
 
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-		p.Close()
 		return nil, fmt.Errorf("rewind verified upload: %w", err)
 	}
 
 	canonicalExt := rule.canonicalExt
 	if canonicalExt == "" {
-		canonicalExt = ".bin"
+		canonicalExt = rule.allowedExts[0]
 	}
 	p.mimeType = detected
 	p.ext = canonicalExt
 	p.originalName = sanitizeOriginalName(filename, canonicalExt)
+	keep = true
 	return p, nil
 }
 
@@ -284,7 +377,7 @@ func prepareAvatarUpload(
 		_ = os.Remove(tmpPath)
 	}()
 
-	ext := strings.ToLower(path.Ext(cleanBaseName(filename)))
+	ext := extractSanitizedExt(filename)
 	if _, blocked := forbiddenExts[ext]; blocked {
 		return nil, errFileTypeNotAllowed()
 	}
@@ -321,6 +414,9 @@ func prepareAvatarUpload(
 	if err != nil {
 		return nil, errInvalidImage(err)
 	}
+	if src.Bounds().Dx() <= 0 || src.Bounds().Dy() <= 0 {
+		return nil, errInvalidImage(errors.New("decoded avatar has empty bounds"))
+	}
 
 	// Re-encode onto a fresh RGBA canvas (resized to <=512px) to strip all EXIF/GPS/XMP metadata.
 	dst := normalizeAvatarImage(src)
@@ -330,30 +426,26 @@ func prepareAvatarUpload(
 		return nil, fmt.Errorf("create avatar output temp file: %w", err)
 	}
 	outPath := outFile.Name()
-	cleanupOut := func() {
-		_ = outFile.Close()
-		_ = os.Remove(outPath)
-	}
+	keepOut := false
+	defer func() {
+		if !keepOut {
+			_ = outFile.Close()
+			_ = os.Remove(outPath)
+		}
+	}()
 
 	hasher := sha256.New()
 	counter := &countingWriter{w: io.MultiWriter(outFile, hasher)}
 	if err := png.Encode(counter, dst); err != nil {
-		cleanupOut()
 		return nil, fmt.Errorf("encode avatar png: %w", err)
 	}
 	if _, err := outFile.Seek(0, io.SeekStart); err != nil {
-		cleanupOut()
 		return nil, fmt.Errorf("rewind encoded avatar: %w", err)
 	}
 
-	cleanName := sanitizeOriginalName(filename, ".png")
-	if curExt := path.Ext(cleanName); curExt != "" && !strings.EqualFold(curExt, ".png") {
-		cleanName = strings.TrimSuffix(cleanName, curExt) + ".png"
-	} else if curExt == "" {
-		cleanName += ".png"
-	}
-	cleanName = sanitizeOriginalName(cleanName, ".png")
+	cleanName := sanitizeAvatarOriginalName(filename)
 
+	keepOut = true
 	return &preparedUpload{
 		file:         outFile,
 		path:         outPath,
@@ -409,7 +501,11 @@ func sniffVerifiedMIME(f *os.File, size int64, ext string) (string, error) {
 
 	// Reject embedded SVG/HTML disguised inside plain text or XML.
 	if detected == mimeTXT || detected == mimeCSV || detected == "text/xml" || detected == "application/xml" {
-		if hasActiveMarkupPrefix(f) {
+		hasMarkup, markupErr := hasActiveMarkupPrefix(f)
+		if markupErr != nil {
+			return "", markupErr
+		}
+		if hasMarkup {
 			return "text/html", nil
 		}
 		if detected == mimeTXT && ext == ".csv" {
@@ -430,17 +526,20 @@ func sniffVerifiedMIME(f *os.File, size int64, ext string) (string, error) {
 	return detected, nil
 }
 
-func hasActiveMarkupPrefix(f *os.File) bool {
+func hasActiveMarkupPrefix(f *os.File) (bool, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return false
+		return false, fmt.Errorf("seek for active markup check: %w", err)
 	}
 	buf := make([]byte, 1024)
-	n, _ := f.Read(buf)
+	n, err := f.Read(buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read for active markup check: %w", err)
+	}
 	sample := strings.ToLower(strings.TrimSpace(string(buf[:n])))
 	return strings.Contains(sample, "<svg") ||
 		strings.Contains(sample, "<html") ||
 		strings.Contains(sample, "<!doctype html") ||
-		strings.Contains(sample, "<script")
+		strings.Contains(sample, "<script"), nil
 }
 
 func detectOOXMLFromZip(f *os.File, size int64) string {
@@ -485,8 +584,11 @@ func cleanBaseName(raw string) string {
 	return base
 }
 
-func sanitizeOriginalName(raw, fallbackExt string) string {
+func stripUnsafeFilenameChars(raw string) string {
 	base := cleanBaseName(raw)
+	if !utf8.ValidString(base) {
+		base = strings.ToValidUTF8(base, "")
+	}
 	var b strings.Builder
 	b.Grow(len(base))
 	for _, r := range base {
@@ -496,7 +598,23 @@ func sanitizeOriginalName(raw, fallbackExt string) string {
 		b.WriteRune(r)
 	}
 	cleaned := strings.TrimSpace(b.String())
-	if cleaned == "" || cleaned == "." || cleaned == ".." {
+	if cleaned == "." || cleaned == ".." {
+		return ""
+	}
+	return cleaned
+}
+
+func extractSanitizedExt(raw string) string {
+	cleaned := stripUnsafeFilenameChars(raw)
+	if cleaned == "" {
+		return ""
+	}
+	return strings.ToLower(path.Ext(cleaned))
+}
+
+func sanitizeOriginalName(raw, fallbackExt string) string {
+	cleaned := stripUnsafeFilenameChars(raw)
+	if cleaned == "" {
 		return "file" + fallbackExt
 	}
 	if utf8.RuneCountInString(cleaned) <= maxOriginalNameRunes {
@@ -510,6 +628,16 @@ func sanitizeOriginalName(raw, fallbackExt string) string {
 		return truncateRunes(cleaned, maxOriginalNameRunes)
 	}
 	return truncateRunes(stem, maxOriginalNameRunes-extRunes) + ext
+}
+
+func sanitizeAvatarOriginalName(raw string) string {
+	cleanName := sanitizeOriginalName(raw, ".png")
+	curExt := path.Ext(cleanName)
+	stem := strings.TrimSpace(strings.TrimSuffix(cleanName, curExt))
+	if stem == "" || stem == "." || stem == ".." {
+		return "file.png"
+	}
+	return sanitizeOriginalName(stem+".png", ".png")
 }
 
 func truncateRunes(s string, maxRunes int) string {

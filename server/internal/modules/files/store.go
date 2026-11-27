@@ -26,10 +26,10 @@ type store interface {
 	GetFileByIDForShare(ctx context.Context, id uuid.UUID) (File, error)
 	ClaimExpiredPendingFile(ctx context.Context, id uuid.UUID, pendingCutoff time.Time) (bool, error)
 	TouchCleanupCandidate(ctx context.Context, id uuid.UUID) error
-	DeleteFileRow(ctx context.Context, id uuid.UUID) error
+	DeleteFileRow(ctx context.Context, id uuid.UUID) (bool, error)
 	CountReadyFiles(ctx context.Context, filter ListFilter) (int64, error)
 	ListReadyFiles(ctx context.Context, filter ListFilter) ([]File, error)
-	ListCleanupCandidates(ctx context.Context, drivers []string, pendingCutoff time.Time, limit int32) ([]File, error)
+	ListCleanupCandidates(ctx context.Context, drivers []string, pendingCutoff, deletingCutoff time.Time, limit int32) ([]File, error)
 }
 
 type pgStore struct {
@@ -129,8 +129,12 @@ func (s *pgStore) TouchCleanupCandidate(ctx context.Context, id uuid.UUID) error
 	return s.queries(ctx).TouchCleanupCandidate(ctx, id)
 }
 
-func (s *pgStore) DeleteFileRow(ctx context.Context, id uuid.UUID) error {
-	return s.queries(ctx).DeleteFileRow(ctx, id)
+func (s *pgStore) DeleteFileRow(ctx context.Context, id uuid.UUID) (bool, error) {
+	rows, err := s.queries(ctx).DeleteFileRow(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
 }
 
 func (s *pgStore) CountReadyFiles(ctx context.Context, filter ListFilter) (int64, error) {
@@ -163,11 +167,12 @@ func (s *pgStore) ListReadyFiles(ctx context.Context, filter ListFilter) ([]File
 	return out, nil
 }
 
-func (s *pgStore) ListCleanupCandidates(ctx context.Context, drivers []string, pendingCutoff time.Time, limit int32) ([]File, error) {
+func (s *pgStore) ListCleanupCandidates(ctx context.Context, drivers []string, pendingCutoff, deletingCutoff time.Time, limit int32) ([]File, error) {
 	rows, err := s.queries(ctx).ListCleanupCandidates(ctx, dbgen.ListCleanupCandidatesParams{
-		Drivers:       nonNilStrings(drivers),
-		PendingCutoff: pgtype.Timestamptz{Time: pendingCutoff.UTC(), Valid: true},
-		BatchLimit:    limit,
+		Drivers:        nonNilStrings(drivers),
+		DeletingCutoff: pgtype.Timestamptz{Time: deletingCutoff.UTC(), Valid: true},
+		PendingCutoff:  pgtype.Timestamptz{Time: pendingCutoff.UTC(), Valid: true},
+		BatchLimit:     limit,
 	})
 	if err != nil {
 		return nil, err
