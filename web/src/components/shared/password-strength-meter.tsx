@@ -28,7 +28,7 @@ type PasswordStrengthProps = {
  * level is announced without being read on every keystroke.
  */
 export function PasswordStrength({ value, className }: PasswordStrengthProps) {
-  const { t } = useTranslation('auth')
+  const { t } = useTranslation('common')
   const level = passwordLevel(value)
 
   if (!level) return null
@@ -49,7 +49,7 @@ export function PasswordStrength({ value, className }: PasswordStrengthProps) {
         ))}
       </div>
       <p className='text-[11px] text-muted-foreground'>
-        {t(`setup.passwordStrength.${level}`)}
+        {t(`password.strength.${level}`)}
       </p>
     </div>
   )

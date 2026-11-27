@@ -32,6 +32,13 @@ export const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error, query) => {
       if (query.meta?.silent) return
+      const normalized = normalizeApiError(error)
+      if (
+        normalized.status === 401 ||
+        normalized.code === 'AUTH_ACCOUNT_DISABLED'
+      ) {
+        return
+      }
       handleServerError(error)
     },
   }),
@@ -54,10 +61,22 @@ export const router = createRouter({
 configureApiClient({
   getAccessToken: () => useAuthStore.getState().accessToken,
   refreshAccessToken: () => authGateway.refreshAccessToken(),
+  onSessionExpired: () => {
+    const pathname = router.state.location.pathname
+    if (pathname === '/sign-in' || pathname === '/setup') {
+      return
+    }
+    toast.error(i18n.t('errors:sessionExpired'), { id: 'session-expired' })
+    void router.navigate({
+      to: '/sign-in',
+      search: { redirect: router.state.location.href },
+      replace: true,
+    })
+  },
   onAccountDisabled: () => {
     useAuthStore.getState().clearSession({ broadcast: true })
     queryClient.clear()
-    toast.error(i18n.t('errors:accountDisabled'))
+    toast.error(i18n.t('errors:accountDisabled'), { id: 'account-disabled' })
     void router.navigate({ to: '/sign-in', replace: true })
   },
   onForbiddenRefresh: async () => {

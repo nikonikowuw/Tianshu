@@ -20,6 +20,16 @@ const (
 	ErrCodeInvalidEmail      = "USERS_INVALID_EMAIL"
 	ErrCodeInvalidDisplay    = "USERS_INVALID_DISPLAY_NAME"
 	ErrCodeInvalidStatus     = "USERS_INVALID_STATUS"
+
+	ErrCodeProfileInvalidCurrentPassword = "PROFILE_INVALID_CURRENT_PASSWORD"
+	ErrCodeProfilePasswordUnchanged      = "PROFILE_PASSWORD_UNCHANGED"
+	ErrCodeProfileInvalidAvatar          = "PROFILE_INVALID_AVATAR"
+	ErrCodeProfileSessionNotFound        = "PROFILE_SESSION_NOT_FOUND"
+	ErrCodeProfileCurrentSessionRevoke   = "PROFILE_CURRENT_SESSION_REVOKE_FORBIDDEN"
+
+	// Canonical cross-module code translated by the auth locale catalog so disabled accounts
+	// trigger uniform client-side session clearing across all authenticated endpoints.
+	errCodeAccountDisabled = "AUTH_ACCOUNT_DISABLED"
 )
 
 var (
@@ -54,4 +64,20 @@ func selfOperationError() *apperr.Error {
 
 func superAdminProtectedError() *apperr.Error {
 	return apperr.Forbidden(ErrCodeSuperAdminProtect)
+}
+
+func invalidCurrentPasswordError() *apperr.Error {
+	return apperr.BadRequest(ErrCodeProfileInvalidCurrentPassword, nil)
+}
+
+func profileSessionNotFoundError() *apperr.Error {
+	return apperr.NotFound(ErrCodeProfileSessionNotFound)
+}
+
+func currentSessionRevokeError() *apperr.Error {
+	return apperr.Conflict(ErrCodeProfileCurrentSessionRevoke)
+}
+
+func accountDisabledError() *apperr.Error {
+	return apperr.Forbidden(errCodeAccountDisabled)
 }

@@ -24,7 +24,6 @@ describe('scorePassword', () => {
 describe('passwordLevel', () => {
   it('returns null while the score is still 0', () => {
     expect(passwordLevel('')).toBeNull()
-    // A single character scores 0 until it reaches the 8-character threshold.
     expect(passwordLevel('a')).toBeNull()
     expect(passwordLevel('abcdefgh')).not.toBeNull()
   })

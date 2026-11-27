@@ -29,6 +29,13 @@ type store interface {
 	RevokeSession(ctx context.Context, sessionID uuid.UUID) (revokedSession, bool, error)
 	RevokeSessionByRefreshHash(ctx context.Context, tokenHash string) (revokedSession, bool, error)
 	RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) error
+	ListActiveUserSessions(ctx context.Context, userID uuid.UUID) ([]ActiveSession, error)
+	IsUserSessionActive(ctx context.Context, userID, sessionID uuid.UUID) (bool, error)
+	LockActiveUserSessionForShare(ctx context.Context, userID, sessionID uuid.UUID) (bool, error)
+	RevokeUserSessionByID(ctx context.Context, userID, sessionID uuid.UUID) (bool, error)
+	RevokeOtherUserSessions(ctx context.Context, userID, keepSessionID uuid.UUID) (int64, error)
+	DeleteExpiredRefreshTokenHistoryBatch(ctx context.Context, cutoff time.Time, limit int32) (int64, error)
+	DeleteExpiredUserSessionsBatch(ctx context.Context, cutoff time.Time, limit int32) (int64, error)
 }
 
 type pgStore struct {
@@ -146,6 +153,78 @@ func (s *pgStore) RevokeSessionByRefreshHash(ctx context.Context, tokenHash stri
 
 func (s *pgStore) RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) error {
 	return s.queries(ctx).RevokeAllUserSessions(ctx, userID)
+}
+
+func (s *pgStore) ListActiveUserSessions(ctx context.Context, userID uuid.UUID) ([]ActiveSession, error) {
+	rows, err := s.queries(ctx).ListActiveUserSessions(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ActiveSession, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ActiveSession{
+			ID:         row.ID,
+			IPAddress:  row.IpAddress,
+			UserAgent:  row.UserAgent,
+			LastUsedAt: row.LastUsedAt.Time.UTC(),
+			CreatedAt:  row.CreatedAt.Time.UTC(),
+			ExpiresAt:  row.ExpiresAt.Time.UTC(),
+		})
+	}
+	return out, nil
+}
+
+func (s *pgStore) IsUserSessionActive(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	return s.queries(ctx).IsUserSessionActive(ctx, dbgen.IsUserSessionActiveParams{
+		ID:     sessionID,
+		UserID: userID,
+	})
+}
+
+func (s *pgStore) LockActiveUserSessionForShare(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	_, err := s.queries(ctx).LockActiveUserSessionForShare(ctx, dbgen.LockActiveUserSessionForShareParams{
+		ID:     sessionID,
+		UserID: userID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *pgStore) RevokeUserSessionByID(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	affected, err := s.queries(ctx).RevokeUserSessionByID(ctx, dbgen.RevokeUserSessionByIDParams{
+		ID:     sessionID,
+		UserID: userID,
+	})
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
+func (s *pgStore) RevokeOtherUserSessions(ctx context.Context, userID, keepSessionID uuid.UUID) (int64, error) {
+	return s.queries(ctx).RevokeOtherUserSessions(ctx, dbgen.RevokeOtherUserSessionsParams{
+		UserID: userID,
+		ID:     keepSessionID,
+	})
+}
+
+func (s *pgStore) DeleteExpiredRefreshTokenHistoryBatch(ctx context.Context, cutoff time.Time, limit int32) (int64, error) {
+	return s.queries(ctx).DeleteExpiredRefreshTokenHistoryBatch(ctx, dbgen.DeleteExpiredRefreshTokenHistoryBatchParams{
+		ExpiresAt: pgtype.Timestamptz{Time: cutoff.UTC(), Valid: true},
+		Limit:     limit,
+	})
+}
+
+func (s *pgStore) DeleteExpiredUserSessionsBatch(ctx context.Context, cutoff time.Time, limit int32) (int64, error) {
+	return s.queries(ctx).DeleteExpiredUserSessionsBatch(ctx, dbgen.DeleteExpiredUserSessionsBatchParams{
+		ExpiresAt: pgtype.Timestamptz{Time: cutoff.UTC(), Valid: true},
+		Limit:     limit,
+	})
 }
 
 func mapSessionRow(row dbgen.UserSession) sessionRecord {

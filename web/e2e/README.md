@@ -1,7 +1,12 @@
-# Files E2E
+# Playwright E2E
 
-Playwright covers the Files upload/preview/download/delete path against a real
-Tianshu server and PostgreSQL database.
+Playwright covers end-to-end user flows against a real Tianshu server and
+PostgreSQL database:
+
+- `files.e2e.ts`: Files upload, preview, download, and delete lifecycle.
+- `settings.e2e.ts`: Personal settings profile/avatar updates, appearance &
+  language switching, active session revocation & live 401 redirect, and
+  password change.
 
 ## Prerequisites
 

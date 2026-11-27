@@ -47,6 +47,54 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 	return err
 }
 
+const deleteExpiredRefreshTokenHistoryBatch = `-- name: DeleteExpiredRefreshTokenHistoryBatch :execrows
+DELETE FROM refresh_token_history
+WHERE token_hash IN (
+    SELECT rth.token_hash
+    FROM refresh_token_history AS rth
+    WHERE rth.expires_at < $1
+    ORDER BY rth.expires_at ASC, rth.token_hash ASC
+    LIMIT $2
+)
+`
+
+type DeleteExpiredRefreshTokenHistoryBatchParams struct {
+	ExpiresAt pgtype.Timestamptz
+	Limit     int32
+}
+
+func (q *Queries) DeleteExpiredRefreshTokenHistoryBatch(ctx context.Context, arg DeleteExpiredRefreshTokenHistoryBatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredRefreshTokenHistoryBatch, arg.ExpiresAt, arg.Limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteExpiredUserSessionsBatch = `-- name: DeleteExpiredUserSessionsBatch :execrows
+DELETE FROM user_sessions
+WHERE id IN (
+    SELECT us.id
+    FROM user_sessions AS us
+    WHERE us.expires_at < $1
+    ORDER BY us.expires_at ASC, us.id ASC
+    LIMIT $2
+)
+`
+
+type DeleteExpiredUserSessionsBatchParams struct {
+	ExpiresAt pgtype.Timestamptz
+	Limit     int32
+}
+
+func (q *Queries) DeleteExpiredUserSessionsBatch(ctx context.Context, arg DeleteExpiredUserSessionsBatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredUserSessionsBatch, arg.ExpiresAt, arg.Limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getRefreshTokenHistoryByHash = `-- name: GetRefreshTokenHistoryByHash :one
 SELECT token_hash, session_id, replaced_at, expires_at
 FROM refresh_token_history
@@ -130,6 +178,98 @@ func (q *Queries) InsertRefreshTokenHistory(ctx context.Context, arg InsertRefre
 	return err
 }
 
+const isUserSessionActive = `-- name: IsUserSessionActive :one
+SELECT EXISTS (
+    SELECT 1
+    FROM user_sessions
+    WHERE id = $1
+      AND user_id = $2
+      AND revoked_at IS NULL
+      AND expires_at > now()
+)::boolean
+`
+
+type IsUserSessionActiveParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+func (q *Queries) IsUserSessionActive(ctx context.Context, arg IsUserSessionActiveParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isUserSessionActive, arg.ID, arg.UserID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const listActiveUserSessions = `-- name: ListActiveUserSessions :many
+SELECT id, user_id, user_agent, ip_address, expires_at, last_used_at, created_at
+FROM user_sessions
+WHERE user_id = $1
+  AND revoked_at IS NULL
+  AND expires_at > now()
+ORDER BY last_used_at DESC, created_at DESC, id DESC
+`
+
+type ListActiveUserSessionsRow struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	UserAgent  string
+	IpAddress  string
+	ExpiresAt  pgtype.Timestamptz
+	LastUsedAt pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) ListActiveUserSessions(ctx context.Context, userID uuid.UUID) ([]ListActiveUserSessionsRow, error) {
+	rows, err := q.db.Query(ctx, listActiveUserSessions, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveUserSessionsRow
+	for rows.Next() {
+		var i ListActiveUserSessionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.UserAgent,
+			&i.IpAddress,
+			&i.ExpiresAt,
+			&i.LastUsedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockActiveUserSessionForShare = `-- name: LockActiveUserSessionForShare :one
+SELECT id
+FROM user_sessions
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+  AND expires_at > now()
+FOR SHARE
+`
+
+type LockActiveUserSessionForShareParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+func (q *Queries) LockActiveUserSessionForShare(ctx context.Context, arg LockActiveUserSessionForShareParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, lockActiveUserSessionForShare, arg.ID, arg.UserID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const revokeAllUserSessions = `-- name: RevokeAllUserSessions :exec
 UPDATE user_sessions
 SET revoked_at = now()
@@ -140,6 +280,28 @@ WHERE user_id = $1
 func (q *Queries) RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, revokeAllUserSessions, userID)
 	return err
+}
+
+const revokeOtherUserSessions = `-- name: RevokeOtherUserSessions :execrows
+UPDATE user_sessions
+SET revoked_at = now()
+WHERE user_id = $1
+  AND id <> $2
+  AND revoked_at IS NULL
+  AND expires_at > now()
+`
+
+type RevokeOtherUserSessionsParams struct {
+	UserID uuid.UUID
+	ID     uuid.UUID
+}
+
+func (q *Queries) RevokeOtherUserSessions(ctx context.Context, arg RevokeOtherUserSessionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeOtherUserSessions, arg.UserID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revokeSession = `-- name: RevokeSession :one
@@ -180,6 +342,28 @@ func (q *Queries) RevokeSessionByRefreshHash(ctx context.Context, refreshTokenHa
 	var i RevokeSessionByRefreshHashRow
 	err := row.Scan(&i.ID, &i.UserID)
 	return i, err
+}
+
+const revokeUserSessionByID = `-- name: RevokeUserSessionByID :execrows
+UPDATE user_sessions
+SET revoked_at = now()
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+  AND expires_at > now()
+`
+
+type RevokeUserSessionByIDParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+func (q *Queries) RevokeUserSessionByID(ctx context.Context, arg RevokeUserSessionByIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeUserSessionByID, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const rotateSessionRefreshToken = `-- name: RotateSessionRefreshToken :exec

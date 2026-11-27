@@ -16,13 +16,14 @@ const (
 
 // User is the domain representation of a user account (never includes password_hash).
 type User struct {
-	ID          uuid.UUID
-	Username    string
-	Email       string
-	DisplayName string
-	Status      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           uuid.UUID
+	Username     string
+	Email        string
+	DisplayName  string
+	AvatarFileID *uuid.UUID
+	Status       string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // ActorRef is a lightweight user reference for createdBy/updatedBy projections.
@@ -33,17 +34,33 @@ type ActorRef struct {
 
 // UserDetail is the full administrative projection of a user account including roles and audit actors.
 type UserDetail struct {
-	ID          uuid.UUID
-	Username    string
-	Email       string
-	DisplayName string
-	Status      string
-	LastLoginAt *time.Time
-	Roles       []RoleRef
-	CreatedBy   *ActorRef
-	UpdatedBy   *ActorRef
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           uuid.UUID
+	Username     string
+	Email        string
+	DisplayName  string
+	AvatarFileID *uuid.UUID
+	Status       string
+	LastLoginAt  *time.Time
+	Roles        []RoleRef
+	CreatedBy    *ActorRef
+	UpdatedBy    *ActorRef
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// Profile is the self-service projection returned by /api/v1/profile endpoints.
+type Profile struct {
+	ID           uuid.UUID
+	Username     string
+	Email        string
+	DisplayName  string
+	AvatarFileID *uuid.UUID
+	AvatarURL    *string
+	Status       string
+	LastLoginAt  *time.Time
+	Roles        []RoleRef
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // AuthCredentials is an internal credential record used exclusively by the auth adapter.
@@ -53,6 +70,15 @@ type AuthCredentials struct {
 	Username     string
 	Email        string
 	DisplayName  string
+	AvatarFileID *uuid.UUID
+	Status       string
+	PasswordHash string
+}
+
+// userPasswordRecord is the internal credential snapshot used only during self-service password verification.
+type userPasswordRecord struct {
+	ID           uuid.UUID
+	Username     string
 	Status       string
 	PasswordHash string
 }
@@ -111,4 +137,45 @@ type DeleteUserInput struct {
 	UserID  uuid.UUID
 	ActorID *uuid.UUID
 	Meta    RequestMeta
+}
+
+// UpdateProfileInput defines partial self-service updates for the authenticated user.
+type UpdateProfileInput struct {
+	UserID           uuid.UUID
+	CurrentSessionID uuid.UUID
+	Email            *string
+	DisplayName      *string
+	AvatarFileID     *uuid.UUID
+	ClearAvatar      bool
+	Meta             RequestMeta
+}
+
+// ChangePasswordInput defines parameters for changing the authenticated user's password.
+type ChangePasswordInput struct {
+	UserID              uuid.UUID
+	CurrentSessionID    uuid.UUID
+	CurrentPassword     string
+	NewPassword         string
+	RevokeOtherSessions *bool
+	Meta                RequestMeta
+}
+
+// ChangePasswordResult reports the side effects of a password change.
+type ChangePasswordResult struct {
+	RevokedSessions int64
+}
+
+// RevokeSessionInput defines parameters for revoking a single active session owned by the caller.
+type RevokeSessionInput struct {
+	UserID           uuid.UUID
+	CurrentSessionID uuid.UUID
+	SessionID        uuid.UUID
+	Meta             RequestMeta
+}
+
+// RevokeOtherSessionsInput defines parameters for revoking all non-current active sessions owned by the caller.
+type RevokeOtherSessionsInput struct {
+	UserID           uuid.UUID
+	CurrentSessionID uuid.UUID
+	Meta             RequestMeta
 }

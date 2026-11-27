@@ -24,7 +24,19 @@
     "menus": "Menus",
     "auditLogs": "Audit Logs",
     "files": "Files",
-    "settings": "Settings"
+    "settings": "Settings",
+    "profile": "Profile",
+    "security": "Security & Password",
+    "sessions": "Active Sessions",
+    "appearance": "Appearance & Language"
+  },
+  "command": {
+    "placeholder": "Type a command or search...",
+    "noResults": "No results found.",
+    "theme": "Theme",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
   },
   "dashboard": {
     "title": "Dashboard",
@@ -34,7 +46,13 @@
   },
   "password": {
     "show": "Show password",
-    "hide": "Hide password"
+    "hide": "Hide password",
+    "strength": {
+      "weak": "Strength: weak",
+      "fair": "Strength: fair",
+      "good": "Strength: good",
+      "strong": "Strength: strong"
+    }
   },
   "table": {
     "filterPlaceholder": "Filter...",

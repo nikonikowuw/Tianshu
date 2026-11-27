@@ -15,6 +15,7 @@ type AuthenticatedLayoutProps = {
   navGroups: NavGroup[]
   user: LayoutUser
   onSignOut: () => Promise<void> | void
+  onAvatarError?: () => void
   children?: React.ReactNode
 }
 
@@ -24,6 +25,7 @@ export function AuthenticatedLayout({
   navGroups,
   user,
   onSignOut,
+  onAvatarError,
   children,
 }: AuthenticatedLayoutProps) {
   const defaultOpen = getCookie('sidebar_state') !== 'false'
@@ -39,6 +41,7 @@ export function AuthenticatedLayout({
             navGroups={navGroups}
             user={user}
             onSignOut={onSignOut}
+            onAvatarError={onAvatarError}
           />
           <SidebarInset
             className={cn(

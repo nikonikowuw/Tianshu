@@ -10,27 +10,33 @@ import { normalizeApiError } from '@/lib/api/error'
  * persistent countdown banner—and only fall back here for unhandled errors.
  * Any 429 reaching this fallback uses a deduplicated toast id to avoid spam.
  */
-export function handleServerError(error: unknown): void {
+export function formatServerErrorMessage(error: unknown): string {
   const apiError = normalizeApiError(error)
 
   if (apiError.status === 0) {
-    toast.error(i18n.t('errors:network'))
-    return
+    return i18n.t('errors:network')
   }
 
   if (apiError.status === 429) {
-    toast.error(i18n.t('errors:rateLimited'), { id: 'rate-limited' })
-    return
+    return i18n.t('errors:rateLimited')
   }
 
   if (apiError.status >= 500) {
-    toast.error(
-      apiError.requestId
-        ? i18n.t('errors:serverError', { requestId: apiError.requestId })
-        : i18n.t('errors:generic')
-    )
+    return apiError.requestId
+      ? i18n.t('errors:serverError', { requestId: apiError.requestId })
+      : i18n.t('errors:generic')
+  }
+
+  return apiError.message || i18n.t('errors:generic')
+}
+
+export function handleServerError(error: unknown): void {
+  const apiError = normalizeApiError(error)
+
+  if (apiError.status === 429) {
+    toast.error(formatServerErrorMessage(apiError), { id: 'rate-limited' })
     return
   }
 
-  toast.error(apiError.message || i18n.t('errors:generic'))
+  toast.error(formatServerErrorMessage(apiError))
 }

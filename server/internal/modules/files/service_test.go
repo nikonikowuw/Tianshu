@@ -94,6 +94,10 @@ func (f *fakeFileStore) GetFileByIDForUpdate(_ context.Context, id uuid.UUID) (F
 	return rec, nil
 }
 
+func (f *fakeFileStore) GetFileByIDForShare(ctx context.Context, id uuid.UUID) (File, error) {
+	return f.GetFileByIDForUpdate(ctx, id)
+}
+
 func (f *fakeFileStore) ClaimExpiredPendingFile(_ context.Context, id uuid.UUID, pendingCutoff time.Time) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -631,5 +635,80 @@ func TestServiceOpenContentReturns503WhenDriverUnavailable(t *testing.T) {
 	appErr, ok := apperr.As(err)
 	if !ok || appErr.Code != ErrCodeStorageUnavailable || appErr.Status != 503 {
 		t.Fatalf("OpenContent unconfigured driver error = %v, want 503 %s", err, ErrCodeStorageUnavailable)
+	}
+}
+
+func TestValidateAndLockAvatarFileAndSignURL(t *testing.T) {
+	localStore, err := storage.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	reg, err := storage.NewRegistry(storage.DriverLocal, localStore)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	st := newFakeFileStore()
+	svc := newServiceWithStore(st, reg, ServiceConfig{
+		SignedURLSecret: "test-secret-key-at-least-32-bytes",
+		SignedURLTTL:    5 * time.Minute,
+	}, ServiceDeps{})
+
+	ownerA := uuid.Must(uuid.NewV7())
+	ownerB := uuid.Must(uuid.NewV7())
+
+	avatarRec, err := svc.UploadAvatar(t.Context(), UploadInput{
+		Filename:   "me.png",
+		Reader:     bytes.NewReader(makePNGBytes(t, 64, 64)),
+		UploaderID: &ownerA,
+	})
+	if err != nil {
+		t.Fatalf("UploadAvatar: %v", err)
+	}
+	generalImg, err := svc.Upload(t.Context(), UploadInput{
+		Filename:   "general.png",
+		Reader:     bytes.NewReader(makePNGBytes(t, 64, 64)),
+		UploaderID: &ownerA,
+	})
+	if err != nil {
+		t.Fatalf("Upload general png: %v", err)
+	}
+	docRec, err := svc.Upload(t.Context(), UploadInput{
+		Filename:   "doc.txt",
+		Reader:     strings.NewReader("hello"),
+		UploaderID: &ownerA,
+	})
+	if err != nil {
+		t.Fatalf("Upload doc: %v", err)
+	}
+
+	if err := svc.ValidateAndLockAvatarFile(t.Context(), avatarRec.ID, ownerA); err != nil {
+		t.Fatalf("ValidateAndLockAvatarFile(ownerA) = %v, want nil", err)
+	}
+	signedURL, err := svc.SignAvatarURL(t.Context(), avatarRec.ID)
+	if err != nil || !strings.HasPrefix(signedURL, signedURLPathPrefix) {
+		t.Fatalf("SignAvatarURL() = (%q, %v), want signed prefix", signedURL, err)
+	}
+
+	// Foreign owner must be rejected with 404 (no existence leak).
+	if err := svc.ValidateAndLockAvatarFile(t.Context(), avatarRec.ID, ownerB); err == nil {
+		t.Fatal("expected foreign owner avatar check to fail")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 404 {
+		t.Fatalf("foreign owner error = %v, want 404", err)
+	}
+
+	// Non-avatar prefix images and documents must be rejected.
+	for _, badID := range []uuid.UUID{generalImg.ID, docRec.ID, uuid.Must(uuid.NewV7())} {
+		if err := svc.ValidateAndLockAvatarFile(t.Context(), badID, ownerA); err == nil {
+			t.Fatalf("expected invalid avatar %s to be rejected", badID)
+		}
+	}
+
+	// Deleting avatar row transitions status away from ready -> rejected.
+	if err := st.MarkFileStatus(t.Context(), avatarRec.ID, StatusDeleting); err != nil {
+		t.Fatalf("MarkFileStatus: %v", err)
+	}
+	if err := svc.ValidateAndLockAvatarFile(t.Context(), avatarRec.ID, ownerA); err == nil {
+		t.Fatal("expected deleting avatar file to be rejected")
 	}
 }

@@ -107,6 +107,23 @@ func (f *fakeStore) GetUserByID(_ context.Context, id uuid.UUID) (User, error) {
 	return r.user, nil
 }
 
+func (f *fakeStore) GetUserPasswordHashByID(_ context.Context, id uuid.UUID) (userPasswordRecord, error) {
+	r, ok := f.users[id]
+	if !ok || r.deletedAt != nil {
+		return userPasswordRecord{}, errUserNotFound
+	}
+	return userPasswordRecord{
+		ID:           r.user.ID,
+		Username:     r.user.Username,
+		Status:       r.user.Status,
+		PasswordHash: r.passwordHash,
+	}, nil
+}
+
+func (f *fakeStore) GetUserPasswordHashByIDForUpdate(ctx context.Context, id uuid.UUID) (userPasswordRecord, error) {
+	return f.GetUserPasswordHashByID(ctx, id)
+}
+
 func (f *fakeStore) UpdateUserLastLogin(_ context.Context, id uuid.UUID) error {
 	if r, ok := f.users[id]; ok && r.deletedAt == nil {
 		now := time.Now().UTC()
@@ -195,6 +212,35 @@ func (f *fakeStore) UpdateUserProfile(_ context.Context, rec updateUserProfileRe
 	return nil
 }
 
+func (f *fakeStore) UpdateOwnProfile(_ context.Context, rec updateOwnProfileRecord) error {
+	r, ok := f.users[rec.ID]
+	if !ok || r.deletedAt != nil {
+		return errUserNotFound
+	}
+	for id, other := range f.users {
+		if id != rec.ID && other.deletedAt == nil && strings.EqualFold(other.user.Email, rec.Email) {
+			return errEmailConflict
+		}
+	}
+	r.user.Email = rec.Email
+	r.user.DisplayName = rec.DisplayName
+	r.user.AvatarFileID = cloneUUIDPtr(rec.AvatarFileID)
+	r.user.UpdatedAt = time.Now().UTC()
+	uid := rec.ID
+	r.updatedBy = &uid
+	return nil
+}
+
+func (f *fakeStore) UpdateOwnPasswordHash(_ context.Context, id uuid.UUID, hash string) error {
+	if r, ok := f.users[id]; ok && r.deletedAt == nil {
+		r.passwordHash = hash
+		uid := id
+		r.updatedBy = &uid
+		r.user.UpdatedAt = time.Now().UTC()
+	}
+	return nil
+}
+
 func (f *fakeStore) UpdateUserPasswordByAdmin(_ context.Context, id uuid.UUID, hash string, updatedBy *uuid.UUID) error {
 	if r, ok := f.users[id]; ok && r.deletedAt == nil {
 		r.passwordHash = hash
@@ -232,23 +278,30 @@ func (f *fakeStore) ListUsernamesByIDs(_ context.Context, ids []uuid.UUID) (map[
 	return out, nil
 }
 
-func (f *fakeStore) CountActiveUsersByAvatarFileID(_ context.Context, _ uuid.UUID) (int64, error) {
-	return 0, nil
+func (f *fakeStore) CountActiveUsersByAvatarFileID(_ context.Context, fileID uuid.UUID) (int64, error) {
+	var n int64
+	for _, r := range f.users {
+		if r.deletedAt == nil && r.user.AvatarFileID != nil && *r.user.AvatarFileID == fileID {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (f *fakeStore) toDetail(r *fakeUserRow) UserDetail {
 	return UserDetail{
-		ID:          r.user.ID,
-		Username:    r.user.Username,
-		Email:       r.user.Email,
-		DisplayName: r.user.DisplayName,
-		Status:      r.user.Status,
-		LastLoginAt: r.lastLoginAt,
-		Roles:       make([]RoleRef, 0),
-		CreatedBy:   f.actorRef(r.createdBy),
-		UpdatedBy:   f.actorRef(r.updatedBy),
-		CreatedAt:   r.user.CreatedAt,
-		UpdatedAt:   r.user.UpdatedAt,
+		ID:           r.user.ID,
+		Username:     r.user.Username,
+		Email:        r.user.Email,
+		DisplayName:  r.user.DisplayName,
+		AvatarFileID: cloneUUIDPtr(r.user.AvatarFileID),
+		Status:       r.user.Status,
+		LastLoginAt:  r.lastLoginAt,
+		Roles:        make([]RoleRef, 0),
+		CreatedBy:    f.actorRef(r.createdBy),
+		UpdatedBy:    f.actorRef(r.updatedBy),
+		CreatedAt:    r.user.CreatedAt,
+		UpdatedAt:    r.user.UpdatedAt,
 	}
 }
 
@@ -269,6 +322,10 @@ func (fakeHasher) Hash(pw string) (string, error) {
 		return "", security.ErrInvalidPasswordLength
 	}
 	return "hash:" + pw, nil
+}
+
+func (fakeHasher) Verify(pw, encodedHash string) (bool, bool, error) {
+	return encodedHash == "hash:"+pw, false, nil
 }
 
 type fakeRoles struct {
@@ -350,12 +407,84 @@ func (f *fakeRoles) ReplaceUserRoles(_ context.Context, userID uuid.UUID, roleID
 }
 
 type fakeSessions struct {
-	revoked []uuid.UUID
+	revoked      []uuid.UUID
+	activeByUser map[uuid.UUID][]UserSession
+}
+
+func newFakeSessions() *fakeSessions {
+	return &fakeSessions{activeByUser: make(map[uuid.UUID][]UserSession)}
 }
 
 func (f *fakeSessions) RevokeAllUserSessions(_ context.Context, userID uuid.UUID) error {
 	f.revoked = append(f.revoked, userID)
+	delete(f.activeByUser, userID)
 	return nil
+}
+
+func (f *fakeSessions) ListActiveUserSessions(_ context.Context, userID uuid.UUID) ([]UserSession, error) {
+	return slices.Clone(f.activeByUser[userID]), nil
+}
+
+func (f *fakeSessions) IsSessionActive(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	for _, s := range f.activeByUser[userID] {
+		if s.ID == sessionID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeSessions) LockActiveSessionForShare(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	return f.IsSessionActive(ctx, userID, sessionID)
+}
+
+func (f *fakeSessions) RevokeUserSession(_ context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	items := f.activeByUser[userID]
+	for i, s := range items {
+		if s.ID == sessionID {
+			f.activeByUser[userID] = append(items[:i], items[i+1:]...)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeSessions) RevokeOtherUserSessions(_ context.Context, userID, keepSessionID uuid.UUID) (int64, error) {
+	items := f.activeByUser[userID]
+	kept := make([]UserSession, 0, 1)
+	var removed int64
+	for _, s := range items {
+		if s.ID == keepSessionID {
+			kept = append(kept, s)
+		} else {
+			removed++
+		}
+	}
+	f.activeByUser[userID] = kept
+	return removed, nil
+}
+
+type fakeAvatarFiles struct {
+	valid map[uuid.UUID]uuid.UUID // fileID -> ownerID
+}
+
+func newFakeAvatarFiles() *fakeAvatarFiles {
+	return &fakeAvatarFiles{valid: make(map[uuid.UUID]uuid.UUID)}
+}
+
+func (f *fakeAvatarFiles) ValidateAndLockAvatarFile(_ context.Context, fileID, ownerID uuid.UUID) error {
+	owner, ok := f.valid[fileID]
+	if !ok || owner != ownerID {
+		return apperr.NotFound("FILES_NOT_FOUND")
+	}
+	return nil
+}
+
+func (f *fakeAvatarFiles) SignAvatarURL(_ context.Context, fileID uuid.UUID) (string, error) {
+	if _, ok := f.valid[fileID]; !ok {
+		return "", apperr.NotFound("FILES_NOT_FOUND")
+	}
+	return "/api/v1/files/signed/" + fileID.String(), nil
 }
 
 type fakeAudit struct {
@@ -367,14 +496,16 @@ func (f *fakeAudit) Record(_ context.Context, entry AuditEntry) error {
 	return nil
 }
 
-func setupTestService() (*Service, *fakeStore, *fakeRoles, *fakeSessions, *fakeAudit, uuid.UUID, uuid.UUID) {
+func setupTestServiceWithFiles() (*Service, *fakeStore, *fakeRoles, *fakeSessions, *fakeAvatarFiles, *fakeAudit, uuid.UUID, uuid.UUID) {
 	st := newFakeStore()
 	roles := newFakeRoles()
-	sess := &fakeSessions{}
+	sess := newFakeSessions()
+	avatarFiles := newFakeAvatarFiles()
 	aud := &fakeAudit{}
 	svc := newServiceWithStore(st, fakeHasher{}, ServiceDeps{
 		Roles:    roles,
 		Sessions: sess,
+		Files:    avatarFiles,
 		Audit:    aud,
 	})
 	superUser, err := svc.CreateInitialAdmin(context.Background(), CreateInitialAdminInput{
@@ -397,7 +528,12 @@ func setupTestService() (*Service, *fakeStore, *fakeRoles, *fakeSessions, *fakeA
 	if err != nil {
 		panic(err)
 	}
-	return svc, st, roles, sess, aud, superUser.ID, mgr.ID
+	return svc, st, roles, sess, avatarFiles, aud, superUser.ID, mgr.ID
+}
+
+func setupTestService() (*Service, *fakeStore, *fakeRoles, *fakeSessions, *fakeAudit, uuid.UUID, uuid.UUID) {
+	svc, st, roles, sess, _, aud, superID, mgrID := setupTestServiceWithFiles()
+	return svc, st, roles, sess, aud, superID, mgrID
 }
 
 func TestCreateUserValidationAndProtection(t *testing.T) {
@@ -636,4 +772,342 @@ func TestUpdateAndDeleteUserGuards(t *testing.T) {
 			t.Fatalf("IsAvatarFileInUse = (%v, %v), want (false, nil)", inUse, err)
 		}
 	})
+}
+
+func TestProfileUpdateChangePasswordAndSessions(t *testing.T) {
+	svc, st, _, sess, avatarFiles, aud, superID, mgrID := setupTestServiceWithFiles()
+
+	avatarA := uuid.Must(uuid.NewV7())
+	avatarForeign := uuid.Must(uuid.NewV7())
+	avatarFiles.valid[avatarA] = mgrID
+	avatarFiles.valid[avatarForeign] = superID
+
+	t.Run("update profile fields, bind avatar, clear avatar, and enforce uniqueness/ownership", func(t *testing.T) {
+		curSess := uuid.Must(uuid.NewV7())
+		now := time.Now().UTC()
+		sess.activeByUser[mgrID] = []UserSession{
+			{ID: curSess, IPAddress: "10.0.0.1", UserAgent: "MgrUA", LastUsedAt: now, CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+		}
+
+		// Revoked/unknown session is rejected with 401 on GetProfile and UpdateProfile.
+		if _, err := svc.GetProfile(t.Context(), mgrID, uuid.Must(uuid.NewV7())); err == nil {
+			t.Fatal("expected 401 on GetProfile with inactive session")
+		} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+			t.Fatalf("expected 401, got %v", err)
+		}
+
+		newDisplay := "Manager Display"
+		newEmail := "manager.new@example.com"
+		updated, err := svc.UpdateProfile(t.Context(), UpdateProfileInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			DisplayName:      &newDisplay,
+			Email:            &newEmail,
+			AvatarFileID:     &avatarA,
+		})
+		if err != nil {
+			t.Fatalf("UpdateProfile: %v", err)
+		}
+		if updated.DisplayName != newDisplay || updated.Email != newEmail {
+			t.Fatalf("unexpected updated profile: %+v", updated)
+		}
+		if updated.AvatarFileID == nil || *updated.AvatarFileID != avatarA {
+			t.Fatalf("expected avatar %s, got %v", avatarA, updated.AvatarFileID)
+		}
+		if updated.AvatarURL == nil || !strings.Contains(*updated.AvatarURL, avatarA.String()) {
+			t.Fatalf("expected signed avatar URL, got %v", updated.AvatarURL)
+		}
+		inUse, err := svc.IsAvatarFileInUse(t.Context(), avatarA)
+		if err != nil || !inUse {
+			t.Fatalf("IsAvatarFileInUse = (%v, %v), want (true, nil)", inUse, err)
+		}
+
+		// Binding another user's avatar must fail with 422 on avatarFileId.
+		_, err = svc.UpdateProfile(t.Context(), UpdateProfileInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			AvatarFileID:     &avatarForeign,
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 422 || len(appErr.Fields) != 1 || appErr.Fields[0].Field != "avatarFileId" {
+			t.Fatalf("expected 422 avatarFileId for foreign avatar, got %v", err)
+		}
+
+		// Duplicate email must fail with 409 USERS_EMAIL_CONFLICT.
+		dupEmail := "ROOT@example.com"
+		_, err = svc.UpdateProfile(t.Context(), UpdateProfileInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			Email:            &dupEmail,
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrCodeEmailConflict {
+			t.Fatalf("expected %s, got %v", ErrCodeEmailConflict, err)
+		}
+
+		// ClearAvatar explicitly removes avatar reference.
+		cleared, err := svc.UpdateProfile(t.Context(), UpdateProfileInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			ClearAvatar:      true,
+		})
+		if err != nil {
+			t.Fatalf("UpdateProfile(ClearAvatar): %v", err)
+		}
+		if cleared.AvatarFileID != nil || cleared.AvatarURL != nil {
+			t.Fatalf("expected cleared avatar, got id=%v url=%v", cleared.AvatarFileID, cleared.AvatarURL)
+		}
+	})
+
+	t.Run("change password verifies old password, forbids unchanged, and revokes other sessions", func(t *testing.T) {
+		curSess := uuid.Must(uuid.NewV7())
+		otherSess1 := uuid.Must(uuid.NewV7())
+		otherSess2 := uuid.Must(uuid.NewV7())
+		now := time.Now().UTC()
+		sess.activeByUser[mgrID] = []UserSession{
+			{ID: otherSess1, IPAddress: "10.0.0.2", UserAgent: "Other1", LastUsedAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour)},
+			{ID: curSess, IPAddress: "10.0.0.1", UserAgent: "Current", LastUsedAt: now.Add(-2 * time.Minute), CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour)},
+			{ID: otherSess2, IPAddress: "10.0.0.3", UserAgent: "Other2", LastUsedAt: now.Add(-3 * time.Minute), CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour)},
+		}
+
+		// Wrong current password returns 400 PROFILE_INVALID_CURRENT_PASSWORD + failure audit.
+		_, err := svc.ChangePassword(t.Context(), ChangePasswordInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			CurrentPassword:  "wrong-password",
+			NewPassword:      "new-password-456",
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 400 || appErr.Code != ErrCodeProfileInvalidCurrentPassword {
+			t.Fatalf("expected 400 %s, got %v", ErrCodeProfileInvalidCurrentPassword, err)
+		}
+		lastAudit := aud.entries[len(aud.entries)-1]
+		if lastAudit.Action != auditActionProfileChangePassword || lastAudit.Status != auditStatusFailure {
+			t.Fatalf("expected failure audit for bad password, got %+v", lastAudit)
+		}
+
+		// Identical new password rejected with 422 PROFILE_PASSWORD_UNCHANGED.
+		_, err = svc.ChangePassword(t.Context(), ChangePasswordInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			CurrentPassword:  "password123",
+			NewPassword:      "password123",
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 422 || len(appErr.Fields) != 1 || appErr.Fields[0].Message != ErrCodeProfilePasswordUnchanged {
+			t.Fatalf("expected 422 %s, got %v", ErrCodeProfilePasswordUnchanged, err)
+		}
+
+		// Valid change with default revokeOtherSessions=true revokes 2 other sessions.
+		res, err := svc.ChangePassword(t.Context(), ChangePasswordInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			CurrentPassword:  "password123",
+			NewPassword:      "new-password-456",
+		})
+		if err != nil {
+			t.Fatalf("ChangePassword: %v", err)
+		}
+		if res.RevokedSessions != 2 {
+			t.Fatalf("RevokedSessions = %d, want 2", res.RevokedSessions)
+		}
+		if st.users[mgrID].passwordHash != "hash:new-password-456" {
+			t.Fatalf("passwordHash not updated: %q", st.users[mgrID].passwordHash)
+		}
+		if len(sess.activeByUser[mgrID]) != 1 || sess.activeByUser[mgrID][0].ID != curSess {
+			t.Fatalf("expected only current session retained, got %+v", sess.activeByUser[mgrID])
+		}
+
+		// revokeOtherSessions=false keeps other sessions intact.
+		keepFalse := false
+		extraSess := uuid.Must(uuid.NewV7())
+		sess.activeByUser[mgrID] = append(sess.activeByUser[mgrID], UserSession{
+			ID: extraSess, IPAddress: "10.0.0.4", UserAgent: "Extra", LastUsedAt: now, CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		})
+		res2, err := svc.ChangePassword(t.Context(), ChangePasswordInput{
+			UserID:              mgrID,
+			CurrentSessionID:    curSess,
+			CurrentPassword:     "new-password-456",
+			NewPassword:         "another-password-789",
+			RevokeOtherSessions: &keepFalse,
+		})
+		if err != nil || res2.RevokedSessions != 0 {
+			t.Fatalf("ChangePassword(revoke=false) = (%+v, %v), want 0 revoked", res2, err)
+		}
+		if len(sess.activeByUser[mgrID]) != 2 {
+			t.Fatalf("expected 2 sessions preserved, got %d", len(sess.activeByUser[mgrID]))
+		}
+	})
+
+	t.Run("sessions list pins current first and guards self/foreign revocation", func(t *testing.T) {
+		curSess := uuid.Must(uuid.NewV7())
+		other1 := uuid.Must(uuid.NewV7())
+		other2 := uuid.Must(uuid.NewV7())
+		now := time.Now().UTC()
+		sess.activeByUser[mgrID] = []UserSession{
+			{ID: other1, IPAddress: "10.0.0.10", UserAgent: "Other1", LastUsedAt: now, CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+			{ID: curSess, IPAddress: "10.0.0.11", UserAgent: "Cur", LastUsedAt: now.Add(-time.Minute), CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+			{ID: other2, IPAddress: "10.0.0.12", UserAgent: "Other2", LastUsedAt: now.Add(-2 * time.Minute), CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+		}
+
+		list, err := svc.ListProfileSessions(t.Context(), mgrID, curSess)
+		if err != nil {
+			t.Fatalf("ListProfileSessions: %v", err)
+		}
+		if len(list) != 3 || !list[0].IsCurrent || list[0].ID != curSess {
+			t.Fatalf("expected current session pinned first, got %+v", list)
+		}
+
+		// Revoking current session is forbidden (409).
+		err = svc.RevokeProfileSession(t.Context(), RevokeSessionInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			SessionID:        curSess,
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 409 || appErr.Code != ErrCodeProfileCurrentSessionRevoke {
+			t.Fatalf("expected 409 %s, got %v", ErrCodeProfileCurrentSessionRevoke, err)
+		}
+
+		// Revoking unknown/foreign session returns 404.
+		err = svc.RevokeProfileSession(t.Context(), RevokeSessionInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			SessionID:        uuid.Must(uuid.NewV7()),
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 404 || appErr.Code != ErrCodeProfileSessionNotFound {
+			t.Fatalf("expected 404 %s, got %v", ErrCodeProfileSessionNotFound, err)
+		}
+
+		// Revoking another own session succeeds.
+		if err := svc.RevokeProfileSession(t.Context(), RevokeSessionInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			SessionID:        other1,
+		}); err != nil {
+			t.Fatalf("RevokeProfileSession(other1): %v", err)
+		}
+
+		// RevokeOtherProfileSessions revokes remaining non-current session (other2).
+		revoked, err := svc.RevokeOtherProfileSessions(t.Context(), RevokeOtherSessionsInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+		})
+		if err != nil || revoked != 1 {
+			t.Fatalf("RevokeOtherProfileSessions = (%d, %v), want (1, nil)", revoked, err)
+		}
+
+		// A revoked session must receive 401 and cannot revoke the remaining active session.
+		if err := svc.RevokeProfileSession(t.Context(), RevokeSessionInput{
+			UserID:           mgrID,
+			CurrentSessionID: other1,
+			SessionID:        curSess,
+		}); err == nil {
+			t.Fatal("expected 401 when revoked session tries to revoke active session")
+		} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+			t.Fatalf("expected 401, got %v", err)
+		}
+		if _, err := svc.RevokeOtherProfileSessions(t.Context(), RevokeOtherSessionsInput{
+			UserID:           mgrID,
+			CurrentSessionID: other1,
+		}); err == nil {
+			t.Fatal("expected 401 when revoked session tries bulk revoke")
+		} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+			t.Fatalf("expected 401, got %v", err)
+		}
+		if len(sess.activeByUser[mgrID]) != 1 || sess.activeByUser[mgrID][0].ID != curSess {
+			t.Fatalf("legitimate session must remain untouched, got %+v", sess.activeByUser[mgrID])
+		}
+
+		// Disabled account receives 403 AUTH_ACCOUNT_DISABLED even when targeting its own session ID (check order).
+		st.users[mgrID].user.Status = StatusDisabled
+		err = svc.RevokeProfileSession(t.Context(), RevokeSessionInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			SessionID:        curSess,
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 403 || appErr.Code != errCodeAccountDisabled {
+			t.Fatalf("disabled account self-revoke = %v, want 403 %s", err, errCodeAccountDisabled)
+		}
+		st.users[mgrID].user.Status = StatusActive
+	})
+
+	t.Run("change password rejects concurrent password mutation, disable, and soft-delete inside tx lock", func(t *testing.T) {
+		curSess := uuid.Must(uuid.NewV7())
+		now := time.Now().UTC()
+		sess.activeByUser[mgrID] = []UserSession{
+			{ID: curSess, IPAddress: "10.0.0.20", UserAgent: "Cur", LastUsedAt: now, CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+		}
+
+		// Simulate an admin resetting password hash between Verify and WithinTx lock.
+		origHash := st.users[mgrID].passwordHash
+		racedSvc := newServiceWithStore(st, fakeHasher{}, ServiceDeps{
+			Tx: &hookTx{beforeTx: func() {
+				st.users[mgrID].passwordHash = "hash:admin-reset-password"
+			}},
+			Sessions: sess,
+			Audit:    aud,
+		})
+		_, err := racedSvc.ChangePassword(t.Context(), ChangePasswordInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			CurrentPassword:  strings.TrimPrefix(origHash, "hash:"),
+			NewPassword:      "attacker-new-password",
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 400 || appErr.Code != ErrCodeProfileInvalidCurrentPassword {
+			t.Fatalf("concurrent password reset race = %v, want 400 %s", err, ErrCodeProfileInvalidCurrentPassword)
+		}
+		if st.users[mgrID].passwordHash != "hash:admin-reset-password" {
+			t.Fatalf("admin reset hash was overwritten: %q", st.users[mgrID].passwordHash)
+		}
+		lastAudit := aud.entries[len(aud.entries)-1]
+		if lastAudit.Status != auditStatusFailure || lastAudit.Metadata["reason"] != "password_changed_concurrently" {
+			t.Fatalf("expected concurrent failure audit, got %+v", lastAudit)
+		}
+
+		// Simulate an admin disabling the account during Argon2id.
+		disabledSvc := newServiceWithStore(st, fakeHasher{}, ServiceDeps{
+			Tx: &hookTx{beforeTx: func() {
+				st.users[mgrID].user.Status = StatusDisabled
+			}},
+			Sessions: sess,
+			Audit:    aud,
+		})
+		_, err = disabledSvc.ChangePassword(t.Context(), ChangePasswordInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			CurrentPassword:  "admin-reset-password",
+			NewPassword:      "disabled-user-pw-1",
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 403 || appErr.Code != errCodeAccountDisabled {
+			t.Fatalf("concurrent disable race = %v, want 403 %s", err, errCodeAccountDisabled)
+		}
+		st.users[mgrID].user.Status = StatusActive
+
+		// Simulate an admin soft-deleting the account during Argon2id.
+		deletedSvc := newServiceWithStore(st, fakeHasher{}, ServiceDeps{
+			Tx: &hookTx{beforeTx: func() {
+				ts := time.Now().UTC()
+				st.users[mgrID].deletedAt = &ts
+			}},
+			Sessions: sess,
+			Audit:    aud,
+		})
+		_, err = deletedSvc.ChangePassword(t.Context(), ChangePasswordInput{
+			UserID:           mgrID,
+			CurrentSessionID: curSess,
+			CurrentPassword:  "admin-reset-password",
+			NewPassword:      "deleted-user-pw-1",
+		})
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+			t.Fatalf("concurrent soft-delete race = %v, want 401", err)
+		}
+		st.users[mgrID].deletedAt = nil
+	})
+}
+
+type hookTx struct {
+	beforeTx func()
+}
+
+func (h *hookTx) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if h.beforeTx != nil {
+		h.beforeTx()
+	}
+	return fn(ctx)
 }

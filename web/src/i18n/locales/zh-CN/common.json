@@ -24,7 +24,19 @@
     "menus": "菜单管理",
     "auditLogs": "审计日志",
     "files": "文件管理",
-    "settings": "系统设置"
+    "settings": "个人设置",
+    "profile": "个人资料",
+    "security": "安全与密码",
+    "sessions": "活跃会话",
+    "appearance": "外观与语言"
+  },
+  "command": {
+    "placeholder": "输入命令或搜索页面...",
+    "noResults": "未找到匹配结果。",
+    "theme": "主题外观",
+    "light": "浅色",
+    "dark": "深色",
+    "system": "跟随系统"
   },
   "dashboard": {
     "title": "仪表盘",
@@ -34,7 +46,13 @@
   },
   "password": {
     "show": "显示密码",
-    "hide": "隐藏密码"
+    "hide": "隐藏密码",
+    "strength": {
+      "weak": "强度：弱",
+      "fair": "强度：中",
+      "good": "强度：强",
+      "strong": "强度：很强"
+    }
   },
   "table": {
     "filterPlaceholder": "搜索筛选...",

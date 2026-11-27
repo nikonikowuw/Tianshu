@@ -106,6 +106,11 @@
 | `USERS_LAST_SUPER_ADMIN`         | 409  | 最后一名活跃超管保护           |
 | `USERS_SELF_OPERATION_FORBIDDEN` | 409  | 禁止对自身执行删除/禁用/摘除超管 |
 | `USERS_SUPER_ADMIN_PROTECTED`    | 403  | 非超管禁止操作超管账号或授予/撤销超管角色 |
+| `PROFILE_INVALID_CURRENT_PASSWORD` | 400 | 改密时当前密码校验失败（使用 400 避免触发前端 401 刷新重放） |
+| `PROFILE_PASSWORD_UNCHANGED`     | 422  | 新密码与当前密码相同           |
+| `PROFILE_INVALID_AVATAR`         | 422  | 指定的头像文件不存在、非就绪图片或不归属当前用户 |
+| `PROFILE_SESSION_NOT_FOUND`      | 404  | 目标活跃会话不存在、已失效或不属于当前用户 |
+| `PROFILE_CURRENT_SESSION_REVOKE_FORBIDDEN` | 409 | 禁止经会话下线接口吊销当前设备会话（应走 `/auth/logout`） |
 | `ROLES_SYSTEM_IMMUTABLE`         | 409  | 系统角色不可改/删              |
 | `ROLES_CODE_CONFLICT`       | 409  | 角色编码已存在                 |
 | `ROLES_IN_USE`              | 409  | 角色仍绑定用户                 |
@@ -246,7 +251,18 @@
 
 `FileDTO` 字段：`id`、`originalName`、`mimeType`、`category`（`image` / `document`）、`sizeBytes`、`sha256`、`storageDriver`（`local` / `s3`）、`isImage`、`uploader`（`{ id, username }` 或 `null`）、`createdAt` / `updatedAt`（RFC3339）。`SignedFileURLDTO` 字段：`url`、`expiresAt`（RFC3339）。`UploadPolicyDTO` 字段：`maxFileSizeBytes`、`maxAvatarSizeBytes`、`allowedExtensions`（含点号、升序、无重复）。
 
-## 14. 暂不纳入 v1
+## 14. Profile & Sessions 端点契约
+
+以下端点挂载于 `/api/v1/profile`（`identity` 模块），仅要求已登录（Bearer JWT），不要求额外管理员权限码；同时 `POST /api/v1/auth/login` 与 `GET /api/v1/auth/me` 中的 `user` 对象新增兼容字段 `avatarFileId`（UUID 或 `null`）与 `avatarUrl`（短时签名路径或 `null`）。
+
+- `GET /api/v1/profile`：返回 `200 ProfileDTO`（`id`, `username`, `email`, `displayName`, `avatarFileId`, `avatarUrl`, `status`, `lastLoginAt`, `roles`（系统角色名按 `Accept-Language` 翻译）, `createdAt`, `updatedAt`）。
+- `PATCH /api/v1/profile`：请求 `{ displayName?, email?, avatarFileId? }`（均可选；`avatarFileId` 区分缺省不改、`null`/空串清空、UUID 绑定）；绑定头像在事务内对 `files` 行加 `FOR SHARE` 锁并校验 `status='ready'`、安全图片 MIME、归属当前用户且位于 `avatars/` 前缀下（失败返 `422` `avatarFileId: PROFILE_INVALID_AVATAR`）；邮箱唯一冲突返 `409 USERS_EMAIL_CONFLICT`；写 `profile.update` 审计；返回 `200 ProfileDTO`。
+- `PUT /api/v1/profile/password`（限流 5 次/分钟/用户，超限 `429 RATE_LIMITED` + `Retry-After`）：请求 `{ currentPassword, newPassword, revokeOtherSessions? }`（`revokeOtherSessions` 默认 `true`）；旧密码错误写失败审计并返 `400 PROFILE_INVALID_CURRENT_PASSWORD`；新旧相同返 `422` `newPassword: PROFILE_PASSWORD_UNCHANGED`；成功后更新 Argon2id 哈希、按开关吊销除当前会话外的活跃会话并写 `profile.change_password` 审计，返回 `200 { "revokedSessions": N }`。
+- `GET /api/v1/profile/sessions`：返回当前用户全部未吊销且未过期的活跃会话 `{ "items": [{ "id", "ipAddress", "userAgent", "isCurrent", "lastUsedAt", "createdAt", "expiresAt" }] }`（当前会话置顶，绝不返回令牌哈希）。
+- `DELETE /api/v1/profile/sessions/:id`：吊销指定活跃会话（仅限本人）；目标为当前会话返 `409 PROFILE_CURRENT_SESSION_REVOKE_FORBIDDEN`；不存在/已失效/非本人返 `404 PROFILE_SESSION_NOT_FOUND`；写 `profile.session_revoke` 审计；返回 `204`。
+- `DELETE /api/v1/profile/sessions`：一键吊销除当前会话外的所有其他活跃会话，实际吊销 `N > 0` 条时写 `profile.sessions_revoke_others` 审计，返回 `200 { "revokedSessions": N }`。
+
+## 15. 暂不纳入 v1
 
 - 通用 `Idempotency-Key` 重放表：Setup 用数据库咨询锁/唯一约束保证幂等；文件上传用 SHA-256 去重作为后续增强。
 - GraphQL、gRPC 对外接口、批量导入接口。

@@ -127,3 +127,29 @@ func TestStorageValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestAuthSessionRetentionValidation(t *testing.T) {
+	t.Run("rejects negative session_retention_days", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Auth.SessionRetentionDays = -1
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for negative auth.session_retention_days")
+		}
+	})
+
+	t.Run("accepts zero to disable automatic session purge", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Auth.SessionRetentionDays = 0
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected auth.session_retention_days=0 to validate, got %v", err)
+		}
+	})
+
+	t.Run("accepts positive session_retention_days", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Auth.SessionRetentionDays = 14
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected auth.session_retention_days=14 to validate, got %v", err)
+		}
+	})
+}

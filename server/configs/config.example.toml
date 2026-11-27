@@ -55,6 +55,7 @@ jwt_secret = "dev-only-change-me-at-least-32-bytes-secret"
 access_token_ttl = "15m"
 refresh_token_ttl = "168h"
 cookie_secure = false
+session_retention_days = 7
 
 [bootstrap]
 # Optional unattended initial super-admin bootstrap (recommended for automated/public deployments).

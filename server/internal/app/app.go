@@ -49,6 +49,7 @@ type App struct {
 	auditHandler    *audit.Handler
 	files           *files.Service
 	filesHandler    *files.Handler
+	auth            *auth.Service
 	authHandler     *auth.Handler
 	setupHandler    *setup.Handler
 	engine          *gin.Engine
@@ -137,6 +138,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		auditHandler    *audit.Handler
 		filesSvc        *files.Service
 		filesHandler    *files.Handler
+		authSvc         *auth.Service
 		authHandler     *auth.Handler
 		setupHandler    *setup.Handler
 	)
@@ -144,12 +146,14 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		auditSvc = audit.NewService(pool, log)
 		auditHandler = audit.NewHandler(auditSvc)
 
-		identitySessionRevoker := &identitySessionAdapter{}
+		identitySessionMgr := &identitySessionAdapter{}
 		identityAccess := &identityAccessAdapter{}
+		identityFiles := &identityFilesAdapter{}
 		identitySvc = identity.NewService(pool, hasher, identity.ServiceDeps{
 			Tx:       tx,
 			Roles:    identityAccess,
-			Sessions: identitySessionRevoker,
+			Sessions: identitySessionMgr,
+			Files:    identityFiles,
 			Audit:    &identityAuditAdapter{svc: auditSvc},
 			I18n:     bundle,
 			Log:      log,
@@ -183,21 +187,6 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		}
 		setupHandler = setup.NewHandler(setupSvc)
 
-		authSvc := auth.NewService(
-			cfg.Auth,
-			pool,
-			&authIdentityAdapter{svc: identitySvc},
-			&authAccessAdapter{svc: accessSvc},
-			hasher,
-			jwtMgr,
-			tx,
-			memCache,
-			&authAuditAdapter{svc: auditSvc},
-			log,
-		)
-		identitySessionRevoker.svc = authSvc
-		authHandler = auth.NewHandler(authSvc, cfg.CORS.AllowedOrigins)
-
 		signedURLSecret := strings.TrimSpace(cfg.Storage.SignedURLSecret)
 		if signedURLSecret == "" {
 			// Empty falls back to the JWT secret so existing deployments keep working;
@@ -222,7 +211,26 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 				Log:       log,
 			},
 		)
+		identityFiles.svc = filesSvc
 		filesHandler = files.NewHandler(filesSvc)
+
+		authSvc = auth.NewService(
+			cfg.Auth,
+			pool,
+			auth.ServiceDeps{
+				Identity:     &authIdentityAdapter{svc: identitySvc},
+				Access:       &authAccessAdapter{svc: accessSvc},
+				Hasher:       hasher,
+				JWT:          jwtMgr,
+				Tx:           tx,
+				Cache:        memCache,
+				Audit:        &authAuditAdapter{svc: auditSvc},
+				AvatarSigner: &authAvatarSignerAdapter{svc: filesSvc},
+				Log:          log,
+			},
+		)
+		identitySessionMgr.svc = authSvc
+		authHandler = auth.NewHandler(authSvc, cfg.CORS.AllowedOrigins)
 	}
 
 	engine, err := httpserver.NewEngine(httpserver.Options{
@@ -258,6 +266,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		auditHandler:    auditHandler,
 		files:           filesSvc,
 		filesHandler:    filesHandler,
+		auth:            authSvc,
 		authHandler:     authHandler,
 		setupHandler:    setupHandler,
 		engine:          engine,
@@ -296,6 +305,13 @@ func (a *App) Run(ctx context.Context) error {
 		go func() {
 			defer janitorWG.Done()
 			a.runFileOrphanJanitor(janitorCtx)
+		}()
+	}
+	if a.auth != nil && a.cfg.Auth.SessionRetentionDays > 0 {
+		janitorWG.Add(1)
+		go func() {
+			defer janitorWG.Done()
+			a.runSessionCleanupJanitor(janitorCtx)
 		}()
 	}
 
@@ -382,6 +398,29 @@ func (a *App) runFileOrphanJanitor(ctx context.Context) {
 				a.log.Warn("file orphan cleanup failed", "error", err)
 			} else if cleaned > 0 {
 				a.log.Info("file orphan cleanup completed", "cleaned", cleaned)
+			}
+		}
+	}
+}
+
+func (a *App) runSessionCleanupJanitor(ctx context.Context) {
+	const janitorInterval = 6 * time.Hour
+	retention := time.Duration(a.cfg.Auth.SessionRetentionDays) * 24 * time.Hour
+	ticker := time.NewTicker(janitorInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			deleted, err := a.auth.PurgeExpiredSessions(cleanCtx, retention)
+			cancel()
+			if err != nil && !errors.Is(err, context.Canceled) {
+				a.log.Warn("session cleanup failed", "error", err)
+			} else if deleted > 0 {
+				a.log.Info("session cleanup completed", "deleted", deleted)
 			}
 		}
 	}

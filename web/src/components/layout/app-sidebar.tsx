@@ -21,6 +21,7 @@ type AppSidebarProps = {
   navGroups: NavGroupType[]
   user: LayoutUser
   onSignOut: () => Promise<void> | void
+  onAvatarError?: () => void
 }
 
 export function AppSidebar({
@@ -29,6 +30,7 @@ export function AppSidebar({
   navGroups,
   user,
   onSignOut,
+  onAvatarError,
 }: AppSidebarProps) {
   const { collapsible, variant } = useLayout()
 
@@ -63,7 +65,11 @@ export function AppSidebar({
         ))}
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={user} onSignOut={onSignOut} />
+        <NavUser
+          user={user}
+          onSignOut={onSignOut}
+          onAvatarError={onAvatarError}
+        />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

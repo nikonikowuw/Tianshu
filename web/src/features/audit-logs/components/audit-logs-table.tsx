@@ -201,6 +201,19 @@ export function AuditLogsTable({
           { label: t('actions.fileUpload'), value: 'file.upload' },
           { label: t('actions.fileUploadAvatar'), value: 'file.upload_avatar' },
           { label: t('actions.fileDelete'), value: 'file.delete' },
+          { label: t('actions.profileUpdate'), value: 'profile.update' },
+          {
+            label: t('actions.profileChangePassword'),
+            value: 'profile.change_password',
+          },
+          {
+            label: t('actions.profileSessionRevoke'),
+            value: 'profile.session_revoke',
+          },
+          {
+            label: t('actions.profileSessionsRevokeOthers'),
+            value: 'profile.sessions_revoke_others',
+          },
         ],
       },
       {

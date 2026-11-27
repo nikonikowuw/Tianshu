@@ -125,7 +125,7 @@
 - 索引：`idx_files_uploader_id_created_at`、`idx_files_sha256`、`idx_files_status`、`idx_files_status_created_at`（`(status, created_at DESC, id DESC)`）、`idx_files_original_name_trgm`（`gin (original_name gin_trgm_ops)`，支撑前导通配搜索）、`idx_files_cleanup_scan`（`(storage_driver, status, updated_at, id)` 部分索引，支撑 Janitor 扫描）；`users` 表另配部分索引 `idx_users_avatar_file_id` 加速引用检查。
 - `storage_driver` 必须参与读路径；不能只按全局配置选驱动，否则切换 local/s3 后旧文件读不到。
 - `idx_files_original_name_trgm` 依赖 `pg_trgm`：迁移会优先在 `public` 创建扩展；若迁移角色无 `CREATE EXTENSION` 权限，需由 DBA 预装 `pg_trgm`，否则迁移失败而不是静默退回慢查询。
-- 未来实现 profile 头像更新时，必须在同一事务内对目标 `files` 行加 `FOR SHARE/UPDATE`，避免与文件删除并发时依赖 `ON DELETE SET NULL` 静默清空头像。
+- profile 头像绑定更新在同一事务内对目标 `files` 行加 `FOR SHARE` 锁（与 `files.Delete` 的 `FOR UPDATE` 互斥）并校验 `status = 'ready'`、安全图片 MIME、归属当前用户及 `avatars/` 前缀，避免并发删文件时依赖 `ON DELETE SET NULL` 静默清空头像或产生跨用户 IDOR。
 
 ## 5. 删除与引用策略
 
@@ -179,7 +179,7 @@
 
 ## 9. 清理与保留
 
-- `user_sessions` / `refresh_token_history`：定期删除过期/已吊销超过 N 天的记录；保留窗口可配置。
+- `user_sessions` / `refresh_token_history`：默认保留过期后 **7 天**（`auth.session_retention_days`，`0` 表示不自动清理），由 janitor 按批次（5000 行）删除 `expires_at < now() - retention` 的记录；已吊销但尚未超过保留期的会话继续保留至过期后，以保持刷新令牌重放检测覆盖完整生命周期。
 - `audit_logs`：默认保留 **180 天**（`audit.retention_days`，`0` 表示不自动清理），MVP 由 janitor 按批次（如 5000 行）删除；MVP 不分区，单表达千万级或按月归档时再迁移为按 `created_at` 月分区。
 - `files`：清理 `pending` 超时记录与孤儿对象；删除失败进入补偿队列/重试。
 - 软删除表：查询默认排除 `deleted_at is not null`；`users` 唯一索引采用 `WHERE deleted_at IS NULL` 部分唯一索引，其余软删除表按业务场景明确是否排除已删除行。

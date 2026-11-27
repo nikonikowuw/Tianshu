@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -10,6 +11,25 @@ import (
 	"tianshu/internal/shared/authctx"
 	"tianshu/internal/shared/pagination"
 )
+
+type optionalNullableString struct {
+	Set   bool
+	Value *string
+}
+
+func (o *optionalNullableString) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	o.Value = &s
+	return nil
+}
 
 type listUsersRequest struct {
 	Page     *int     `form:"page" binding:"omitempty,min=1"`
@@ -36,6 +56,18 @@ type updateUserRequest struct {
 	Status      *string   `json:"status" binding:"omitempty,oneof=active disabled"`
 	Password    *string   `json:"password" binding:"omitempty,min=8,max=128"`
 	RoleIDs     *[]string `json:"roleIds"`
+}
+
+type updateProfileRequest struct {
+	Email        *string                `json:"email" binding:"omitempty,email,max=255"`
+	DisplayName  *string                `json:"displayName" binding:"omitempty,max=100"`
+	AvatarFileID optionalNullableString `json:"avatarFileId"`
+}
+
+type changePasswordRequest struct {
+	CurrentPassword     string `json:"currentPassword" binding:"required,max=128"`
+	NewPassword         string `json:"newPassword" binding:"required,min=8,max=128"`
+	RevokeOtherSessions *bool  `json:"revokeOtherSessions"`
 }
 
 func bindListUsersRequest(c *gin.Context) (UserListFilter, error) {
@@ -101,7 +133,7 @@ func bindListUsersRequest(c *gin.Context) (UserListFilter, error) {
 	}, nil
 }
 
-func parseUserIDParam(c *gin.Context) (uuid.UUID, error) {
+func parseIDParam(c *gin.Context) (uuid.UUID, error) {
 	raw := strings.TrimSpace(c.Param("id"))
 	parsed, err := uuid.Parse(raw)
 	if err != nil {
@@ -138,4 +170,29 @@ func extractActorAndMeta(c *gin.Context) (*uuid.UUID, RequestMeta) {
 		IPAddress: c.ClientIP(),
 		UserAgent: c.Request.UserAgent(),
 	}
+}
+
+func extractAuthIdentityAndMeta(c *gin.Context) (authctx.Identity, RequestMeta, bool) {
+	identity, ok := authctx.IdentityFromContext(c.Request.Context())
+	return identity, RequestMeta{
+		IPAddress: c.ClientIP(),
+		UserAgent: c.Request.UserAgent(),
+	}, ok
+}
+
+func parseOptionalAvatarFileID(opt optionalNullableString) (*uuid.UUID, bool, error) {
+	if !opt.Set {
+		return nil, false, nil
+	}
+	if opt.Value == nil || strings.TrimSpace(*opt.Value) == "" {
+		return nil, true, nil
+	}
+	parsed, err := uuid.Parse(strings.TrimSpace(*opt.Value))
+	if err != nil || parsed == uuid.Nil {
+		return nil, false, apperr.Validation([]apperr.FieldError{{
+			Field:   "avatarFileId",
+			Message: ErrCodeProfileInvalidAvatar,
+		}})
+	}
+	return &parsed, false, nil
 }

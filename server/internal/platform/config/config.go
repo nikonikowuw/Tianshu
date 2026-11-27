@@ -109,12 +109,13 @@ func (s S3StorageConfig) Configured() bool {
 		strings.TrimSpace(s.SecretKey) != ""
 }
 
-// AuthConfig defines JWT and refresh token parameters.
+// AuthConfig defines JWT, refresh token, and expired session retention parameters.
 type AuthConfig struct {
-	JWTSecret       string        `koanf:"jwt_secret"`
-	AccessTokenTTL  time.Duration `koanf:"access_token_ttl"`
-	RefreshTokenTTL time.Duration `koanf:"refresh_token_ttl"`
-	CookieSecure    bool          `koanf:"cookie_secure"`
+	JWTSecret            string        `koanf:"jwt_secret"`
+	AccessTokenTTL       time.Duration `koanf:"access_token_ttl"`
+	RefreshTokenTTL      time.Duration `koanf:"refresh_token_ttl"`
+	CookieSecure         bool          `koanf:"cookie_secure"`
+	SessionRetentionDays int           `koanf:"session_retention_days"`
 }
 
 // BootstrapConfig configures optional unattended initial super-admin creation via environment variables.
@@ -180,10 +181,11 @@ func Default() Config {
 			},
 		},
 		Auth: AuthConfig{
-			JWTSecret:       defaultDevJWTSecret,
-			AccessTokenTTL:  15 * time.Minute,
-			RefreshTokenTTL: 7 * 24 * time.Hour,
-			CookieSecure:    false,
+			JWTSecret:            defaultDevJWTSecret,
+			AccessTokenTTL:       15 * time.Minute,
+			RefreshTokenTTL:      7 * 24 * time.Hour,
+			CookieSecure:         false,
+			SessionRetentionDays: 7,
 		},
 		Audit: AuditConfig{
 			RetentionDays: 180,
@@ -301,6 +303,10 @@ func (c Config) Validate() error {
 				return errors.New("cors.allowed_origins must not contain '*' when credentials are enabled")
 			}
 		}
+	}
+
+	if c.Auth.SessionRetentionDays < 0 {
+		return errors.New("auth.session_retention_days must be >= 0")
 	}
 
 	if c.Audit.RetentionDays < 0 {

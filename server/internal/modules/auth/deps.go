@@ -2,8 +2,12 @@ package auth
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/google/uuid"
+
+	"tianshu/internal/platform/cache"
+	"tianshu/internal/platform/security"
 )
 
 // UserCredentials holds internal credential fields supplied by the identity adapter.
@@ -59,4 +63,22 @@ type AuditEntry struct {
 // AuditRecorder appends audit events without coupling auth to the audit module.
 type AuditRecorder interface {
 	Record(ctx context.Context, entry AuditEntry) error
+}
+
+// AvatarURLSigner mints short-lived inline signed URLs for user avatars without coupling auth to files.
+type AvatarURLSigner interface {
+	SignAvatarURL(ctx context.Context, fileID uuid.UUID) (string, error)
+}
+
+// ServiceDeps groups external collaborators injected into auth.Service at construction time.
+type ServiceDeps struct {
+	Identity     IdentityProvider
+	Access       AccessProvider
+	Hasher       PasswordVerifier
+	JWT          *security.JWTManager
+	Tx           TxRunner
+	Cache        cache.Cache
+	Audit        AuditRecorder
+	AvatarSigner AvatarURLSigner
+	Log          *slog.Logger
 }

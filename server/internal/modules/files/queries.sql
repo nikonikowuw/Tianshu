@@ -41,6 +41,12 @@ FROM files
 WHERE id = $1
 FOR UPDATE;
 
+-- name: GetFileByIDForShare :one
+SELECT id, uploader_id, storage_driver, object_key, original_name, mime_type, size_bytes, sha256, status, created_at, updated_at
+FROM files
+WHERE id = $1
+FOR SHARE;
+
 -- name: ClaimExpiredPendingFile :execrows
 UPDATE files
 SET status = 'deleting',

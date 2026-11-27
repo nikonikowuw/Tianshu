@@ -8,11 +8,23 @@ import (
 
 // User represents the authenticated user profile returned in login/me responses.
 type User struct {
-	ID          uuid.UUID
-	Username    string
-	Email       string
-	DisplayName string
-	Status      string
+	ID           uuid.UUID
+	Username     string
+	Email        string
+	DisplayName  string
+	AvatarFileID *uuid.UUID
+	AvatarURL    *string
+	Status       string
+}
+
+// ActiveSession is the safe read-only projection of an active user session (never exposes token hashes).
+type ActiveSession struct {
+	ID         uuid.UUID
+	IPAddress  string
+	UserAgent  string
+	LastUsedAt time.Time
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
 }
 
 // LoginInput carries credentials and client metadata for authentication.

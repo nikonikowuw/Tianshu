@@ -21,12 +21,13 @@ import (
 )
 
 const (
-	userStatusActive        = "active"
-	userStatusDisabled      = "disabled"
-	refreshGraceWindow      = 45 * time.Second
-	maxLoginFailures        = 10
-	loginCooldownDuration   = 15 * time.Minute
-	loginFailWindowDuration = 15 * time.Minute
+	userStatusActive         = "active"
+	userStatusDisabled       = "disabled"
+	refreshGraceWindow       = 45 * time.Second
+	maxLoginFailures         = 10
+	loginCooldownDuration    = 15 * time.Minute
+	loginFailWindowDuration  = 15 * time.Minute
+	defaultSessionPurgeBatch = int32(5000)
 )
 
 type loginFailureState struct {
@@ -36,48 +37,29 @@ type loginFailureState struct {
 
 // Service implements authentication, session lifecycle, token rotation, replay detection, and soft cooldown.
 type Service struct {
-	cfg      config.AuthConfig
-	store    store
-	identity IdentityProvider
-	access   AccessProvider
-	hasher   PasswordVerifier
-	jwt      *security.JWTManager
-	tx       TxRunner
-	cache    cache.Cache
-	audit    AuditRecorder
-	log      *slog.Logger
-	now      func() time.Time
-	failMu   sync.Mutex
+	cfg            config.AuthConfig
+	store          store
+	identity       IdentityProvider
+	access         AccessProvider
+	hasher         PasswordVerifier
+	jwt            *security.JWTManager
+	tx             TxRunner
+	cache          cache.Cache
+	audit          AuditRecorder
+	avatarSigner   AvatarURLSigner
+	log            *slog.Logger
+	now            func() time.Time
+	purgeBatchSize int32
+	failMu         sync.Mutex
 }
 
 // NewService creates a PostgreSQL-backed auth Service.
-func NewService(
-	cfg config.AuthConfig,
-	pool *pgxpool.Pool,
-	identity IdentityProvider,
-	access AccessProvider,
-	hasher PasswordVerifier,
-	jwtMgr *security.JWTManager,
-	tx TxRunner,
-	c cache.Cache,
-	audit AuditRecorder,
-	log *slog.Logger,
-) *Service {
-	return newServiceWithStore(cfg, newStore(pool), identity, access, hasher, jwtMgr, tx, c, audit, log)
+func NewService(cfg config.AuthConfig, pool *pgxpool.Pool, deps ServiceDeps) *Service {
+	return newServiceWithStore(cfg, newStore(pool), deps)
 }
 
-func newServiceWithStore(
-	cfg config.AuthConfig,
-	s store,
-	identity IdentityProvider,
-	access AccessProvider,
-	hasher PasswordVerifier,
-	jwtMgr *security.JWTManager,
-	tx TxRunner,
-	c cache.Cache,
-	audit AuditRecorder,
-	log *slog.Logger,
-) *Service {
+func newServiceWithStore(cfg config.AuthConfig, s store, deps ServiceDeps) *Service {
+	log := deps.Log
 	if log == nil {
 		log = slog.Default()
 	}
@@ -85,17 +67,19 @@ func newServiceWithStore(
 		cfg.RefreshTokenTTL = 7 * 24 * time.Hour
 	}
 	return &Service{
-		cfg:      cfg,
-		store:    s,
-		identity: identity,
-		access:   access,
-		hasher:   hasher,
-		jwt:      jwtMgr,
-		tx:       tx,
-		cache:    c,
-		audit:    audit,
-		log:      log,
-		now:      time.Now,
+		cfg:            cfg,
+		store:          s,
+		identity:       deps.Identity,
+		access:         deps.Access,
+		hasher:         deps.Hasher,
+		jwt:            deps.JWT,
+		tx:             deps.Tx,
+		cache:          deps.Cache,
+		audit:          deps.Audit,
+		avatarSigner:   deps.AvatarSigner,
+		log:            log,
+		now:            time.Now,
+		purgeBatchSize: defaultSessionPurgeBatch,
 	}
 }
 
@@ -267,11 +251,14 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (LoginResult, err
 		return LoginResult{}, err
 	}
 
+	user := creds.User
+	user.AvatarURL = s.resolveAvatarURL(ctx, user.AvatarFileID)
+
 	return LoginResult{
 		AccessToken:  accessToken,
 		RefreshToken: rawRefresh,
 		ExpiresAt:    expiresAt,
-		User:         creds.User,
+		User:         user,
 		Roles:        nonNilStrings(ua.Roles),
 		Permissions:  nonNilStrings(ua.Permissions),
 	}, nil
@@ -588,6 +575,8 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (MeResult, error) {
 		return MeResult{}, err
 	}
 
+	user.AvatarURL = s.resolveAvatarURL(ctx, user.AvatarFileID)
+
 	return MeResult{
 		User:        user,
 		Roles:       nonNilStrings(ua.Roles),
@@ -601,6 +590,118 @@ func (s *Service) RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) e
 		return apperr.Internal(fmt.Errorf("revoke all user sessions for %s: %w", userID, err))
 	}
 	return nil
+}
+
+// ListActiveUserSessions returns non-revoked, non-expired sessions owned by userID.
+func (s *Service) ListActiveUserSessions(ctx context.Context, userID uuid.UUID) ([]ActiveSession, error) {
+	items, err := s.store.ListActiveUserSessions(ctx, userID)
+	if err != nil {
+		return nil, apperr.Internal(fmt.Errorf("list active user sessions for %s: %w", userID, err))
+	}
+	if items == nil {
+		return make([]ActiveSession, 0), nil
+	}
+	return items, nil
+}
+
+// IsSessionActive reports whether sessionID belongs to userID and is neither revoked nor expired.
+func (s *Service) IsSessionActive(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	if userID == uuid.Nil || sessionID == uuid.Nil {
+		return false, nil
+	}
+	active, err := s.store.IsUserSessionActive(ctx, userID, sessionID)
+	if err != nil {
+		return false, apperr.Internal(fmt.Errorf("check active session %s for %s: %w", sessionID, userID, err))
+	}
+	return active, nil
+}
+
+// LockActiveSessionForShare locks sessionID FOR SHARE within an active transaction and reports whether it is active.
+func (s *Service) LockActiveSessionForShare(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	if userID == uuid.Nil || sessionID == uuid.Nil {
+		return false, nil
+	}
+	active, err := s.store.LockActiveUserSessionForShare(ctx, userID, sessionID)
+	if err != nil {
+		return false, apperr.Internal(fmt.Errorf("lock active session %s for %s: %w", sessionID, userID, err))
+	}
+	return active, nil
+}
+
+// RevokeUserSession revokes a single active session owned by userID and reports whether a row was revoked.
+func (s *Service) RevokeUserSession(ctx context.Context, userID, sessionID uuid.UUID) (bool, error) {
+	revoked, err := s.store.RevokeUserSessionByID(ctx, userID, sessionID)
+	if err != nil {
+		return false, apperr.Internal(fmt.Errorf("revoke session %s for %s: %w", sessionID, userID, err))
+	}
+	return revoked, nil
+}
+
+// RevokeOtherUserSessions revokes all active sessions owned by userID except keepSessionID.
+func (s *Service) RevokeOtherUserSessions(ctx context.Context, userID, keepSessionID uuid.UUID) (int64, error) {
+	revoked, err := s.store.RevokeOtherUserSessions(ctx, userID, keepSessionID)
+	if err != nil {
+		return 0, apperr.Internal(fmt.Errorf("revoke other sessions for %s: %w", userID, err))
+	}
+	return revoked, nil
+}
+
+// PurgeExpiredSessions deletes refresh token history and user sessions that expired earlier than retention ago.
+// Keeping revoked sessions until their original expires_at preserves replay detection for the full token lifetime.
+// A non-positive retention disables cleanup and returns 0, nil.
+func (s *Service) PurgeExpiredSessions(ctx context.Context, retention time.Duration) (int64, error) {
+	if retention <= 0 {
+		return 0, nil
+	}
+	batchSize := s.purgeBatchSize
+	if batchSize <= 0 {
+		batchSize = defaultSessionPurgeBatch
+	}
+	cutoff := s.now().UTC().Add(-retention)
+
+	var totalDeleted int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return totalDeleted, err
+		}
+		deleted, err := s.store.DeleteExpiredRefreshTokenHistoryBatch(ctx, cutoff, batchSize)
+		if err != nil {
+			return totalDeleted, fmt.Errorf("delete expired refresh token history batch: %w", err)
+		}
+		totalDeleted += deleted
+		if deleted < int64(batchSize) {
+			break
+		}
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return totalDeleted, err
+		}
+		deleted, err := s.store.DeleteExpiredUserSessionsBatch(ctx, cutoff, batchSize)
+		if err != nil {
+			return totalDeleted, fmt.Errorf("delete expired user sessions batch: %w", err)
+		}
+		totalDeleted += deleted
+		if deleted < int64(batchSize) {
+			break
+		}
+	}
+	return totalDeleted, nil
+}
+
+func (s *Service) resolveAvatarURL(ctx context.Context, fileID *uuid.UUID) *string {
+	if s.avatarSigner == nil || fileID == nil || *fileID == uuid.Nil {
+		return nil
+	}
+	url, err := s.avatarSigner.SignAvatarURL(ctx, *fileID)
+	if err != nil {
+		s.log.Warn("sign avatar url failed", "file_id", fileID.String(), "error", err)
+		return nil
+	}
+	if strings.TrimSpace(url) == "" {
+		return nil
+	}
+	return &url
 }
 
 func (s *Service) checkLoginCooldown(ctx context.Context, ip, identifier string) int {

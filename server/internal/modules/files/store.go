@@ -23,6 +23,7 @@ type store interface {
 	MarkFileStatus(ctx context.Context, id uuid.UUID, status string) error
 	GetReadyFileByID(ctx context.Context, id uuid.UUID) (File, error)
 	GetFileByIDForUpdate(ctx context.Context, id uuid.UUID) (File, error)
+	GetFileByIDForShare(ctx context.Context, id uuid.UUID) (File, error)
 	ClaimExpiredPendingFile(ctx context.Context, id uuid.UUID, pendingCutoff time.Time) (bool, error)
 	TouchCleanupCandidate(ctx context.Context, id uuid.UUID) error
 	DeleteFileRow(ctx context.Context, id uuid.UUID) error
@@ -93,6 +94,17 @@ func (s *pgStore) GetReadyFileByID(ctx context.Context, id uuid.UUID) (File, err
 
 func (s *pgStore) GetFileByIDForUpdate(ctx context.Context, id uuid.UUID) (File, error) {
 	row, err := s.queries(ctx).GetFileByIDForUpdate(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return File{}, errRecordNotFound
+	}
+	if err != nil {
+		return File{}, err
+	}
+	return mapFileRow(row), nil
+}
+
+func (s *pgStore) GetFileByIDForShare(ctx context.Context, id uuid.UUID) (File, error) {
+	row, err := s.queries(ctx).GetFileByIDForShare(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return File{}, errRecordNotFound
 	}

@@ -21,16 +21,21 @@ const postMock = vi.fn()
 const deleteMock = vi.fn()
 const defaultsMock: { baseURL?: string } = { baseURL: '/api/v1' }
 
-vi.mock('@/lib/api/client', () => ({
-  apiClient: {
-    get defaults() {
-      return defaultsMock
+vi.mock('@/lib/api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/client')>()
+  return {
+    apiClient: {
+      get defaults() {
+        return defaultsMock
+      },
+      get: (...args: unknown[]) => getMock(...args),
+      post: (...args: unknown[]) => postMock(...args),
+      delete: (...args: unknown[]) => deleteMock(...args),
     },
-    get: (...args: unknown[]) => getMock(...args),
-    post: (...args: unknown[]) => postMock(...args),
-    delete: (...args: unknown[]) => deleteMock(...args),
-  },
-}))
+    resolveApiUrl: (url: string) =>
+      actual.resolveApiUrl(url, defaultsMock.baseURL),
+  }
+})
 
 const sampleImage: FileItem = {
   id: '01950000-0000-7000-8000-000000001001',
