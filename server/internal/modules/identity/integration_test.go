@@ -455,7 +455,7 @@ func TestProfileAvatarLockPasswordAndSessionInvalidationPostgres(t *testing.T) {
 		t.Fatalf("NewJWTManager: %v", err)
 	}
 
-	auditSvc := audit.NewService(pool, log)
+	auditSvc := audit.NewService(pool)
 	sessAdapter := &authSessionAdapter{}
 	filesAdapter := &filesAvatarAdapter{}
 	idSvc := identity.NewService(pool, hasher, identity.ServiceDeps{

@@ -1,10 +1,14 @@
 package audit
 
 import (
+	"bytes"
+	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -34,19 +38,24 @@ const (
 const (
 	defaultRetentionBatchSize int32 = 5000
 	maxUserAgentBytes               = 512
+	maxRedactDepth                  = 16
 	redactedPlaceholder             = "[REDACTED]"
 )
 
 var sensitiveKeyFragments = []string{
 	"password",
 	"passwd",
+	"passphrase",
+	"passcode",
 	"secret",
 	"token",
 	"cookie",
 	"authorization",
 	"credential",
 	"apikey",
+	"accesskey",
 	"privatekey",
+	"signedurl",
 	"jwt",
 }
 
@@ -100,22 +109,44 @@ func RedactMetadata(src map[string]any) map[string]any {
 	if len(src) == 0 {
 		return map[string]any{}
 	}
+	return redactMap(src, 0)
+}
+
+func redactMap(src map[string]any, depth int) map[string]any {
+	if len(src) == 0 {
+		return map[string]any{}
+	}
 	out := make(map[string]any, len(src))
 	for k, v := range src {
 		if isSensitiveKey(k) {
 			out[k] = redactedPlaceholder
 			continue
 		}
-		out[k] = redactValue(v)
+		out[k] = redactValue(v, depth+1)
 	}
 	return out
 }
 
-func redactValue(v any) any {
+func redactValue(v any, depth int) any {
+	if v == nil {
+		return nil
+	}
 	switch typed := v.(type) {
+	case string, bool,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64,
+		json.Number, time.Time, uuid.UUID:
+		return v
 	case map[string]any:
-		return RedactMetadata(typed)
+		if depth >= maxRedactDepth {
+			return redactedPlaceholder
+		}
+		return redactMap(typed, depth)
 	case map[string]string:
+		if depth >= maxRedactDepth {
+			return redactedPlaceholder
+		}
 		out := make(map[string]any, len(typed))
 		for k, val := range typed {
 			if isSensitiveKey(k) {
@@ -126,29 +157,58 @@ func redactValue(v any) any {
 		}
 		return out
 	case []any:
+		if depth >= maxRedactDepth {
+			return redactedPlaceholder
+		}
 		out := make([]any, len(typed))
 		for i, item := range typed {
-			out[i] = redactValue(item)
+			out[i] = redactValue(item, depth+1)
 		}
 		return out
 	case []map[string]any:
+		if depth >= maxRedactDepth {
+			return redactedPlaceholder
+		}
 		out := make([]any, len(typed))
 		for i, item := range typed {
-			out[i] = RedactMetadata(item)
+			if item == nil {
+				continue
+			}
+			out[i] = redactMap(item, depth+1)
 		}
 		return out
 	case []string:
 		return slices.Clone(typed)
 	default:
+		if depth >= maxRedactDepth {
+			return redactedPlaceholder
+		}
+		return redactViaJSON(v, depth)
+	}
+}
+
+func redactViaJSON(v any, depth int) any {
+	raw, err := json.Marshal(v)
+	if err != nil {
 		return v
 	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var decoded any
+	if err := dec.Decode(&decoded); err != nil {
+		return v
+	}
+	return redactValue(decoded, depth)
 }
 
 func isSensitiveKey(key string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(key))
 	normalized = strings.ReplaceAll(normalized, "_", "")
 	normalized = strings.ReplaceAll(normalized, "-", "")
-	if normalized == "pwd" {
+	if normalized == "" {
+		return false
+	}
+	if strings.HasPrefix(normalized, "pwd") || strings.HasSuffix(normalized, "pwd") || hasWordToken(key, "pwd") {
 		return true
 	}
 	for _, frag := range sensitiveKeyFragments {
@@ -159,6 +219,39 @@ func isSensitiveKey(key string) bool {
 	return false
 }
 
+func hasWordToken(key, target string) bool {
+	var token strings.Builder
+	flush := func() bool {
+		if token.Len() == 0 {
+			return false
+		}
+		matched := token.String() == target
+		token.Reset()
+		return matched
+	}
+
+	var prevLower bool
+	for _, r := range key {
+		switch {
+		case !unicode.IsLetter(r) && !unicode.IsDigit(r):
+			if flush() {
+				return true
+			}
+			prevLower = false
+		case unicode.IsUpper(r):
+			if prevLower && flush() {
+				return true
+			}
+			token.WriteRune(unicode.ToLower(r))
+			prevLower = false
+		default:
+			token.WriteRune(unicode.ToLower(r))
+			prevLower = unicode.IsLower(r)
+		}
+	}
+	return flush()
+}
+
 func cloneMetadata(src map[string]any) map[string]any {
 	if len(src) == 0 {
 		return map[string]any{}
@@ -166,10 +259,25 @@ func cloneMetadata(src map[string]any) map[string]any {
 	return maps.Clone(src)
 }
 
-func truncateUA(ua string) string {
-	trimmed := strings.TrimSpace(ua)
-	if len(trimmed) > maxUserAgentBytes {
-		return trimmed[:maxUserAgentBytes]
+func sanitizeUTF8(raw string) string {
+	if raw == "" {
+		return ""
 	}
-	return trimmed
+	cleaned := strings.ReplaceAll(raw, "\x00", "")
+	if !utf8.ValidString(cleaned) {
+		cleaned = strings.ToValidUTF8(cleaned, "")
+	}
+	return strings.TrimSpace(cleaned)
+}
+
+func truncateUA(ua string) string {
+	cleaned := sanitizeUTF8(ua)
+	if len(cleaned) <= maxUserAgentBytes {
+		return cleaned
+	}
+	cut := maxUserAgentBytes
+	for cut > 0 && !utf8.RuneStart(cleaned[cut]) {
+		cut--
+	}
+	return cleaned[:cut]
 }

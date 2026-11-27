@@ -2,11 +2,14 @@ package audit
 
 import (
 	"context"
-	"io"
+	"encoding/json"
+	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -19,6 +22,9 @@ import (
 type fakeStore struct {
 	entries        []Entry
 	deletedBatches []int
+	countErr       error
+	listErr        error
+	deleteErr      error
 }
 
 func (f *fakeStore) InsertAuditLog(_ context.Context, entry Entry) error {
@@ -28,10 +34,16 @@ func (f *fakeStore) InsertAuditLog(_ context.Context, entry Entry) error {
 }
 
 func (f *fakeStore) CountAuditLogs(_ context.Context, filter ListFilter) (int64, error) {
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
 	return int64(len(f.filterEntries(filter))), nil
 }
 
 func (f *fakeStore) ListAuditLogs(_ context.Context, filter ListFilter) ([]Entry, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	matched := f.filterEntries(filter)
 	start := min(int(filter.Pagination.Offset()), len(matched))
 	end := min(start+int(filter.Pagination.Limit()), len(matched))
@@ -39,6 +51,9 @@ func (f *fakeStore) ListAuditLogs(_ context.Context, filter ListFilter) ([]Entry
 }
 
 func (f *fakeStore) DeleteExpiredBatch(_ context.Context, cutoff time.Time, limit int32) (int64, error) {
+	if f.deleteErr != nil {
+		return 0, f.deleteErr
+	}
 	var remaining []Entry
 	var deleted int64
 	for _, entry := range f.entries {
@@ -56,6 +71,11 @@ func (f *fakeStore) DeleteExpiredBatch(_ context.Context, cutoff time.Time, limi
 func (f *fakeStore) filterEntries(filter ListFilter) []Entry {
 	var out []Entry
 	for _, e := range f.entries {
+		if filter.ActorID != nil {
+			if e.ActorID == nil || *e.ActorID != *filter.ActorID {
+				continue
+			}
+		}
 		if len(filter.Statuses) > 0 && !slices.Contains(filter.Statuses, e.Status) {
 			continue
 		}
@@ -78,11 +98,49 @@ func (f *fakeStore) filterEntries(filter ListFilter) []Entry {
 	return out
 }
 
+type namedMetaMap map[string]any
+
+type nestedSecretPayload struct {
+	Username   string `json:"username"`
+	NewPwd     string `json:"newPwd"`
+	Passphrase string `json:"passphrase"`
+	SignedURL  string `json:"signedUrl"`
+	Inner      *struct {
+		AccessKey string `json:"access_key_id"`
+		SafeNote  string `json:"safeNote"`
+	} `json:"inner"`
+}
+
 func TestRedactMetadataAndRecord(t *testing.T) {
 	st := &fakeStore{}
-	svc := newServiceWithStore(st, logger.New("test", "error", io.Discard))
+	svc := newServiceWithStore(st)
 
 	actorID := uuid.Must(uuid.NewV7())
+	headers := http.Header{
+		"Authorization": {"Bearer secret-header"},
+		"Cookie":        {"refresh=secret-cookie"},
+		"X-Trace":       {"trace-1"},
+	}
+	named := namedMetaMap{
+		"old_pwd":        "legacy-secret",
+		"userPwdConfirm": "confirm-secret",
+		"passcode":       "123456",
+		"displayName":    "Admin User",
+		"cwd":            "/srv/app",
+	}
+	payload := nestedSecretPayload{
+		Username:   "admin",
+		NewPwd:     "brand-new-secret",
+		Passphrase: "key-passphrase",
+		SignedURL:  "/api/v1/files/signed/bearer-tok",
+		Inner: &struct {
+			AccessKey string `json:"access_key_id"`
+			SafeNote  string `json:"safeNote"`
+		}{
+			AccessKey: "AKIA-SECRET",
+			SafeNote:  "visible",
+		},
+	}
 	inputMeta := map[string]any{
 		"username":     "admin",
 		"password":     "super-secret",
@@ -94,28 +152,42 @@ func TestRedactMetadataAndRecord(t *testing.T) {
 		"items": []any{
 			map[string]any{"authorization": "Bearer abc", "ok": true},
 		},
+		"headers":    headers,
+		"named":      named,
+		"structBody": payload,
+		"structPtr":  &payload,
+		"mapSlice":   []map[string]string{{"token": "tok-slice", "label": "ok"}},
+		"rawJson":    json.RawMessage(`{"password":"raw-secret","nested":[{"cookie":"c=1","keep":"yes"}]}`),
 	}
 
 	ctx := logger.WithRequestID(t.Context(), "req_audit_001")
 	err := svc.Record(ctx, RecordInput{
 		ActorID:       &actorID,
-		ActorUsername: "admin",
+		ActorUsername: "admin\x00\xff",
 		Action:        "auth.login",
 		Resource:      "session",
 		ResourceID:    "sess-1",
 		Status:        StatusFailure,
 		IPAddress:     "127.0.0.1",
-		UserAgent:     strings.Repeat("x", 700),
+		UserAgent:     "a" + strings.Repeat("🚀", 140) + "\x00\xff",
 		Metadata:      inputMeta,
 	})
 	if err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
 
-	// Original caller map must not be mutated.
+	// Original caller maps/headers must not be mutated and must not alias persisted metadata.
 	if inputMeta["password"] != "super-secret" {
 		t.Fatal("input metadata was mutated")
 	}
+	if headers.Get("Authorization") != "Bearer secret-header" {
+		t.Fatal("input http.Header was mutated")
+	}
+	if named["old_pwd"] != "legacy-secret" {
+		t.Fatal("input named map was mutated")
+	}
+	headers.Set("X-Trace", "mutated-after-record")
+	named["displayName"] = "mutated-after-record"
 
 	if len(st.entries) != 1 {
 		t.Fatalf("entries count = %d, want 1", len(st.entries))
@@ -124,8 +196,14 @@ func TestRedactMetadataAndRecord(t *testing.T) {
 	if got.RequestID != "req_audit_001" {
 		t.Fatalf("RequestID = %q, want req_audit_001", got.RequestID)
 	}
-	if len(got.UserAgent) != maxUserAgentBytes {
-		t.Fatalf("UserAgent length = %d, want %d", len(got.UserAgent), maxUserAgentBytes)
+	if got.ActorUsername != "admin" || !utf8.ValidString(got.ActorUsername) {
+		t.Fatalf("ActorUsername = %q, want sanitized 'admin'", got.ActorUsername)
+	}
+	if !utf8.ValidString(got.UserAgent) || len(got.UserAgent) > maxUserAgentBytes || strings.ContainsRune(got.UserAgent, '\x00') {
+		t.Fatalf("UserAgent invalid after truncation: len=%d valid=%v", len(got.UserAgent), utf8.ValidString(got.UserAgent))
+	}
+	if len(got.UserAgent) != 509 { // "a" (1 byte) + 127 * 4-byte emoji = 509 <= 512
+		t.Fatalf("UserAgent byte length = %d, want 509", len(got.UserAgent))
 	}
 	if got.Metadata["password"] != redactedPlaceholder {
 		t.Fatalf("password = %v, want %s", got.Metadata["password"], redactedPlaceholder)
@@ -142,11 +220,79 @@ func TestRedactMetadataAndRecord(t *testing.T) {
 	if firstItem["authorization"] != redactedPlaceholder || firstItem["ok"] != true {
 		t.Fatalf("unexpected array metadata item: %+v", firstItem)
 	}
+
+	gotHeaders := got.Metadata["headers"].(map[string]any)
+	if gotHeaders["Authorization"] != redactedPlaceholder || gotHeaders["Cookie"] != redactedPlaceholder {
+		t.Fatalf("http.Header sensitive keys not redacted: %+v", gotHeaders)
+	}
+	gotTrace := gotHeaders["X-Trace"].([]any)
+	if len(gotTrace) != 1 || gotTrace[0] != "trace-1" {
+		t.Fatalf("http.Header non-sensitive key aliased or corrupted: %+v", gotTrace)
+	}
+
+	gotNamed := got.Metadata["named"].(map[string]any)
+	if gotNamed["old_pwd"] != redactedPlaceholder || gotNamed["userPwdConfirm"] != redactedPlaceholder || gotNamed["passcode"] != redactedPlaceholder {
+		t.Fatalf("named map sensitive keys not redacted: %+v", gotNamed)
+	}
+	if gotNamed["displayName"] != "Admin User" || gotNamed["cwd"] != "/srv/app" {
+		t.Fatalf("named map non-sensitive keys mutated or over-redacted: %+v", gotNamed)
+	}
+
+	for _, key := range []string{"structBody", "structPtr"} {
+		gotStruct := got.Metadata[key].(map[string]any)
+		if gotStruct["newPwd"] != redactedPlaceholder || gotStruct["passphrase"] != redactedPlaceholder || gotStruct["signedUrl"] != redactedPlaceholder {
+			t.Fatalf("%s sensitive fields not redacted: %+v", key, gotStruct)
+		}
+		inner := gotStruct["inner"].(map[string]any)
+		if inner["access_key_id"] != redactedPlaceholder || inner["safeNote"] != "visible" {
+			t.Fatalf("%s nested struct redaction mismatch: %+v", key, inner)
+		}
+	}
+
+	gotMapSlice := got.Metadata["mapSlice"].([]any)
+	firstMap := gotMapSlice[0].(map[string]any)
+	if firstMap["token"] != redactedPlaceholder || firstMap["label"] != "ok" {
+		t.Fatalf("[]map[string]string not redacted: %+v", firstMap)
+	}
+
+	gotRaw := got.Metadata["rawJson"].(map[string]any)
+	if gotRaw["password"] != redactedPlaceholder {
+		t.Fatalf("json.RawMessage password not redacted: %+v", gotRaw)
+	}
+	rawNested := gotRaw["nested"].([]any)[0].(map[string]any)
+	if rawNested["cookie"] != redactedPlaceholder || rawNested["keep"] != "yes" {
+		t.Fatalf("json.RawMessage nested object not redacted: %+v", rawNested)
+	}
+}
+
+func TestRedactMetadataDepthLimitAndTruncateUAChinese(t *testing.T) {
+	// Build a nested map deeper than maxRedactDepth with a secret at the bottom.
+	deep := map[string]any{"password": "leaf-secret"}
+	for range maxRedactDepth + 2 {
+		deep = map[string]any{"next": deep}
+	}
+	redacted := RedactMetadata(deep)
+	encoded, err := json.Marshal(redacted)
+	if err != nil {
+		t.Fatalf("json.Marshal(redacted) error = %v", err)
+	}
+	if strings.Contains(string(encoded), "leaf-secret") {
+		t.Fatalf("deeply nested secret leaked past depth limit: %s", string(encoded))
+	}
+	if !strings.Contains(string(encoded), redactedPlaceholder) {
+		t.Fatalf("expected depth cutoff placeholder, got: %s", string(encoded))
+	}
+
+	// 171 3-byte Chinese runes = 513 bytes -> must truncate cleanly to 170 runes (510 bytes).
+	ua := truncateUA(strings.Repeat("天", 171))
+	if !utf8.ValidString(ua) || len(ua) != 510 {
+		t.Fatalf("truncateUA Chinese: len=%d valid=%v, want len=510 valid=true", len(ua), utf8.ValidString(ua))
+	}
 }
 
 func TestRecordValidationAndPurgeExpired(t *testing.T) {
 	st := &fakeStore{}
-	svc := newServiceWithStore(st, logger.New("test", "error", io.Discard))
+	svc := newServiceWithStore(st)
 	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return now }
 	svc.purgeBatchSize = 2
@@ -183,11 +329,28 @@ func TestRecordValidationAndPurgeExpired(t *testing.T) {
 	if !slices.Equal(st.deletedBatches, []int{2, 1}) {
 		t.Fatalf("deletedBatches = %v, want [2 1]", st.deletedBatches)
 	}
+
+	// Canceled context must preserve context.Canceled via apperr.Error.Unwrap().
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := svc.PurgeExpired(canceledCtx, 180); !errors.Is(err, context.Canceled) {
+		t.Fatalf("PurgeExpired(canceled) err = %v, want context.Canceled", err)
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 500 {
+		t.Fatalf("PurgeExpired(canceled) expected *apperr.Error 500, got %v", err)
+	}
+
+	// Store error must be wrapped as *apperr.Error 500.
+	st.deleteErr = errors.New("db lock timeout")
+	if _, err := svc.PurgeExpired(t.Context(), 180); err == nil {
+		t.Fatal("expected purge store error")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 500 {
+		t.Fatalf("PurgeExpired(storeErr) expected *apperr.Error 500, got %v", err)
+	}
 }
 
 func TestListFilterNormalization(t *testing.T) {
 	st := &fakeStore{}
-	svc := newServiceWithStore(st, logger.New("test", "error", io.Discard))
+	svc := newServiceWithStore(st)
 
 	res, err := svc.List(t.Context(), ListFilter{
 		Pagination: pagination.Params{Page: 1, PageSize: 20},
@@ -197,6 +360,33 @@ func TestListFilterNormalization(t *testing.T) {
 	}
 	if res.Items == nil || len(res.Items) != 0 || res.Total != 0 {
 		t.Fatalf("expected non-nil empty slice, got %+v", res)
+	}
+
+	// Explicit Nil UUID must be rejected rather than silently treated as unset.
+	nilID := uuid.Nil
+	if _, err := svc.List(t.Context(), ListFilter{ActorID: &nilID}); err == nil {
+		t.Fatal("expected actorId nil UUID validation error")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 422 || len(appErr.Fields) != 1 || appErr.Fields[0].Field != "actorId" {
+		t.Fatalf("unexpected nil actorId error: %v", err)
+	}
+
+	// Blank and padded entries in filter slices must be cleaned without mutating caller slices.
+	rawActions := []string{" auth.login ", "", "   "}
+	normalized, err := normalizeFilter(ListFilter{
+		Actions:   rawActions,
+		Resources: []string{" session ", " "},
+		Statuses:  []string{" success ", ""},
+	})
+	if err != nil {
+		t.Fatalf("normalizeFilter() error = %v", err)
+	}
+	if !slices.Equal(normalized.Actions, []string{"auth.login"}) ||
+		!slices.Equal(normalized.Resources, []string{"session"}) ||
+		!slices.Equal(normalized.Statuses, []string{"success"}) {
+		t.Fatalf("unexpected cleaned slices: actions=%v resources=%v statuses=%v", normalized.Actions, normalized.Resources, normalized.Statuses)
+	}
+	if rawActions[0] != " auth.login " {
+		t.Fatal("caller Actions slice was mutated")
 	}
 
 	if _, err := svc.List(t.Context(), ListFilter{Sort: "actor_password"}); err == nil {
@@ -223,5 +413,31 @@ func TestAuditLocalesComplete(t *testing.T) {
 	}
 	if err := bundle.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+
+	allKeys := []string{
+		ErrCodeInvalidStatus,
+		ErrCodeInvalidAction,
+		ErrCodeInvalidResource,
+		ErrCodeInvalidTimeFormat,
+		ErrCodeInvalidTimeRange,
+		ErrCodeInvalidNumber,
+		ErrCodeInvalidPage,
+		ErrCodeInvalidPageSize,
+		ErrCodeQueryTooLong,
+		ErrCodeActorTooLong,
+	}
+	for _, key := range allKeys {
+		zh := bundle.Translate(i18n.LangZhCN, key, nil)
+		en := bundle.Translate(i18n.LangEnUS, key, nil)
+		if zh == "" || zh == key {
+			t.Fatalf("missing zh-CN translation for %s (got %q)", key, zh)
+		}
+		if en == "" || en == key {
+			t.Fatalf("missing en-US translation for %s (got %q)", key, en)
+		}
+		if zh == en {
+			t.Fatalf("zh-CN and en-US translations identical for %s: %q", key, zh)
+		}
 	}
 }
