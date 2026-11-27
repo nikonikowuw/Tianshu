@@ -773,13 +773,13 @@ ORDER BY
     CASE WHEN $5::text = 'updated_at' AND $6::text = 'desc' THEN r.updated_at END DESC,
     CASE WHEN $5::text = 'code' AND $6::text = 'asc' THEN r.code END ASC,
     CASE WHEN $5::text = 'code' AND $6::text = 'desc' THEN r.code END DESC,
-    CASE WHEN $5::text = 'name' AND $6::text = 'asc' THEN r.name END ASC,
-    CASE WHEN $5::text = 'name' AND $6::text = 'desc' THEN r.name END DESC,
+    CASE WHEN $5::text = 'name' AND $6::text = 'asc' THEN COALESCE(NULLIF(r.name, ''), NULLIF(CASE WHEN r.code = 'super_admin' THEN $7::text ELSE '' END, ''), r.code) END ASC,
+    CASE WHEN $5::text = 'name' AND $6::text = 'desc' THEN COALESCE(NULLIF(r.name, ''), NULLIF(CASE WHEN r.code = 'super_admin' THEN $7::text ELSE '' END, ''), r.code) END DESC,
     CASE WHEN $5::text = '' THEN r.is_system END DESC,
     r.created_at DESC,
     CASE WHEN $6::text = 'asc' THEN r.id END ASC,
     r.id DESC
-LIMIT $8 OFFSET $7
+LIMIT $9 OFFSET $8
 `
 
 type ListRolesParams struct {
@@ -789,6 +789,7 @@ type ListRolesParams struct {
 	IsSystem           bool
 	SortBy             string
 	SortOrder          string
+	SuperAdminName     string
 	PageOffset         int32
 	PageLimit          int32
 }
@@ -817,6 +818,7 @@ func (q *Queries) ListRoles(ctx context.Context, arg ListRolesParams) ([]ListRol
 		arg.IsSystem,
 		arg.SortBy,
 		arg.SortOrder,
+		arg.SuperAdminName,
 		arg.PageOffset,
 		arg.PageLimit,
 	)

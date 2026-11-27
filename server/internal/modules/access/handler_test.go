@@ -33,8 +33,11 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 		t.Fatalf("RegisterFS(access) error = %v", err)
 	}
 
-	svc := newServiceWithStore(st, fakeTxRunner{}, mem, logger.New("test", "error", io.Discard), ServiceDeps{
-		I18n: bundle,
+	svc := newServiceWithStore(st, ServiceDeps{
+		Tx:    fakeTxRunner{},
+		Cache: mem,
+		I18n:  bundle,
+		Log:   logger.New("test", "error", io.Discard),
 	})
 	if err := svc.SyncCatalog(t.Context()); err != nil {
 		t.Fatalf("SyncCatalog() error = %v", err)
@@ -42,6 +45,7 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 
 	adminUser := uuid.Must(uuid.NewV7())
 	readOnlyUser := uuid.Must(uuid.NewV7())
+	usersReadUser := uuid.Must(uuid.NewV7())
 	noPermUser := uuid.Must(uuid.NewV7())
 
 	if err := svc.AssignRoleByCode(t.Context(), adminUser, RoleCodeSuperAdmin); err != nil {
@@ -57,6 +61,17 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 	}
 	if err := svc.AssignRoleByCode(t.Context(), readOnlyUser, viewerRole.Code); err != nil {
 		t.Fatalf("AssignRoleByCode(viewer) error = %v", err)
+	}
+	usersViewerRole, err := svc.CreateRole(t.Context(), CreateRoleInput{
+		Code:        "user_viewer",
+		Name:        "User Viewer",
+		Permissions: []string{PermUsersRead},
+	})
+	if err != nil {
+		t.Fatalf("CreateRole(user_viewer) error = %v", err)
+	}
+	if err := svc.AssignRoleByCode(t.Context(), usersReadUser, usersViewerRole.Code); err != nil {
+		t.Fatalf("AssignRoleByCode(user_viewer) error = %v", err)
 	}
 
 	engine, err := httpserver.NewEngine(httpserver.Options{
@@ -74,6 +89,8 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 			c.Request = c.Request.WithContext(authctx.WithIdentity(c.Request.Context(), authctx.Identity{UserID: adminUser}))
 		case "viewer":
 			c.Request = c.Request.WithContext(authctx.WithIdentity(c.Request.Context(), authctx.Identity{UserID: readOnlyUser}))
+		case "users_reader":
+			c.Request = c.Request.WithContext(authctx.WithIdentity(c.Request.Context(), authctx.Identity{UserID: usersReadUser}))
 		case "noperm":
 			c.Request = c.Request.WithContext(authctx.WithIdentity(c.Request.Context(), authctx.Identity{UserID: noPermUser}))
 		default:
@@ -86,10 +103,15 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 
 	api := engine.Group("/api/v1", mockAuth)
 	NewHandler(svc, bundle).RegisterRoutes(api, RoutePermissions{
-		RequireRead:   RequirePermission(svc, PermRolesRead),
-		RequireCreate: RequirePermission(svc, PermRolesCreate),
-		RequireUpdate: RequirePermission(svc, PermRolesUpdate),
-		RequireDelete: RequirePermission(svc, PermRolesDelete),
+		RequireRead:       RequirePermission(svc, PermRolesRead),
+		RequireOptions:    RequireAnyPermission(svc, PermUsersRead, PermRolesRead),
+		RequireCreate:     RequirePermission(svc, PermRolesCreate),
+		RequireUpdate:     RequirePermission(svc, PermRolesUpdate),
+		RequireDelete:     RequirePermission(svc, PermRolesDelete),
+		RequireMenuRead:   RequireAnyPermission(svc, PermMenusRead, PermRolesRead),
+		RequireMenuCreate: RequirePermission(svc, PermMenusCreate),
+		RequireMenuUpdate: RequirePermission(svc, PermMenusUpdate),
+		RequireMenuDelete: RequirePermission(svc, PermMenusDelete),
 	})
 
 	t.Run("unauthenticated and forbidden requests are rejected", func(t *testing.T) {
@@ -121,7 +143,9 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 		if err := json.Unmarshal(recZh.Body.Bytes(), &zhResp); err != nil {
 			t.Fatalf("decode zh-CN response: %v", err)
 		}
-		if len(zhResp.Groups) != 5 || zhResp.Groups[0].Label != "仪表盘" || zhResp.Groups[0].Permissions[0].Name != "查看仪表盘" {
+		wantZhLabel := bundle.Translate(i18n.LangZhCN, "ACCESS_MODULE_DASHBOARD", nil)
+		wantZhPerm := bundle.Translate(i18n.LangZhCN, "ACCESS_PERM_DASHBOARD_READ_NAME", nil)
+		if len(zhResp.Groups) != 5 || zhResp.Groups[0].Label != wantZhLabel || zhResp.Groups[0].Permissions[0].Name != wantZhPerm {
 			t.Fatalf("unexpected zh-CN permission catalog: %+v", zhResp)
 		}
 
@@ -135,6 +159,44 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 		}
 		if enResp.Groups[0].Label != "Dashboard" || enResp.Groups[0].Permissions[0].Name != "View Dashboard" {
 			t.Fatalf("unexpected en-US permission catalog: %+v", enResp)
+		}
+	})
+
+	t.Run("GET /roles/options enforces RequireAnyPermission and localizes system role", func(t *testing.T) {
+		if rec := doJSONReq(engine, http.MethodGet, "/api/v1/roles/options", "", "en-US", ""); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("anon GET /roles/options status = %d, want 401", rec.Code)
+		}
+		if rec := doJSONReq(engine, http.MethodGet, "/api/v1/roles/options", "noperm", "en-US", ""); rec.Code != http.StatusForbidden {
+			t.Fatalf("noperm GET /roles/options status = %d, want 403", rec.Code)
+		}
+
+		// User with only users:read can access /roles/options, while /roles remains 403.
+		if rec := doJSONReq(engine, http.MethodGet, "/api/v1/roles", "users_reader", "en-US", ""); rec.Code != http.StatusForbidden {
+			t.Fatalf("users_reader GET /roles status = %d, want 403", rec.Code)
+		}
+		recEn := doJSONReq(engine, http.MethodGet, "/api/v1/roles/options", "users_reader", "en-US", "")
+		if recEn.Code != http.StatusOK || recEn.Header().Get("X-Request-Id") == "" {
+			t.Fatalf("users_reader GET /roles/options status = %d, X-Request-Id=%q", recEn.Code, recEn.Header().Get("X-Request-Id"))
+		}
+		var enOpts listRoleOptionsResponse
+		if err := json.Unmarshal(recEn.Body.Bytes(), &enOpts); err != nil {
+			t.Fatalf("decode en-US options: %v", err)
+		}
+		if len(enOpts.Items) < 3 || !enOpts.Items[0].IsSystem || enOpts.Items[0].Code != RoleCodeSuperAdmin || enOpts.Items[0].Name != "Super Administrator" {
+			t.Fatalf("unexpected en-US role options: %+v", enOpts)
+		}
+
+		recZh := doJSONReq(engine, http.MethodGet, "/api/v1/roles/options", "viewer", "zh-CN", "")
+		if recZh.Code != http.StatusOK {
+			t.Fatalf("viewer GET /roles/options zh-CN status = %d", recZh.Code)
+		}
+		var zhOpts listRoleOptionsResponse
+		if err := json.Unmarshal(recZh.Body.Bytes(), &zhOpts); err != nil {
+			t.Fatalf("decode zh-CN options: %v", err)
+		}
+		wantZhSuper := bundle.Translate(i18n.LangZhCN, "ACCESS_ROLE_SUPER_ADMIN_NAME", nil)
+		if len(zhOpts.Items) == 0 || zhOpts.Items[0].Name != wantZhSuper {
+			t.Fatalf("unexpected zh-CN role options: %+v", zhOpts)
 		}
 	})
 
@@ -158,6 +220,12 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 	})
 
 	t.Run("POST, GET, PATCH, DELETE /roles full lifecycle and error contracts", func(t *testing.T) {
+		// Malformed JSON -> 400 BAD_REQUEST (not 422)
+		badJSONRec := doJSONReq(engine, http.MethodPost, "/api/v1/roles", "admin", "en-US", `{"code":`)
+		if badJSONRec.Code != http.StatusBadRequest || !strings.Contains(badJSONRec.Body.String(), `"code":"BAD_REQUEST"`) {
+			t.Fatalf("malformed JSON POST /roles status = %d, body = %s", badJSONRec.Code, badJSONRec.Body.String())
+		}
+
 		// Create role -> 201
 		rec := doJSONReq(engine, http.MethodPost, "/api/v1/roles", "admin", "en-US", `{
 			"code": "content_editor",

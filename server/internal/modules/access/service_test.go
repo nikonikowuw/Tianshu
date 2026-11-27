@@ -30,6 +30,7 @@ type fakeStore struct {
 
 	listRolesCalls int
 	listPermsCalls int
+	onListPerms    func()
 }
 
 type fakeAuditRecorder struct {
@@ -133,6 +134,9 @@ func (f *fakeStore) ListUserRoleCodes(_ context.Context, userID uuid.UUID) ([]st
 
 func (f *fakeStore) ListUserPermissions(_ context.Context, userID uuid.UUID) ([]string, error) {
 	f.listPermsCalls++
+	if f.onListPerms != nil {
+		f.onListPerms()
+	}
 	seen := make(map[string]struct{})
 	for roleID := range f.userRoles[userID] {
 		for code := range f.rolePerms[roleID] {
@@ -201,7 +205,23 @@ func (f *fakeStore) filterRoles(q listRolesQuery) []Role {
 		case "code":
 			res = cmp.Compare(a.Code, b.Code)
 		case "name":
-			res = cmp.Compare(a.Name, b.Name)
+			nameA := a.Name
+			if nameA == "" {
+				if a.Code == RoleCodeSuperAdmin && q.SuperAdminName != "" {
+					nameA = q.SuperAdminName
+				} else {
+					nameA = a.Code
+				}
+			}
+			nameB := b.Name
+			if nameB == "" {
+				if b.Code == RoleCodeSuperAdmin && q.SuperAdminName != "" {
+					nameB = q.SuperAdminName
+				} else {
+					nameB = b.Code
+				}
+			}
+			res = cmp.Compare(nameA, nameB)
 		case "updated_at":
 			res = a.UpdatedAt.Compare(b.UpdatedAt)
 		default:
@@ -521,6 +541,7 @@ func (f *fakeStore) UpdateMenuOrder(_ context.Context, id uuid.UUID, parentID *u
 	m.ParentID = parentID
 	m.SortOrder = sortOrder
 	m.UpdatedBy = actorID
+	m.UpdatedAt = time.Now().UTC()
 	f.menusByID[id] = m
 	return nil
 }
@@ -548,7 +569,11 @@ func TestSyncCatalogIdempotentAndGrantsAllToSuperAdmin(t *testing.T) {
 	mem := cache.NewMemory()
 	defer func() { _ = mem.Close() }()
 
-	svc := newServiceWithStore(s, fakeTxRunner{}, mem, logger.New("test", "error", io.Discard))
+	svc := newServiceWithStore(s, ServiceDeps{
+		Tx:    fakeTxRunner{},
+		Cache: mem,
+		Log:   logger.New("test", "error", io.Discard),
+	})
 
 	if err := svc.SyncCatalog(t.Context()); err != nil {
 		t.Fatalf("first SyncCatalog() error = %v", err)
@@ -584,7 +609,11 @@ func TestGetUserAccessCachesAndDefersInvalidationUntilCommit(t *testing.T) {
 	mem := cache.NewMemory()
 	defer func() { _ = mem.Close() }()
 
-	svc := newServiceWithStore(s, fakeTxRunner{}, mem, logger.New("test", "error", io.Discard))
+	svc := newServiceWithStore(s, ServiceDeps{
+		Tx:    fakeTxRunner{},
+		Cache: mem,
+		Log:   logger.New("test", "error", io.Discard),
+	})
 	if err := svc.SyncCatalog(t.Context()); err != nil {
 		t.Fatalf("SyncCatalog() error = %v", err)
 	}
@@ -653,10 +682,13 @@ func TestRoleCRUDInvariantsAndCacheInvalidation(t *testing.T) {
 
 	actorID := uuid.Must(uuid.NewV7())
 	auditRec := &fakeAuditRecorder{}
-	svc := newServiceWithStore(s, fakeTxRunner{}, mem, logger.New("test", "error", io.Discard), ServiceDeps{
+	svc := newServiceWithStore(s, ServiceDeps{
+		Tx:     fakeTxRunner{},
+		Cache:  mem,
 		I18n:   bundle,
 		Audit:  auditRec,
 		Actors: &fakeActorResolver{names: map[uuid.UUID]string{actorID: "root_admin"}},
+		Log:    logger.New("test", "error", io.Discard),
 	})
 	if err := svc.SyncCatalog(t.Context()); err != nil {
 		t.Fatalf("SyncCatalog() error = %v", err)
@@ -779,20 +811,173 @@ func TestAccessLocalesCompleteAndMatchCatalog(t *testing.T) {
 	}
 
 	for _, perm := range Catalog() {
-		if got := bundle.Translate(i18n.LangZhCN, perm.NameKey, nil); got == perm.NameKey {
-			t.Errorf("missing zh-CN translation for %s", perm.NameKey)
-		}
-		if got := bundle.Translate(i18n.LangEnUS, perm.DescriptionKey, nil); got == perm.DescriptionKey {
-			t.Errorf("missing en-US translation for %s", perm.DescriptionKey)
+		for _, lang := range []string{i18n.LangZhCN, i18n.LangEnUS} {
+			if got := bundle.Translate(lang, perm.NameKey, nil); got == "" || got == perm.NameKey {
+				t.Errorf("missing %s translation for %s", lang, perm.NameKey)
+			}
+			if got := bundle.Translate(lang, perm.DescriptionKey, nil); got == "" || got == perm.DescriptionKey {
+				t.Errorf("missing %s translation for %s", lang, perm.DescriptionKey)
+			}
 		}
 	}
 	for _, group := range PermissionGroups() {
-		if got := bundle.Translate(i18n.LangZhCN, group.LabelKey, nil); got == group.LabelKey {
-			t.Errorf("missing zh-CN module label for %s", group.LabelKey)
+		for _, lang := range []string{i18n.LangZhCN, i18n.LangEnUS} {
+			if got := bundle.Translate(lang, group.LabelKey, nil); got == "" || got == group.LabelKey {
+				t.Errorf("missing %s module label for %s", lang, group.LabelKey)
+			}
 		}
-		if got := bundle.Translate(i18n.LangEnUS, group.LabelKey, nil); got == group.LabelKey {
-			t.Errorf("missing en-US module label for %s", group.LabelKey)
+	}
+	for _, role := range SystemRoles() {
+		for _, lang := range []string{i18n.LangZhCN, i18n.LangEnUS} {
+			if got := bundle.Translate(lang, role.NameKey, nil); got == "" || got == role.NameKey {
+				t.Errorf("missing %s system role name for %s", lang, role.NameKey)
+			}
+			if got := bundle.Translate(lang, role.DescriptionKey, nil); got == "" || got == role.DescriptionKey {
+				t.Errorf("missing %s system role description for %s", lang, role.DescriptionKey)
+			}
 		}
+	}
+
+	allErrCodes := []string{
+		ErrCodeRoleNotFound,
+		ErrCodeRoleInUse,
+		ErrCodeRoleSystemImmutable,
+		ErrCodeRoleCodeConflict,
+		ErrCodeInvalidRoleCode,
+		ErrCodeInvalidRoleName,
+		ErrCodeInvalidRoleDesc,
+		ErrCodeInvalidPermissionCode,
+		ErrCodeInvalidNumber,
+		ErrCodeInvalidBool,
+		ErrCodeMenuNotFound,
+		ErrCodeMenuCodeConflict,
+		ErrCodeMenuSystemImmutable,
+		ErrCodeMenuHasChildren,
+		ErrCodeMenuCycleDetected,
+		ErrCodeMenuInvalidParent,
+		ErrCodeInvalidMenuCode,
+		ErrCodeMenuCodeImmutable,
+		ErrCodeInvalidMenuType,
+		ErrCodeInvalidMenuTitle,
+		ErrCodeInvalidMenuPath,
+		ErrCodeInvalidMenuIcon,
+		ErrCodeInvalidMenuStatus,
+		ErrCodeDuplicateMenuReorder,
+	}
+	for _, code := range allErrCodes {
+		for _, lang := range []string{i18n.LangZhCN, i18n.LangEnUS} {
+			if got := bundle.Translate(lang, code, nil); got == "" || got == code {
+				t.Errorf("missing %s translation for error code %s", lang, code)
+			}
+		}
+	}
+}
+
+func TestGetUserAccessPreventsStaleWriteBackOnConcurrentInvalidate(t *testing.T) {
+	s := newFakeStore()
+	mem := cache.NewMemory()
+	defer func() { _ = mem.Close() }()
+
+	svc := newServiceWithStore(s, ServiceDeps{
+		Tx:    fakeTxRunner{},
+		Cache: mem,
+		Log:   logger.New("test", "error", io.Discard),
+	})
+	if err := svc.SyncCatalog(t.Context()); err != nil {
+		t.Fatalf("SyncCatalog() error = %v", err)
+	}
+
+	role, err := svc.CreateRole(t.Context(), CreateRoleInput{
+		Code:        "temp_editor",
+		Name:        "Temp Editor",
+		Permissions: []string{PermUsersRead, PermUsersDelete},
+	})
+	if err != nil {
+		t.Fatalf("CreateRole() error = %v", err)
+	}
+
+	userID := uuid.Must(uuid.NewV7())
+	if err := svc.AssignRoleByCode(t.Context(), userID, role.Code); err != nil {
+		t.Fatalf("AssignRoleByCode() error = %v", err)
+	}
+
+	readEntered := make(chan struct{})
+	resumeRead := make(chan struct{})
+	s.onListPerms = func() {
+		s.onListPerms = nil
+		close(readEntered)
+		<-resumeRead
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, gErr := svc.GetUserAccess(t.Context(), userID)
+		readDone <- gErr
+	}()
+
+	<-readEntered
+	// While the slow reader already observed old permissions, revoke users:delete and commit.
+	nextPerms := []string{PermUsersRead}
+	if _, err := svc.UpdateRole(t.Context(), UpdateRoleInput{
+		RoleID:      role.ID,
+		Permissions: &nextPerms,
+	}); err != nil {
+		t.Fatalf("UpdateRole() error = %v", err)
+	}
+	close(resumeRead)
+
+	if rErr := <-readDone; rErr != nil {
+		t.Fatalf("slow GetUserAccess() error = %v", rErr)
+	}
+
+	// Stale write-back must have been skipped, so subsequent HasPermission reflects revoked users:delete.
+	canDelete, err := svc.HasPermission(t.Context(), userID, PermUsersDelete)
+	if err != nil {
+		t.Fatalf("HasPermission() error = %v", err)
+	}
+	if canDelete {
+		t.Fatal("stale cache write-back resurrected revoked users:delete permission")
+	}
+}
+
+func TestListRolesSortByNameUsesLocalizedSystemRoleName(t *testing.T) {
+	s := newFakeStore()
+	bundle, err := i18n.NewBundle()
+	if err != nil {
+		t.Fatalf("NewBundle() error = %v", err)
+	}
+	if err := bundle.RegisterFS("access", LocalesFS, "locales"); err != nil {
+		t.Fatalf("RegisterFS() error = %v", err)
+	}
+
+	svc := newServiceWithStore(s, ServiceDeps{
+		Tx:   fakeTxRunner{},
+		I18n: bundle,
+		Log:  logger.New("test", "error", io.Discard),
+	})
+	if err := svc.SyncCatalog(t.Context()); err != nil {
+		t.Fatalf("SyncCatalog() error = %v", err)
+	}
+	if _, err := svc.CreateRole(t.Context(), CreateRoleInput{Code: "alpha", Name: "Alpha Role"}); err != nil {
+		t.Fatalf("CreateRole(alpha) error = %v", err)
+	}
+	if _, err := svc.CreateRole(t.Context(), CreateRoleInput{Code: "zeta", Name: "Zeta Role"}); err != nil {
+		t.Fatalf("CreateRole(zeta) error = %v", err)
+	}
+
+	enCtx := i18n.WithLocale(t.Context(), i18n.LangEnUS)
+	resAsc, err := svc.ListRoles(enCtx, RoleListFilter{
+		Pagination: pagination.Normalize(1, 20),
+		Sort:       "name",
+		Order:      "asc",
+	})
+	if err != nil {
+		t.Fatalf("ListRoles(sort=name asc) error = %v", err)
+	}
+	gotCodes := []string{resAsc.Items[0].Code, resAsc.Items[1].Code, resAsc.Items[2].Code}
+	wantCodes := []string{"alpha", RoleCodeSuperAdmin, "zeta"}
+	if !slices.Equal(gotCodes, wantCodes) {
+		t.Fatalf("sort=name asc codes = %v, want %v", gotCodes, wantCodes)
 	}
 }
 

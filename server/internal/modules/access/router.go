@@ -19,26 +19,16 @@ type RoutePermissions struct {
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, perms RoutePermissions) {
 	rg.GET("/permissions", perms.RequireRead, h.listPermissions)
 	rg.GET("/roles", perms.RequireRead, h.listRoles)
-	if perms.RequireOptions != nil {
-		rg.GET("/roles/options", perms.RequireOptions, h.listRoleOptions)
-	}
+	rg.GET("/roles/options", perms.RequireOptions, h.listRoleOptions)
 	rg.GET("/roles/:id", perms.RequireRead, h.getRole)
 	rg.POST("/roles", perms.RequireCreate, h.createRole)
 	rg.PATCH("/roles/:id", perms.RequireUpdate, h.updateRole)
 	rg.DELETE("/roles/:id", perms.RequireDelete, h.deleteRole)
 
 	rg.GET("/menus/user", h.listUserMenus)
-	if perms.RequireMenuRead != nil {
-		rg.GET("/menus/tree", perms.RequireMenuRead, h.listMenuTree)
-	}
-	if perms.RequireMenuCreate != nil {
-		rg.POST("/menus", perms.RequireMenuCreate, h.createMenu)
-	}
-	if perms.RequireMenuUpdate != nil {
-		rg.PUT("/menus/reorder", perms.RequireMenuUpdate, h.reorderMenus)
-		rg.PATCH("/menus/:id", perms.RequireMenuUpdate, h.updateMenu)
-	}
-	if perms.RequireMenuDelete != nil {
-		rg.DELETE("/menus/:id", perms.RequireMenuDelete, h.deleteMenu)
-	}
+	rg.GET("/menus/tree", perms.RequireMenuRead, h.listMenuTree)
+	rg.POST("/menus", perms.RequireMenuCreate, h.createMenu)
+	rg.PUT("/menus/reorder", perms.RequireMenuUpdate, h.reorderMenus)
+	rg.PATCH("/menus/:id", perms.RequireMenuUpdate, h.updateMenu)
+	rg.DELETE("/menus/:id", perms.RequireMenuDelete, h.deleteMenu)
 }

@@ -157,7 +157,12 @@ func TestIdentityConcurrentLastSuperAdminAndSoftDeleteRebuild(t *testing.T) {
 		t.Fatalf("NewPasswordHasher: %v", err)
 	}
 
-	accessSvc := access.NewService(pool, tx, mem, logger.New("test", "error", io.Discard), access.ServiceDeps{I18n: bundle})
+	accessSvc := access.NewService(pool, access.ServiceDeps{
+		Tx:    tx,
+		Cache: mem,
+		I18n:  bundle,
+		Log:   logger.New("test", "error", io.Discard),
+	})
 	if err := accessSvc.SyncCatalog(t.Context()); err != nil {
 		t.Fatalf("SyncCatalog: %v", err)
 	}
@@ -462,7 +467,12 @@ func TestProfileAvatarLockPasswordAndSessionInvalidationPostgres(t *testing.T) {
 		Log:      log,
 	})
 
-	accessSvc := access.NewService(pool, tx, mem, log, access.ServiceDeps{I18n: bundle})
+	accessSvc := access.NewService(pool, access.ServiceDeps{
+		Tx:    tx,
+		Cache: mem,
+		I18n:  bundle,
+		Log:   log,
+	})
 	if err := accessSvc.SyncCatalog(ctx); err != nil {
 		t.Fatalf("SyncCatalog: %v", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"tianshu/internal/platform/database"
+	"tianshu/internal/platform/i18n"
 	"tianshu/internal/shared/apperr"
 )
 
@@ -25,6 +26,7 @@ const (
 
 	maxMenuTitleRunes = 100
 	maxMenuPathLen    = 255
+	maxMenuIconLen    = 64
 )
 
 func (s *Service) syncSystemMenus(ctx context.Context) error {
@@ -91,7 +93,7 @@ func (s *Service) CreateMenu(ctx context.Context, input CreateMenuInput) (Menu, 
 
 	var fieldErrs []apperr.FieldError
 	if len(code) < minRoleCodeLen || len(code) > maxRoleCodeLen || !roleCodePattern.MatchString(code) {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "code", Message: ErrCodeInvalidRoleCode})
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "code", Message: ErrCodeInvalidMenuCode})
 	}
 	if !isValidMenuType(input.Type) {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "type", Message: ErrCodeInvalidMenuType})
@@ -103,6 +105,9 @@ func (s *Service) CreateMenu(ctx context.Context, input CreateMenuInput) (Menu, 
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "path", Message: ErrCodeInvalidMenuPath})
 	} else if path != "" && (!strings.HasPrefix(path, "/") || len(path) > maxMenuPathLen) {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "path", Message: ErrCodeInvalidMenuPath})
+	}
+	if utf8.RuneCountInString(icon) > maxMenuIconLen {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "icon", Message: ErrCodeInvalidMenuIcon})
 	}
 	if status != MenuStatusActive && status != MenuStatusDisabled {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "status", Message: ErrCodeInvalidMenuStatus})
@@ -124,22 +129,25 @@ func (s *Service) CreateMenu(ctx context.Context, input CreateMenuInput) (Menu, 
 		if lockErr := database.AcquireAdvisoryXactLock(txCtx, menuTreeAdvisoryLockKey); lockErr != nil {
 			return apperr.Internal(lockErr)
 		}
-		if input.ParentID != nil && *input.ParentID != uuid.Nil {
-			parent, pErr := s.store.GetMenuByID(txCtx, *input.ParentID)
+		parentID := normalizeOptionalUUID(input.ParentID)
+		if parentID != nil {
+			parent, pErr := s.store.GetMenuByID(txCtx, *parentID)
 			if errors.Is(pErr, errMenuNotFound) {
 				return apperr.Validation([]apperr.FieldError{{Field: "parentId", Message: ErrCodeMenuInvalidParent}})
 			}
 			if pErr != nil {
 				return apperr.Internal(fmt.Errorf("lookup parent menu: %w", pErr))
 			}
-			if !isParentTypeCompatible(parent.Type, input.Type) {
+			if !isValidMenuPlacement(&parent.Type, input.Type) {
 				return apperr.Validation([]apperr.FieldError{{Field: "parentId", Message: ErrCodeMenuInvalidParent}})
 			}
+		} else if !isValidMenuPlacement(nil, input.Type) {
+			return apperr.Validation([]apperr.FieldError{{Field: "parentId", Message: ErrCodeMenuInvalidParent}})
 		}
 
 		saved, cErr := s.store.CreateMenu(txCtx, createMenuRecord{
 			ID:             menuID,
-			ParentID:       normalizeOptionalUUID(input.ParentID),
+			ParentID:       parentID,
 			Type:           input.Type,
 			Code:           code,
 			Title:          title,
@@ -154,11 +162,17 @@ func (s *Service) CreateMenu(ctx context.Context, input CreateMenuInput) (Menu, 
 		if errors.Is(cErr, errMenuCodeConflict) {
 			return menuCodeConflictError()
 		}
+		if errors.Is(cErr, errMenuInvalidParent) {
+			return apperr.Validation([]apperr.FieldError{{Field: "parentId", Message: ErrCodeMenuInvalidParent}})
+		}
+		if errors.Is(cErr, errInvalidPermission) {
+			return apperr.Validation([]apperr.FieldError{{Field: "permissionCode", Message: ErrCodeInvalidPermissionCode}})
+		}
 		if cErr != nil {
 			return apperr.Internal(fmt.Errorf("create menu %s: %w", code, cErr))
 		}
 		created = saved
-		return s.recordMenuAudit(txCtx, input.ActorID, input.Meta, auditActionMenuCreate, saved.ID.String(), map[string]any{
+		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditResourceMenu, auditActionMenuCreate, saved.ID.String(), map[string]any{
 			"code": saved.Code,
 			"type": saved.Type,
 		})
@@ -176,7 +190,7 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "type", Message: ErrCodeInvalidMenuType})
 	}
 	if input.Title != nil {
-		if n := utf8.RuneCountInString(strings.TrimSpace(*input.Title)); n < 1 || n > maxMenuTitleRunes {
+		if utf8.RuneCountInString(strings.TrimSpace(*input.Title)) > maxMenuTitleRunes {
 			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "title", Message: ErrCodeInvalidMenuTitle})
 		}
 	}
@@ -185,6 +199,9 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 		if p != "" && (!strings.HasPrefix(p, "/") || len(p) > maxMenuPathLen) {
 			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "path", Message: ErrCodeInvalidMenuPath})
 		}
+	}
+	if input.Icon != nil && utf8.RuneCountInString(strings.TrimSpace(*input.Icon)) > maxMenuIconLen {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "icon", Message: ErrCodeInvalidMenuIcon})
 	}
 	if input.Status != nil && *input.Status != MenuStatusActive && *input.Status != MenuStatusDisabled {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "status", Message: ErrCodeInvalidMenuStatus})
@@ -211,6 +228,15 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 		if lockErr != nil {
 			return apperr.Internal(fmt.Errorf("lock menu %s: %w", input.MenuID, lockErr))
 		}
+		if input.Code != nil {
+			nextCode := strings.ToLower(strings.TrimSpace(*input.Code))
+			if nextCode != existing.Code {
+				if existing.IsSystem {
+					return menuSystemImmutableError()
+				}
+				return apperr.Validation([]apperr.FieldError{{Field: "code", Message: ErrCodeMenuCodeImmutable}})
+			}
+		}
 		if existing.IsSystem && input.Type != nil && *input.Type != existing.Type {
 			return menuSystemImmutableError()
 		}
@@ -221,7 +247,18 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 		}
 		finalTitle := existing.Title
 		if input.Title != nil {
-			finalTitle = strings.TrimSpace(*input.Title)
+			trimmedTitle := strings.TrimSpace(*input.Title)
+			switch {
+			case trimmedTitle == "":
+				if existing.TitleKey == "" {
+					return apperr.Validation([]apperr.FieldError{{Field: "title", Message: ErrCodeInvalidMenuTitle}})
+				}
+				finalTitle = ""
+			case existing.Title == "" && existing.TitleKey != "" && s.matchesDefaultMenuTitle(existing.TitleKey, trimmedTitle):
+				finalTitle = ""
+			default:
+				finalTitle = trimmedTitle
+			}
 		}
 		finalPath := existing.Path
 		if input.Path != nil {
@@ -258,6 +295,14 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 			finalParent = normalizeOptionalUUID(input.ParentID)
 		}
 
+		if finalParent == nil && !isValidMenuPlacement(nil, finalType) {
+			errField := "type"
+			if input.ClearParent || input.ParentID != nil {
+				errField = "parentId"
+			}
+			return apperr.Validation([]apperr.FieldError{{Field: errField, Message: ErrCodeMenuInvalidParent}})
+		}
+
 		if finalParent != nil || finalType != existing.Type {
 			all, listErr := s.store.ListMenus(txCtx)
 			if listErr != nil {
@@ -267,7 +312,7 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 
 			if finalType != existing.Type {
 				for _, child := range all {
-					if child.ParentID != nil && *child.ParentID == existing.ID && !isParentTypeCompatible(finalType, child.Type) {
+					if child.ParentID != nil && *child.ParentID == existing.ID && !isValidMenuPlacement(&finalType, child.Type) {
 						return apperr.Validation([]apperr.FieldError{{Field: "type", Message: ErrCodeMenuInvalidParent}})
 					}
 				}
@@ -284,7 +329,7 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 				if createsCycle(existing.ID, *finalParent, byID) {
 					return menuCycleDetectedError()
 				}
-				if !isParentTypeCompatible(parentNode.Type, finalType) {
+				if !isValidMenuPlacement(&parentNode.Type, finalType) {
 					return apperr.Validation([]apperr.FieldError{{Field: "parentId", Message: ErrCodeMenuInvalidParent}})
 				}
 			}
@@ -303,11 +348,20 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 			Status:         finalStatus,
 			ActorID:        input.ActorID,
 		})
+		if errors.Is(uErr, errMenuNotFound) {
+			return menuNotFoundError()
+		}
+		if errors.Is(uErr, errMenuInvalidParent) {
+			return apperr.Validation([]apperr.FieldError{{Field: "parentId", Message: ErrCodeMenuInvalidParent}})
+		}
+		if errors.Is(uErr, errInvalidPermission) {
+			return apperr.Validation([]apperr.FieldError{{Field: "permissionCode", Message: ErrCodeInvalidPermissionCode}})
+		}
 		if uErr != nil {
 			return apperr.Internal(fmt.Errorf("update menu %s: %w", existing.ID, uErr))
 		}
 		updated = saved
-		return s.recordMenuAudit(txCtx, input.ActorID, input.Meta, auditActionMenuUpdate, saved.ID.String(), map[string]any{
+		return s.recordAudit(txCtx, input.ActorID, input.Meta, auditResourceMenu, auditActionMenuUpdate, saved.ID.String(), map[string]any{
 			"code": saved.Code,
 		})
 	})
@@ -337,7 +391,7 @@ func (s *Service) ReorderMenus(ctx context.Context, input ReorderMenusInput) ([]
 
 		for _, item := range input.Items {
 			if _, dup := seenIDs[item.ID]; dup {
-				return apperr.Validation([]apperr.FieldError{{Field: "items", Message: ErrCodeMenuInvalidParent}})
+				return apperr.Validation([]apperr.FieldError{{Field: "items", Message: ErrCodeDuplicateMenuReorder}})
 			}
 			seenIDs[item.ID] = struct{}{}
 			node, ok := byID[item.ID]
@@ -350,9 +404,11 @@ func (s *Service) ReorderMenus(ctx context.Context, input ReorderMenusInput) ([]
 					return menuCycleDetectedError()
 				}
 				pNode, pOK := byID[*pid]
-				if !pOK || !isParentTypeCompatible(pNode.Type, node.Type) {
+				if !pOK || !isValidMenuPlacement(&pNode.Type, node.Type) {
 					return apperr.Validation([]apperr.FieldError{{Field: "items", Message: ErrCodeMenuInvalidParent}})
 				}
+			} else if !isValidMenuPlacement(nil, node.Type) {
+				return apperr.Validation([]apperr.FieldError{{Field: "items", Message: ErrCodeMenuInvalidParent}})
 			}
 			node.ParentID = pid
 			node.SortOrder = item.SortOrder
@@ -367,11 +423,14 @@ func (s *Service) ReorderMenus(ctx context.Context, input ReorderMenusInput) ([]
 
 		for _, item := range input.Items {
 			if err := s.store.UpdateMenuOrder(txCtx, item.ID, normalizeOptionalUUID(item.ParentID), item.SortOrder, input.ActorID); err != nil {
+				if errors.Is(err, errMenuInvalidParent) {
+					return apperr.Validation([]apperr.FieldError{{Field: "items", Message: ErrCodeMenuInvalidParent}})
+				}
 				return apperr.Internal(fmt.Errorf("reorder menu %s: %w", item.ID, err))
 			}
 		}
 
-		if err := s.recordMenuAudit(txCtx, input.ActorID, input.Meta, auditActionMenuReorder, "", map[string]any{
+		if err := s.recordAudit(txCtx, input.ActorID, input.Meta, auditResourceMenu, auditActionMenuReorder, "", map[string]any{
 			"count": len(input.Items),
 		}); err != nil {
 			return err
@@ -414,45 +473,27 @@ func (s *Service) DeleteMenu(ctx context.Context, menuID uuid.UUID, actorID *uui
 			return menuHasChildrenError()
 		}
 		if err := s.store.DeleteMenu(txCtx, existing.ID); err != nil {
+			if errors.Is(err, errMenuHasChildren) {
+				return menuHasChildrenError()
+			}
 			return apperr.Internal(fmt.Errorf("delete menu %s: %w", existing.ID, err))
 		}
-		return s.recordMenuAudit(txCtx, actorID, meta, auditActionMenuDelete, existing.ID.String(), map[string]any{
+		return s.recordAudit(txCtx, actorID, meta, auditResourceMenu, auditActionMenuDelete, existing.ID.String(), map[string]any{
 			"code": existing.Code,
 		})
 	})
 }
 
-func (s *Service) recordMenuAudit(
-	ctx context.Context,
-	actorID *uuid.UUID,
-	meta RequestMeta,
-	action string,
-	resourceID string,
-	metadata map[string]any,
-) error {
-	if s.audit == nil {
-		return nil
+func (s *Service) matchesDefaultMenuTitle(titleKey, candidate string) bool {
+	if s.i18n == nil || titleKey == "" {
+		return false
 	}
-	actorUsername := ""
-	if actorID != nil && *actorID != uuid.Nil && s.actors != nil {
-		if username, err := s.actors.GetUsername(ctx, *actorID); err == nil {
-			actorUsername = username
+	for _, lang := range []string{i18n.LangZhCN, i18n.LangEnUS} {
+		if translated := s.i18n.Translate(lang, titleKey, nil); translated != "" && translated != titleKey && translated == candidate {
+			return true
 		}
 	}
-	if err := s.audit.Record(ctx, AuditEntry{
-		ActorID:       actorID,
-		ActorUsername: actorUsername,
-		Action:        action,
-		Resource:      auditResourceMenu,
-		ResourceID:    resourceID,
-		Status:        auditStatusSuccess,
-		IPAddress:     meta.IPAddress,
-		UserAgent:     meta.UserAgent,
-		Metadata:      metadata,
-	}); err != nil {
-		return apperr.Internal(fmt.Errorf("record menu audit %s: %w", action, err))
-	}
-	return nil
+	return false
 }
 
 func buildMenuTree(flat []Menu) []Menu {
@@ -519,6 +560,13 @@ func filterUserMenuTree(nodes []Menu, permSet map[string]struct{}) []Menu {
 
 func isValidMenuType(t string) bool {
 	return t == MenuTypeDirectory || t == MenuTypeMenu || t == MenuTypeButton
+}
+
+func isValidMenuPlacement(parentType *string, childType string) bool {
+	if parentType == nil {
+		return childType == MenuTypeDirectory || childType == MenuTypeMenu
+	}
+	return isParentTypeCompatible(*parentType, childType)
 }
 
 func isParentTypeCompatible(parentType, childType string) bool {
