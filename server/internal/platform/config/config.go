@@ -48,14 +48,16 @@ type AppConfig struct {
 	Name string `koanf:"name"`
 }
 
-// ServerConfig defines HTTP server timeouts and proxy trust boundaries.
+// ServerConfig defines HTTP server timeouts, limits, and proxy trust boundaries.
 type ServerConfig struct {
-	Addr            string        `koanf:"addr"`
-	ReadTimeout     time.Duration `koanf:"read_timeout"`
-	WriteTimeout    time.Duration `koanf:"write_timeout"`
-	IdleTimeout     time.Duration `koanf:"idle_timeout"`
-	ShutdownTimeout time.Duration `koanf:"shutdown_timeout"`
-	TrustedProxies  []string      `koanf:"trusted_proxies"`
+	Addr                string        `koanf:"addr"`
+	ReadTimeout         time.Duration `koanf:"read_timeout"`
+	WriteTimeout        time.Duration `koanf:"write_timeout"`
+	IdleTimeout         time.Duration `koanf:"idle_timeout"`
+	ShutdownTimeout     time.Duration `koanf:"shutdown_timeout"`
+	TrustedProxies      []string      `koanf:"trusted_proxies"`
+	APIRateLimit        int           `koanf:"api_rate_limit"`
+	MaxRequestBodyBytes int64         `koanf:"max_request_body_bytes"`
 }
 
 // CORSConfig configures optional explicit cross-origin access.
@@ -156,11 +158,13 @@ func Default() Config {
 			Name: "tianshu",
 		},
 		Server: ServerConfig{
-			Addr:            ":8080",
-			ReadTimeout:     15 * time.Second,
-			WriteTimeout:    30 * time.Second,
-			IdleTimeout:     60 * time.Second,
-			ShutdownTimeout: 10 * time.Second,
+			Addr:                ":8080",
+			ReadTimeout:         15 * time.Second,
+			WriteTimeout:        30 * time.Second,
+			IdleTimeout:         60 * time.Second,
+			ShutdownTimeout:     10 * time.Second,
+			APIRateLimit:        300,
+			MaxRequestBodyBytes: 1 << 20,
 		},
 		Database: DatabaseConfig{
 			DSN:             defaultDevDatabaseDSN,
@@ -285,6 +289,12 @@ func (c Config) Validate() error {
 
 	if c.Server.Addr == "" {
 		return errors.New("server.addr must not be empty")
+	}
+	if c.Server.APIRateLimit < 0 {
+		return errors.New("server.api_rate_limit must be >= 0")
+	}
+	if c.Server.MaxRequestBodyBytes < 0 {
+		return errors.New("server.max_request_body_bytes must be >= 0")
 	}
 
 	if err := c.validateDatabase(); err != nil {

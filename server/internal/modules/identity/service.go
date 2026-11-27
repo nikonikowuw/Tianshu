@@ -1222,6 +1222,18 @@ func (s *Service) lockTargetAndVerifyActor(
 	return existing, actorUsername, nil
 }
 
+// EnsureActiveCaller verifies that userID exists, is active, and owns an unrevoked, unexpired sessionID.
+func (s *Service) EnsureActiveCaller(ctx context.Context, userID, sessionID uuid.UUID) error {
+	if userID == uuid.Nil {
+		return apperr.Unauthorized(apperr.CodeUnauthorized)
+	}
+	if s.sessions == nil {
+		return apperr.Internal(errors.New("identity service: session manager not configured"))
+	}
+	_, err := s.verifyActiveActor(ctx, &userID, sessionID, false)
+	return err
+}
+
 func (s *Service) verifyActiveActor(ctx context.Context, actorID *uuid.UUID, sessionID uuid.UUID, lockSession bool) (string, error) {
 	if actorID == nil || *actorID == uuid.Nil {
 		return "", nil

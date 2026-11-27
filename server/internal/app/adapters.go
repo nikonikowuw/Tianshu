@@ -196,6 +196,9 @@ type identityAccessAdapter struct {
 var _ identity.RoleManager = (*identityAccessAdapter)(nil)
 
 func (a *identityAccessAdapter) ResolveRoles(ctx context.Context, ids []uuid.UUID) ([]identity.RoleRef, error) {
+	if a.svc == nil {
+		return nil, apperr.Internal(errors.New("identity access adapter: access service not initialized"))
+	}
 	refs, err := a.svc.ResolveRoles(ctx, ids)
 	if err != nil {
 		return nil, err
@@ -204,6 +207,9 @@ func (a *identityAccessAdapter) ResolveRoles(ctx context.Context, ids []uuid.UUI
 }
 
 func (a *identityAccessAdapter) ListRolesByUserIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID][]identity.RoleRef, error) {
+	if a.svc == nil {
+		return nil, apperr.Internal(errors.New("identity access adapter: access service not initialized"))
+	}
 	m, err := a.svc.ListRolesByUserIDs(ctx, userIDs)
 	if err != nil {
 		return nil, err
@@ -216,14 +222,23 @@ func (a *identityAccessAdapter) ListRolesByUserIDs(ctx context.Context, userIDs 
 }
 
 func (a *identityAccessAdapter) ListUserIDsByRoleIDs(ctx context.Context, roleIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if a.svc == nil {
+		return nil, apperr.Internal(errors.New("identity access adapter: access service not initialized"))
+	}
 	return a.svc.ListUserIDsByRoleIDs(ctx, roleIDs)
 }
 
 func (a *identityAccessAdapter) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error) {
+	if a.svc == nil {
+		return nil, apperr.Internal(errors.New("identity access adapter: access service not initialized"))
+	}
 	return a.svc.ListUserIDsByRoleCode(ctx, code)
 }
 
 func (a *identityAccessAdapter) ReplaceUserRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
+	if a.svc == nil {
+		return apperr.Internal(errors.New("identity access adapter: access service not initialized"))
+	}
 	return mapReplaceUserRolesErr(a.svc.ReplaceUserRoles(ctx, userID, roleIDs))
 }
 
@@ -401,40 +416,18 @@ func (a *filesAvatarRefAdapter) IsAvatarFileInUse(ctx context.Context, fileID uu
 	return a.svc.IsAvatarFileInUse(ctx, fileID)
 }
 
-// filesAvatarCallerAdapter bridges identity.Service and auth.Service into files.AvatarCallerValidator
-// using late binding on auth.Service to preserve construction order.
+// filesAvatarCallerAdapter bridges identity.Service into files.AvatarCallerValidator.
 type filesAvatarCallerAdapter struct {
-	identity *identity.Service
-	auth     *auth.Service
+	svc *identity.Service
 }
 
 var _ files.AvatarCallerValidator = (*filesAvatarCallerAdapter)(nil)
 
 func (a *filesAvatarCallerAdapter) EnsureActiveAvatarCaller(ctx context.Context, userID, sessionID uuid.UUID) error {
-	if a.identity == nil || a.auth == nil {
-		return apperr.Internal(errors.New("files avatar caller adapter: services not initialized"))
+	if a.svc == nil {
+		return apperr.Internal(errors.New("files avatar caller adapter: identity service not initialized"))
 	}
-	user, err := a.identity.GetByID(ctx, userID)
-	if err != nil {
-		if appErr, ok := apperr.As(err); ok && appErr.Code == identity.ErrCodeUserNotFound {
-			return apperr.Unauthorized(apperr.CodeUnauthorized)
-		}
-		return err
-	}
-	if user.Status == identity.StatusDisabled {
-		return apperr.Forbidden(auth.ErrCodeAccountDisabled)
-	}
-	if sessionID == uuid.Nil {
-		return apperr.Unauthorized(apperr.CodeUnauthorized)
-	}
-	active, err := a.auth.IsSessionActive(ctx, userID, sessionID)
-	if err != nil {
-		return err
-	}
-	if !active {
-		return apperr.Unauthorized(apperr.CodeUnauthorized)
-	}
-	return nil
+	return a.svc.EnsureActiveCaller(ctx, userID, sessionID)
 }
 
 // filesAuditAdapter bridges audit.Service into files.AuditRecorder.

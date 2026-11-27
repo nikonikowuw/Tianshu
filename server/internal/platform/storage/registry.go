@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"strings"
 )
@@ -69,4 +70,20 @@ func (r *Registry) Driver(name string) (Storage, error) {
 // Drivers returns a defensive copy of registered drivers keyed by driver name.
 func (r *Registry) Drivers() map[string]Storage {
 	return maps.Clone(r.drivers)
+}
+
+// Close releases resources held by any registered drivers implementing io.Closer.
+func (r *Registry) Close() error {
+	if r == nil {
+		return nil
+	}
+	var errs []error
+	for name, d := range r.drivers {
+		if closer, ok := d.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close storage driver %s: %w", name, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }

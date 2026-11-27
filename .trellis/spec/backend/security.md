@@ -69,7 +69,9 @@
 | `POST /setup/init`   | 5 次/分钟/IP                     |
 | `PUT /profile/password` | 5 次/分钟/用户                |
 | 文件上传             | 20 次/分钟/用户                  |
-| 全局 API             | 按 IP/用户令牌桶，具体阈值配置化 |
+| 全局 API             | 按 IP（公开路由）/用户（已认证路由）令牌桶，通过 `server.api_rate_limit` 配置（默认 300 次/分钟，`0` 禁用） |
+
+- 非文件上传 API 请求体大小受 `server.max_request_body_bytes`（默认 1 MiB，`0` 禁用）保护，超限返回 `413 PAYLOAD_TOO_LARGE`。
 
 - 超限返回 `429 RATE_LIMITED` + `Retry-After`。
 - 限流键要兼容反向代理：只信任配置的 `trusted_proxies`，从可信 `X-Forwarded-For` 取客户端 IP。

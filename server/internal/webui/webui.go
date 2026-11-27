@@ -37,8 +37,10 @@ func NewHandler(dist fs.FS) http.Handler {
 			return
 		}
 
+		cleaned := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+
 		// Never allow SPA fallback to swallow unmatched API routes.
-		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
+		if cleaned == "api" || strings.HasPrefix(cleaned, "api/") {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusNotFound)
 			if r.Method == http.MethodGet {
@@ -47,7 +49,6 @@ func NewHandler(dist fs.FS) http.Handler {
 			return
 		}
 
-		cleaned := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		if cleaned == "" {
 			serveIndex(w, r, dist)
 			return
