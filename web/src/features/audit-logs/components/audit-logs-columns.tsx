@@ -15,6 +15,9 @@ const ACTION_LABEL_KEY: Record<string, string> = {
   'role.create': 'actions.roleCreate',
   'role.update': 'actions.roleUpdate',
   'role.delete': 'actions.roleDelete',
+  'file.upload': 'actions.fileUpload',
+  'file.upload_avatar': 'actions.fileUploadAvatar',
+  'file.delete': 'actions.fileDelete',
 }
 
 const RESOURCE_LABEL_KEY: Record<string, string> = {

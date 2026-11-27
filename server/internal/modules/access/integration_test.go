@@ -26,8 +26,8 @@ import (
 func openIsolatedTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	dsn := os.Getenv("TIANSHU_TEST_DSN")
-	if dsn == "" {
+	dsn, dsnExplicit := os.LookupEnv("TIANSHU_TEST_DSN")
+	if !dsnExplicit {
 		dsn = config.Default().Database.DSN
 	}
 
@@ -36,10 +36,16 @@ func openIsolatedTestPool(t *testing.T) *pgxpool.Pool {
 
 	adminPool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
+		if dsnExplicit {
+			t.Fatalf("postgres unavailable: %v", err)
+		}
 		t.Skipf("postgres unavailable: %v", err)
 	}
 	if err := adminPool.Ping(ctx); err != nil {
 		adminPool.Close()
+		if dsnExplicit {
+			t.Fatalf("postgres ping failed: %v", err)
+		}
 		t.Skipf("postgres ping failed: %v", err)
 	}
 

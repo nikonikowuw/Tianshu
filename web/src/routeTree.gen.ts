@@ -14,6 +14,7 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedUsersRouteImport } from './routes/_authenticated/users'
 import { Route as AuthenticatedRolesRouteImport } from './routes/_authenticated/roles'
 import { Route as AuthenticatedMenusRouteImport } from './routes/_authenticated/menus'
+import { Route as AuthenticatedFilesRouteImport } from './routes/_authenticated/files'
 import { Route as AuthenticatedAuditLogsRouteImport } from './routes/_authenticated/audit-logs'
 import { Route as setupSetupRouteImport } from './routes/(setup)/setup'
 import { Route as errors500RouteImport } from './routes/(errors)/500'
@@ -44,6 +45,11 @@ const AuthenticatedRolesRoute = AuthenticatedRolesRouteImport.update({
 const AuthenticatedMenusRoute = AuthenticatedMenusRouteImport.update({
   id: '/menus',
   path: '/menus',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedFilesRoute = AuthenticatedFilesRouteImport.update({
+  id: '/files',
+  path: '/files',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedAuditLogsRoute = AuthenticatedAuditLogsRouteImport.update({
@@ -91,6 +97,7 @@ export interface FileRoutesByFullPath {
   '/500': typeof errors500Route
   '/setup': typeof setupSetupRoute
   '/audit-logs': typeof AuthenticatedAuditLogsRoute
+  '/files': typeof AuthenticatedFilesRoute
   '/menus': typeof AuthenticatedMenusRoute
   '/roles': typeof AuthenticatedRolesRoute
   '/users': typeof AuthenticatedUsersRoute
@@ -103,6 +110,7 @@ export interface FileRoutesByTo {
   '/500': typeof errors500Route
   '/setup': typeof setupSetupRoute
   '/audit-logs': typeof AuthenticatedAuditLogsRoute
+  '/files': typeof AuthenticatedFilesRoute
   '/menus': typeof AuthenticatedMenusRoute
   '/roles': typeof AuthenticatedRolesRoute
   '/users': typeof AuthenticatedUsersRoute
@@ -118,6 +126,7 @@ export interface FileRoutesById {
   '/(errors)/500': typeof errors500Route
   '/(setup)/setup': typeof setupSetupRoute
   '/_authenticated/audit-logs': typeof AuthenticatedAuditLogsRoute
+  '/_authenticated/files': typeof AuthenticatedFilesRoute
   '/_authenticated/menus': typeof AuthenticatedMenusRoute
   '/_authenticated/roles': typeof AuthenticatedRolesRoute
   '/_authenticated/users': typeof AuthenticatedUsersRoute
@@ -134,6 +143,7 @@ export interface FileRouteTypes {
     | '/500'
     | '/setup'
     | '/audit-logs'
+    | '/files'
     | '/menus'
     | '/roles'
     | '/users'
@@ -146,6 +156,7 @@ export interface FileRouteTypes {
     | '/500'
     | '/setup'
     | '/audit-logs'
+    | '/files'
     | '/menus'
     | '/roles'
     | '/users'
@@ -160,6 +171,7 @@ export interface FileRouteTypes {
     | '/(errors)/500'
     | '/(setup)/setup'
     | '/_authenticated/audit-logs'
+    | '/_authenticated/files'
     | '/_authenticated/menus'
     | '/_authenticated/roles'
     | '/_authenticated/users'
@@ -211,6 +223,13 @@ declare module '@tanstack/react-router' {
       path: '/menus'
       fullPath: '/menus'
       preLoaderRoute: typeof AuthenticatedMenusRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/files': {
+      id: '/_authenticated/files'
+      path: '/files'
+      fullPath: '/files'
+      preLoaderRoute: typeof AuthenticatedFilesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/audit-logs': {
@@ -267,6 +286,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAuditLogsRoute: typeof AuthenticatedAuditLogsRoute
+  AuthenticatedFilesRoute: typeof AuthenticatedFilesRoute
   AuthenticatedMenusRoute: typeof AuthenticatedMenusRoute
   AuthenticatedRolesRoute: typeof AuthenticatedRolesRoute
   AuthenticatedUsersRoute: typeof AuthenticatedUsersRoute
@@ -275,6 +295,7 @@ interface AuthenticatedRouteRouteChildren {
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAuditLogsRoute: AuthenticatedAuditLogsRoute,
+  AuthenticatedFilesRoute: AuthenticatedFilesRoute,
   AuthenticatedMenusRoute: AuthenticatedMenusRoute,
   AuthenticatedRolesRoute: AuthenticatedRolesRoute,
   AuthenticatedUsersRoute: AuthenticatedUsersRoute,

@@ -1,6 +1,6 @@
 # Backend Spec
 
-适用范围：`server/`（Go 服务）。当前已完成 `internal/platform/*`、`internal/shared/*`、`internal/webui`、`migrations/00001_init_schema.sql`、`internal/app`、`access`（权限种子、RBAC 校验底座、`GET /api/v1/permissions` 权限目录与 `/roles` CRUD）、`identity`（认证与初始化底座）、`setup`（首次初始化向导）、`auth`（登录/Refresh 轮换与重放检测/软冷却/JWT 中间件）与 `audit`（不可变审计落库、敏感字段脱敏、`GET /api/v1/audit-logs` 分页筛选与保留期清理）；用户 CRUD、`files`、`dashboard` 尚未实现。
+适用范围：`server/`（Go 服务）。当前已完成 `internal/platform/*`（含 Local/S3 多驱动存储与路由注册表）、`internal/shared/*`、`internal/webui`、`migrations/00001`–`00004`、`internal/app`、`access`（权限种子、RBAC 校验、`/roles` CRUD 与动态菜单树）、`identity`（用户 CRUD 与超管/自我保护）、`setup`（首次初始化向导）、`auth`（登录/Refresh 轮换与重放检测/软冷却/JWT 中间件）、`audit`（不可变审计落库、敏感字段脱敏、分页筛选与保留期清理）与 `files`（内容嗅探上传、头像纯 Go 重编码去 EXIF、短时签名 URL 与双写补偿 Janitor）；个人中心与 `dashboard` 尚未实现。
 
 | 文档 | 内容 | 何时读 |
 | --- | --- | --- |

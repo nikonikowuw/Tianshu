@@ -4,6 +4,7 @@ import enAudit from './locales/en-US/audit.json'
 import enAuth from './locales/en-US/auth.json'
 import enCommon from './locales/en-US/common.json'
 import enErrors from './locales/en-US/errors.json'
+import enFiles from './locales/en-US/files.json'
 import enMenus from './locales/en-US/menus.json'
 import enRoles from './locales/en-US/roles.json'
 import enUsers from './locales/en-US/users.json'
@@ -12,6 +13,7 @@ import zhAudit from './locales/zh-CN/audit.json'
 import zhAuth from './locales/zh-CN/auth.json'
 import zhCommon from './locales/zh-CN/common.json'
 import zhErrors from './locales/zh-CN/errors.json'
+import zhFiles from './locales/zh-CN/files.json'
 import zhMenus from './locales/zh-CN/menus.json'
 import zhRoles from './locales/zh-CN/roles.json'
 import zhUsers from './locales/zh-CN/users.json'
@@ -49,6 +51,7 @@ void i18n.use(initReactI18next).init({
     'roles',
     'users',
     'menus',
+    'files',
     'errors',
     'validation',
   ],
@@ -60,6 +63,7 @@ void i18n.use(initReactI18next).init({
       roles: zhRoles,
       users: zhUsers,
       menus: zhMenus,
+      files: zhFiles,
       errors: zhErrors,
       validation: zhValidation,
     },
@@ -70,6 +74,7 @@ void i18n.use(initReactI18next).init({
       roles: enRoles,
       users: enUsers,
       menus: enMenus,
+      files: enFiles,
       errors: enErrors,
       validation: enValidation,
     },

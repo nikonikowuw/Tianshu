@@ -77,6 +77,7 @@ ACCESS_MENU_USERS = "Users"
 ACCESS_MENU_ROLES = "Roles & Permissions"
 ACCESS_MENU_MENUS = "Menus"
 ACCESS_MENU_AUDIT_LOGS = "Audit Logs"
+ACCESS_MENU_FILES = "Files"
 
 MENUS_NOT_FOUND = "Requested menu node was not found"
 MENUS_CODE_CONFLICT = "Menu code already exists"

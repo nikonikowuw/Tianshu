@@ -18,6 +18,7 @@ type ConfirmDialogProps = {
   desc: React.JSX.Element | string
   cancelBtnText?: string
   confirmText?: React.ReactNode
+  confirmTestId?: string
   destructive?: boolean
   isLoading?: boolean
   className?: string
@@ -34,6 +35,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     children,
     className,
     confirmText,
+    confirmTestId,
     cancelBtnText,
     destructive,
     isLoading,
@@ -58,6 +60,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
           </AlertDialogCancel>
           <Button
             type={form ? 'submit' : 'button'}
+            data-testid={confirmTestId}
             form={form}
             onClick={handleConfirm}
             variant={destructive ? 'destructive' : 'default'}

@@ -222,6 +222,20 @@ func (f *fakeStore) CountActiveUsersByIDs(_ context.Context, ids []uuid.UUID) (i
 	return n, nil
 }
 
+func (f *fakeStore) ListUsernamesByIDs(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	out := make(map[uuid.UUID]string, len(ids))
+	for _, id := range ids {
+		if r, ok := f.users[id]; ok {
+			out[id] = r.user.Username
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) CountActiveUsersByAvatarFileID(_ context.Context, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
 func (f *fakeStore) toDetail(r *fakeUserRow) UserDetail {
 	return UserDetail{
 		ID:          r.user.ID,
@@ -605,6 +619,21 @@ func TestUpdateAndDeleteUserGuards(t *testing.T) {
 		}
 		if res.Total == 0 || len(res.Items) == 0 {
 			t.Fatalf("expected non-empty users list")
+		}
+	})
+
+	t.Run("list usernames by ids and avatar reference check", func(t *testing.T) {
+		names, err := svc.ListUsernamesByIDs(t.Context(), []uuid.UUID{superID, superID, mgrID})
+		if err != nil {
+			t.Fatalf("ListUsernamesByIDs: %v", err)
+		}
+		if names[superID] == "" || names[mgrID] == "" {
+			t.Fatalf("expected active and soft-deleted usernames preserved, got %+v", names)
+		}
+
+		inUse, err := svc.IsAvatarFileInUse(t.Context(), uuid.Must(uuid.NewV7()))
+		if err != nil || inUse {
+			t.Fatalf("IsAvatarFileInUse = (%v, %v), want (false, nil)", inUse, err)
 		}
 	})
 }

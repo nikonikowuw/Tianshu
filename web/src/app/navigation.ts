@@ -1,5 +1,6 @@
 import { type TFunction } from 'i18next'
 import {
+  Folder,
   LayoutDashboard,
   ListTree,
   ScrollText,
@@ -64,6 +65,12 @@ export function buildNavGroups(
           url: '/audit-logs',
           icon: ScrollText,
           permission: 'audit:read',
+        },
+        {
+          title: t('nav.files'),
+          url: '/files',
+          icon: Folder,
+          permission: 'files:read',
         },
       ],
     },

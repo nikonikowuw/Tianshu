@@ -79,12 +79,34 @@ type CacheConfig struct {
 	RedisDB       int    `koanf:"redis_db"`
 }
 
-// StorageConfig defines object storage driver and size constraints.
+// StorageConfig defines object storage driver, size limits, MIME extensions, and S3 settings.
 type StorageConfig struct {
-	Driver             string `koanf:"driver"`
-	LocalRoot          string `koanf:"local_root"`
-	MaxFileSizeBytes   int64  `koanf:"max_file_size_bytes"`
-	MaxAvatarSizeBytes int64  `koanf:"max_avatar_size_bytes"`
+	Driver             string          `koanf:"driver"`
+	LocalRoot          string          `koanf:"local_root"`
+	MaxFileSizeBytes   int64           `koanf:"max_file_size_bytes"`
+	MaxAvatarSizeBytes int64           `koanf:"max_avatar_size_bytes"`
+	AllowedMIMETypes   []string        `koanf:"allowed_mime_types"`
+	SignedURLTTL       time.Duration   `koanf:"signed_url_ttl"`
+	SignedURLSecret    string          `koanf:"signed_url_secret"`
+	S3                 S3StorageConfig `koanf:"s3"`
+}
+
+// S3StorageConfig configures an AWS S3 or S3-compatible (e.g. MinIO) object storage backend.
+type S3StorageConfig struct {
+	Endpoint         string `koanf:"endpoint"`
+	Region           string `koanf:"region"`
+	Bucket           string `koanf:"bucket"`
+	AccessKey        string `koanf:"access_key"`
+	SecretKey        string `koanf:"secret_key"`
+	UsePathStyle     bool   `koanf:"use_path_style"`
+	AutoCreateBucket bool   `koanf:"auto_create_bucket"`
+}
+
+// Configured reports whether the minimum S3 backend credentials and bucket are populated.
+func (s S3StorageConfig) Configured() bool {
+	return strings.TrimSpace(s.Bucket) != "" &&
+		strings.TrimSpace(s.AccessKey) != "" &&
+		strings.TrimSpace(s.SecretKey) != ""
 }
 
 // AuthConfig defines JWT and refresh token parameters.
@@ -151,6 +173,11 @@ func Default() Config {
 			LocalRoot:          "./data/uploads",
 			MaxFileSizeBytes:   10 << 20,
 			MaxAvatarSizeBytes: 2 << 20,
+			SignedURLTTL:       5 * time.Minute,
+			S3: S3StorageConfig{
+				Region:       "us-east-1",
+				UsePathStyle: true,
+			},
 		},
 		Auth: AuthConfig{
 			JWTSecret:       defaultDevJWTSecret,
@@ -280,5 +307,47 @@ func (c Config) Validate() error {
 		return errors.New("audit.retention_days must be >= 0")
 	}
 
+	if err := c.validateStorage(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (c Config) validateStorage() error {
+	driver := strings.ToLower(strings.TrimSpace(c.Storage.Driver))
+	switch driver {
+	case "", "local", "s3":
+	default:
+		return fmt.Errorf("invalid storage.driver %q (must be local or s3)", c.Storage.Driver)
+	}
+
+	if c.Storage.MaxFileSizeBytes <= 0 {
+		return errors.New("storage.max_file_size_bytes must be > 0")
+	}
+	if c.Storage.MaxAvatarSizeBytes <= 0 {
+		return errors.New("storage.max_avatar_size_bytes must be > 0")
+	}
+	if c.Storage.SignedURLTTL <= 0 {
+		return errors.New("storage.signed_url_ttl must be > 0")
+	}
+	if secret := strings.TrimSpace(c.Storage.SignedURLSecret); secret != "" && len(secret) < minJWTSecretLength {
+		return fmt.Errorf("storage.signed_url_secret must be at least %d bytes", minJWTSecretLength)
+	}
+
+	if driver == "s3" && !c.Storage.S3.Configured() {
+		return errors.New("storage.s3 requires bucket, access_key, and secret_key when storage.driver is s3")
+	}
+	if c.IsProduction() && c.Storage.S3.Configured() && isWeakS3Credential(c.Storage.S3.AccessKey, c.Storage.S3.SecretKey) {
+		return errors.New("storage.s3 must not use default development credentials in production")
+	}
+
+	return nil
+}
+
+func isWeakS3Credential(accessKey, secretKey string) bool {
+	ak := strings.TrimSpace(accessKey)
+	sk := strings.TrimSpace(secretKey)
+	return (ak == "tianshu" && sk == "tianshu123456") ||
+		(ak == "minioadmin" && sk == "minioadmin")
 }

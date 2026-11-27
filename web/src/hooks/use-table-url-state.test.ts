@@ -91,7 +91,7 @@ describe('useTableUrlState', () => {
     })
   })
 
-  it('onPaginationChange writes non-default page and pageSize', async () => {
+  it('onPaginationChange writes non-default page when page size is unchanged', async () => {
     const navigate = vi.fn() as Mock<NavigateFn>
     const prev = { filter: 'x' }
     const { result, act } = await renderHook(() =>
@@ -105,13 +105,37 @@ describe('useTableUrlState', () => {
     await act(() => {
       result.current.onPaginationChange({
         pageIndex: 2,
-        pageSize: 25,
+        pageSize: 10,
       })
     })
 
     expect(applyLastSearchFn(navigate, prev)).toMatchObject({
       page: 3,
-      pageSize: 25,
+      filter: 'x',
+    })
+  })
+
+  it('onPaginationChange resets page to the first page when page size changes', async () => {
+    const navigate = vi.fn() as Mock<NavigateFn>
+    const prev = { page: 3, pageSize: 20, filter: 'x' }
+    const { result, act } = await renderHook(() =>
+      useTableUrlState({
+        search: prev,
+        navigate,
+        pagination: { defaultPage: 1, defaultPageSize: 10 },
+      })
+    )
+
+    await act(() => {
+      result.current.onPaginationChange({
+        pageIndex: 4,
+        pageSize: 50,
+      })
+    })
+
+    expect(applyLastSearchFn(navigate, prev)).toMatchObject({
+      page: undefined,
+      pageSize: 50,
       filter: 'x',
     })
   })

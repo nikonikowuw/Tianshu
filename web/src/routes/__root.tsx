@@ -13,12 +13,13 @@ export const Route = createRootRouteWithContext<RouterContext>()({
       <NavigationProgress />
       <Outlet />
       <Toaster duration={5000} />
-      {import.meta.env.DEV && (
-        <>
-          <ReactQueryDevtools buttonPosition='bottom-left' />
-          <TanStackRouterDevtools position='bottom-right' />
-        </>
-      )}
+      {import.meta.env.DEV &&
+        import.meta.env.VITE_DISABLE_DEVTOOLS !== 'true' && (
+          <>
+            <ReactQueryDevtools buttonPosition='bottom-left' />
+            <TanStackRouterDevtools position='bottom-right' />
+          </>
+        )}
     </>
   ),
   notFoundComponent: NotFoundError,
