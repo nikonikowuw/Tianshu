@@ -61,6 +61,7 @@
     "rolesPlaceholder": "选择角色...",
     "rolesSearchPlaceholder": "搜索角色...",
     "rolesEmpty": "暂无可选角色",
+    "rolesLoadError": "加载角色列表失败",
     "rolesSelectedCount": "已选 {{count}} 项",
     "superAdminProtected": "仅超级管理员可授予或撤销超级管理员角色",
     "selfSuperAdminHint": "不能移除自己的超级管理员角色",

@@ -75,7 +75,12 @@ export function UserFormSheet({
   const isEdit = mode === 'edit' && user !== null
   const isSelf = isEdit && currentUser?.id === user.id
 
-  const { data: roleOptionsData } = useQuery({
+  const {
+    data: roleOptionsData,
+    isLoading: isRoleOptionsLoading,
+    isError: isRoleOptionsError,
+    refetch: refetchRoleOptions,
+  } = useQuery({
     ...roleOptionsQueryOptions(i18n.language),
     enabled: open,
   })
@@ -167,6 +172,7 @@ export function UserFormSheet({
         apiErr.fieldErrors &&
         Object.keys(apiErr.fieldErrors).length > 0
       ) {
+        let mapped = false
         for (const [field, message] of Object.entries(apiErr.fieldErrors)) {
           if (
             field === 'username' ||
@@ -177,9 +183,10 @@ export function UserFormSheet({
             field === 'roleIds'
           ) {
             form.setError(field, { message })
+            mapped = true
           }
         }
-        return
+        if (mapped) return
       }
       setBannerError(apiErr.message)
     }
@@ -308,6 +315,9 @@ export function UserFormSheet({
                           value={field.value}
                           onChange={field.onChange}
                           disabled={isSubmitting}
+                          isLoading={isRoleOptionsLoading}
+                          isError={isRoleOptionsError}
+                          onRetry={() => void refetchRoleOptions()}
                           actorIsSuperAdmin={actorIsSuperAdmin}
                           isSelf={isSelf}
                         />
@@ -332,22 +342,25 @@ export function UserFormSheet({
                   control={form.control}
                   name='status'
                   render={({ field }) => (
-                    <FormItem className='flex items-center justify-between rounded-lg border p-3'>
-                      <div className='space-y-0.5'>
-                        <FormLabel>{t('form.status')}</FormLabel>
-                        <FormDescription>
-                          {t('form.statusActiveHint')}
-                        </FormDescription>
+                    <FormItem>
+                      <div className='flex items-center justify-between rounded-lg border p-3'>
+                        <div className='space-y-0.5'>
+                          <FormLabel>{t('form.status')}</FormLabel>
+                          <FormDescription>
+                            {t('form.statusActiveHint')}
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <Switch
+                            checked={field.value === 'active'}
+                            onCheckedChange={(checked) =>
+                              field.onChange(checked ? 'active' : 'disabled')
+                            }
+                            disabled={isSubmitting || isSelf}
+                          />
+                        </FormControl>
                       </div>
-                      <FormControl>
-                        <Switch
-                          checked={field.value === 'active'}
-                          onCheckedChange={(checked) =>
-                            field.onChange(checked ? 'active' : 'disabled')
-                          }
-                          disabled={isSubmitting || isSelf}
-                        />
-                      </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -364,9 +377,7 @@ export function UserFormSheet({
                 {tCommon('cancel')}
               </Button>
               <Button type='submit' disabled={isSubmitting}>
-                {isSubmitting && (
-                  <Loader2 className='me-2 size-4 animate-spin' />
-                )}
+                {isSubmitting && <Loader2 className='size-4 animate-spin' />}
                 {isEdit ? t('form.submitSave') : t('form.submitCreate')}
               </Button>
             </SheetFooter>

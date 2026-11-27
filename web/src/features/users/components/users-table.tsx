@@ -209,8 +209,6 @@ export function UsersTable({
     (search.roleId?.length ?? 0) > 0
 
   const handleResetFilters = () => {
-    table.resetColumnFilters()
-    table.setGlobalFilter('')
     navigate({
       replace: true,
       search: (prev) => ({
@@ -220,7 +218,7 @@ export function UsersTable({
         roleId: undefined,
         sort: undefined,
         order: undefined,
-        page: 1,
+        page: undefined,
       }),
     })
   }
@@ -264,38 +262,47 @@ export function UsersTable({
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead
-                    key={header.id}
-                    className={cn(header.column.columnDef.meta?.thClassName)}
-                  >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
-                  </TableHead>
-                ))}
+                {headerGroup.headers.map((header) => {
+                  const sorted = header.column.getIsSorted()
+                  const ariaSort = header.column.getCanSort()
+                    ? sorted === 'asc'
+                      ? 'ascending'
+                      : sorted === 'desc'
+                        ? 'descending'
+                        : 'none'
+                    : undefined
+                  return (
+                    <TableHead
+                      key={header.id}
+                      aria-sort={ariaSort}
+                      className={cn(header.column.columnDef.meta?.thClassName)}
+                    >
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(
+                            header.column.columnDef.header,
+                            header.getContext()
+                          )}
+                    </TableHead>
+                  )
+                })}
               </TableRow>
             ))}
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              Array.from({ length: Math.min(pagination.pageSize, 8) }).map(
-                (_, idx) => (
-                  <TableRow key={`skeleton-${idx}`}>
-                    {table.getVisibleLeafColumns().map((col) => (
-                      <TableCell
-                        key={col.id}
-                        className={cn(col.columnDef.meta?.tdClassName)}
-                      >
-                        <Skeleton className='h-4 w-full max-w-36' />
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                )
-              )
+              Array.from({ length: pagination.pageSize }).map((_, idx) => (
+                <TableRow key={`skeleton-${idx}`}>
+                  {table.getVisibleLeafColumns().map((col) => (
+                    <TableCell
+                      key={col.id}
+                      className={cn(col.columnDef.meta?.tdClassName)}
+                    >
+                      <Skeleton className='h-4 w-full max-w-36' />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))
             ) : table.getRowModel().rows.length === 0 ? (
               <TableRow>
                 <TableCell
@@ -315,7 +322,7 @@ export function UsersTable({
                         size='sm'
                         onClick={handleResetFilters}
                       >
-                        {tCommon('table.resetFilters')}
+                        {tCommon('table.clearFilters')}
                       </Button>
                     )}
                   </div>
