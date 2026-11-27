@@ -2,11 +2,12 @@ import {
   queryOptions,
   useMutation,
   useQueryClient,
+  type QueryClient,
 } from '@tanstack/react-query'
-import { apiClient } from '@/lib/api/client'
 import {
   createMenu,
   deleteMenu,
+  fetchMenuPermissionsCatalog,
   fetchMenuTree,
   reorderMenus,
   updateMenu,
@@ -17,19 +18,16 @@ import type {
   UpdateMenuPayload,
 } from './types'
 
-export type PermissionCatalogResponse = {
-  groups: Array<{
-    module: string
-    label: string
-    permissions: Array<{ code: string; name: string }>
-  }>
-}
-
 export const menusKeys = {
+  // Invalidating ['menus'] also refreshes ['menus', 'user', lang] in AuthenticatedShell.
   all: ['menus'] as const,
   tree: (lang: string) => ['menus', 'tree', lang] as const,
-  user: (lang: string) => ['menus', 'user', lang] as const,
   permissions: (lang: string) => ['menus', 'permissions', lang] as const,
+}
+
+function invalidateMenuCaches(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: menusKeys.all })
+  void queryClient.invalidateQueries({ queryKey: ['roles', 'menu-tree'] })
 }
 
 export function menuTreeQueryOptions(lang: string) {
@@ -43,13 +41,7 @@ export function menuTreeQueryOptions(lang: string) {
 export function menuPermissionsQueryOptions(lang: string) {
   return queryOptions({
     queryKey: menusKeys.permissions(lang),
-    queryFn: async ({ signal }) => {
-      const res = await apiClient.get<PermissionCatalogResponse>(
-        '/permissions',
-        { signal }
-      )
-      return res.data
-    },
+    queryFn: ({ signal }) => fetchMenuPermissionsCatalog(signal),
     staleTime: 5 * 60 * 1000,
     meta: { silent: true },
   })
@@ -61,7 +53,7 @@ export function useCreateMenuMutation() {
     mutationFn: (payload: CreateMenuPayload) => createMenu(payload),
     meta: { silent: true },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: menusKeys.all })
+      invalidateMenuCaches(queryClient)
     },
   })
 }
@@ -73,7 +65,7 @@ export function useUpdateMenuMutation() {
       updateMenu(id, payload),
     meta: { silent: true },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: menusKeys.all })
+      invalidateMenuCaches(queryClient)
     },
   })
 }
@@ -84,7 +76,7 @@ export function useReorderMenusMutation() {
     mutationFn: (items: ReorderMenuItemPayload[]) => reorderMenus(items),
     meta: { silent: true },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: menusKeys.all })
+      invalidateMenuCaches(queryClient)
     },
   })
 }
@@ -95,7 +87,7 @@ export function useDeleteMenuMutation() {
     mutationFn: (id: string) => deleteMenu(id),
     meta: { silent: true },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: menusKeys.all })
+      invalidateMenuCaches(queryClient)
     },
   })
 }

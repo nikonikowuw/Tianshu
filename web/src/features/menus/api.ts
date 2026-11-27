@@ -3,6 +3,7 @@ import type {
   CreateMenuPayload,
   MenuItem,
   MenuTreeResponse,
+  PermissionCatalogResponse,
   ReorderMenuItemPayload,
   UpdateMenuPayload,
 } from './types'
@@ -16,12 +17,13 @@ export async function fetchMenuTree(
   return response.data
 }
 
-export async function fetchUserMenus(
+export async function fetchMenuPermissionsCatalog(
   signal?: AbortSignal
-): Promise<MenuTreeResponse> {
-  const response = await apiClient.get<MenuTreeResponse>('/menus/user', {
-    signal,
-  })
+): Promise<PermissionCatalogResponse> {
+  const response = await apiClient.get<PermissionCatalogResponse>(
+    '/permissions',
+    { signal }
+  )
   return response.data
 }
 

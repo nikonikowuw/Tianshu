@@ -15,5 +15,7 @@
   "usernameFormat": "用户名仅支持小写字母、数字、点、下划线和连字符",
   "menuCodeFormat": "菜单编码须为 2-64 位小写字母、数字、下划线或连字符，且以小写字母开头",
   "menuTitleMax": "菜单名称长度不能超过 100 个字符",
-  "menuPathFormat": "菜单路径须以 / 开头且不能超过 255 个字符"
+  "menuPathFormat": "菜单路径须以 / 开头且不能超过 255 个字符",
+  "menuSortOrderRange": "排序值须为 0-99999 之间的整数",
+  "menuInvalidParent": "所选上级节点与当前节点类型不兼容"
 }

@@ -56,3 +56,11 @@ export type ReorderMenuItemPayload = {
   parentId: string | null
   sortOrder: number
 }
+
+export type PermissionCatalogResponse = {
+  groups: Array<{
+    module: string
+    label: string
+    permissions: Array<{ code: string; name: string }>
+  }>
+}
