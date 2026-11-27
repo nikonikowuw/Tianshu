@@ -1,7 +1,6 @@
 package access
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -213,7 +212,7 @@ func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (Role, 
 		})
 	}
 	if len(fieldErrs) > 0 {
-		return Role{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return Role{}, apperr.Validation(fieldErrs)
 	}
 
 	roleID, err := uuid.NewV7()
@@ -307,7 +306,7 @@ func (s *Service) UpdateRole(ctx context.Context, input UpdateRoleInput) (Role, 
 	}
 
 	if len(fieldErrs) > 0 {
-		return Role{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return Role{}, apperr.Validation(fieldErrs)
 	}
 
 	var updated Role
@@ -796,21 +795,4 @@ func normalizeRoleOrder(order string) string {
 		return "asc"
 	}
 	return "desc"
-}
-
-func sortAndDedupeFieldErrors(in []apperr.FieldError) []apperr.FieldError {
-	byField := make(map[string]apperr.FieldError, len(in))
-	for _, fe := range in {
-		if _, exists := byField[fe.Field]; !exists {
-			byField[fe.Field] = fe
-		}
-	}
-	out := make([]apperr.FieldError, 0, len(byField))
-	for _, fe := range byField {
-		out = append(out, fe)
-	}
-	slices.SortFunc(out, func(a, b apperr.FieldError) int {
-		return cmp.Compare(a.Field, b.Field)
-	})
-	return out
 }

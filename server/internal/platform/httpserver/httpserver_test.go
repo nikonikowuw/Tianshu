@@ -188,6 +188,18 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 	r.GET("/api/v1/conflict", func(c *gin.Context) {
 		_ = c.Error(apperr.Conflict(apperr.CodeConflict))
 	})
+	r.GET("/api/v1/non422-with-fields", func(c *gin.Context) {
+		err := apperr.Conflict(apperr.CodeConflict)
+		err.Fields = []apperr.FieldError{{Field: "email", Message: "VALIDATION_EMAIL"}}
+		_ = c.Error(err)
+	})
+	r.GET("/api/v1/apperr-validation", func(c *gin.Context) {
+		_ = c.Error(apperr.Validation([]apperr.FieldError{
+			{Field: "name", Message: "VALIDATION_REQUIRED"},
+			{Field: "email", Message: "VALIDATION_EMAIL"},
+			{Field: "email", Message: "VALIDATION_REQUIRED"},
+		}))
+	})
 	r.GET("/api/v1/internal-app", func(c *gin.Context) {
 		_ = c.Error(apperr.Internal(errors.New("secret sql constraint detail")))
 	})
@@ -276,6 +288,43 @@ func TestErrorContractValidation400Vs422AndI18n(t *testing.T) {
 			if wantEmail := bundle.Translate(lang, "VALIDATION_EMAIL", nil); body.Errors[0].Message != wantEmail {
 				t.Fatalf("[%s] email error message = %q, want %q", lang, body.Errors[0].Message, wantEmail)
 			}
+		}
+	})
+
+	t.Run("apperr validation sorts/dedupes and non-422 omits errors field", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/apperr-validation", nil)
+		req.Header.Set("Accept-Language", i18n.LangEnUS)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422", rec.Code)
+		}
+		var valBody struct {
+			Code   string              `json:"code"`
+			Errors []apperr.FieldError `json:"errors"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &valBody); err != nil {
+			t.Fatalf("unmarshal 422 body: %v", err)
+		}
+		if len(valBody.Errors) != 2 || valBody.Errors[0].Field != "email" || valBody.Errors[1].Field != "name" {
+			t.Fatalf("errors = %+v, want sorted email then name", valBody.Errors)
+		}
+		if wantEmail := bundle.Translate(i18n.LangEnUS, "VALIDATION_EMAIL", nil); valBody.Errors[0].Message != wantEmail {
+			t.Fatalf("email message = %q, want %q", valBody.Errors[0].Message, wantEmail)
+		}
+
+		reqConflict := httptest.NewRequest(http.MethodGet, "/api/v1/non422-with-fields", nil)
+		recConflict := httptest.NewRecorder()
+		r.ServeHTTP(recConflict, reqConflict)
+		if recConflict.Code != http.StatusConflict {
+			t.Fatalf("status = %d, want 409", recConflict.Code)
+		}
+		var conflictBody map[string]any
+		if err := json.Unmarshal(recConflict.Body.Bytes(), &conflictBody); err != nil {
+			t.Fatalf("unmarshal 409 body: %v", err)
+		}
+		if _, hasErrors := conflictBody["errors"]; hasErrors {
+			t.Fatalf("non-422 error body must not carry errors field: %v", conflictBody)
 		}
 	})
 

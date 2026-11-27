@@ -130,7 +130,7 @@ func parseOptionalUUID(raw *string, field, errCode string) (*uuid.UUID, error) {
 func bindListRolesRequest(c *gin.Context) (RoleListFilter, error) {
 	isSystem, fieldErrs := parseRoleQueryExtras(c)
 	if len(fieldErrs) > 0 {
-		return RoleListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return RoleListFilter{}, apperr.Validation(fieldErrs)
 	}
 
 	var req listRolesRequest

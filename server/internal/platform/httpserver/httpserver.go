@@ -305,7 +305,7 @@ func errorHandlerMiddleware(log *slog.Logger, bundle *i18n.Bundle) gin.HandlerFu
 				)
 			}
 			var translatedFields []apperr.FieldError
-			if len(appErr.Fields) > 0 {
+			if appErr.Status == http.StatusUnprocessableEntity && len(appErr.Fields) > 0 {
 				translatedFields = make([]apperr.FieldError, len(appErr.Fields))
 				for i, f := range appErr.Fields {
 					translatedFields[i] = apperr.FieldError{

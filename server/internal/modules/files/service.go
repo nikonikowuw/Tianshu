@@ -760,7 +760,7 @@ func normalizeListFilter(filter ListFilter) (ListFilter, error) {
 
 	normalized, fieldErrs := validateAndNormalizeFilterFields(out)
 	if len(fieldErrs) > 0 {
-		return ListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return ListFilter{}, apperr.Validation(fieldErrs)
 	}
 	return normalized, nil
 }

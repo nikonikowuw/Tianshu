@@ -1,8 +1,6 @@
 package audit
 
 import (
-	"cmp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -138,7 +136,7 @@ func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
 	}
 
 	if len(fieldErrs) > 0 {
-		return ListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
+		return ListFilter{}, apperr.Validation(fieldErrs)
 	}
 
 	return ListFilter{
@@ -212,21 +210,4 @@ func parseOptionalRFC3339(raw string) (*time.Time, bool) {
 	}
 	utc := parsed.UTC()
 	return &utc, true
-}
-
-func sortAndDedupeFieldErrors(in []apperr.FieldError) []apperr.FieldError {
-	byField := make(map[string]apperr.FieldError, len(in))
-	for _, fe := range in {
-		if _, exists := byField[fe.Field]; !exists {
-			byField[fe.Field] = fe
-		}
-	}
-	out := make([]apperr.FieldError, 0, len(byField))
-	for _, fe := range byField {
-		out = append(out, fe)
-	}
-	slices.SortFunc(out, func(a, b apperr.FieldError) int {
-		return cmp.Compare(a.Field, b.Field)
-	})
-	return out
 }
