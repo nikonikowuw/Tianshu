@@ -19,6 +19,8 @@
     "status": "Status",
     "action": "Action",
     "resource": "Resource",
+    "actor": "Actor",
+    "actorPlaceholder": "Filter by actor...",
     "timeRange": "Date range",
     "clearDates": "Clear dates",
     "today": "Today",
@@ -40,13 +42,21 @@
     "profileUpdate": "Update Profile (profile.update)",
     "profileChangePassword": "Change Password (profile.change_password)",
     "profileSessionRevoke": "Revoke Session (profile.session_revoke)",
-    "profileSessionsRevokeOthers": "Revoke Other Sessions (profile.sessions_revoke_others)"
+    "profileSessionsRevokeOthers": "Revoke Other Sessions (profile.sessions_revoke_others)",
+    "userCreate": "Create User (user.create)",
+    "userUpdate": "Update User (user.update)",
+    "userDelete": "Delete User (user.delete)",
+    "menuCreate": "Create Menu (menu.create)",
+    "menuUpdate": "Update Menu (menu.update)",
+    "menuReorder": "Reorder Menus (menu.reorder)",
+    "menuDelete": "Delete Menu (menu.delete)"
   },
   "resources": {
     "system": "System (system)",
     "session": "Session (session)",
     "user": "User (user)",
     "role": "Role (role)",
+    "menu": "Menu (menu)",
     "file": "File (file)"
   },
   "rowActions": {

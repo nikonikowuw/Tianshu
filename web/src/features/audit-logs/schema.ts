@@ -1,6 +1,5 @@
 import { z } from 'zod'
-
-const dateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/
+import { isValidDateOnly } from './date'
 
 const stringOrArray = z
   .union([z.array(z.string()), z.string()])
@@ -8,6 +7,13 @@ const stringOrArray = z
     const items = Array.isArray(val) ? val : val.split(',')
     return items.map((s) => s.trim()).filter(Boolean)
   })
+
+const dateOnly = z
+  .string()
+  .trim()
+  .refine(isValidDateOnly, { message: 'Invalid calendar date' })
+  .optional()
+  .catch(undefined)
 
 export const auditLogsSearchSchema = z.object({
   page: z.coerce
@@ -29,6 +35,14 @@ export const auditLogsSearchSchema = z.object({
   q: z
     .string()
     .trim()
+    .max(100)
+    .transform((v) => (v === '' ? undefined : v))
+    .optional()
+    .catch(undefined),
+  actor: z
+    .string()
+    .trim()
+    .max(100)
     .transform((v) => (v === '' ? undefined : v))
     .optional()
     .catch(undefined),
@@ -38,18 +52,8 @@ export const auditLogsSearchSchema = z.object({
     .catch([]),
   action: stringOrArray.optional().catch([]),
   resource: stringOrArray.optional().catch([]),
-  from: z
-    .string()
-    .trim()
-    .refine((v) => dateOnlyPattern.test(v))
-    .optional()
-    .catch(undefined),
-  to: z
-    .string()
-    .trim()
-    .refine((v) => dateOnlyPattern.test(v))
-    .optional()
-    .catch(undefined),
+  from: dateOnly,
+  to: dateOnly,
   sort: z
     .enum(['created_at', 'action', 'resource', 'status'])
     .optional()

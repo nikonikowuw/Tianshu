@@ -1,20 +1,6 @@
 import { apiClient } from '@/lib/api/client'
+import { toBoundaryRFC3339 } from './date'
 import type { AuditLogsListParams, AuditLogsPage } from './types'
-
-function toBoundaryRFC3339(dateStr: string, endOfDay: boolean): string | null {
-  const parts = dateStr.split('-').map(Number)
-  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
-    return null
-  }
-  const [year, month, day] = parts
-  const d = endOfDay
-    ? new Date(year, month - 1, day, 23, 59, 59, 999)
-    : new Date(year, month - 1, day, 0, 0, 0, 0)
-  if (Number.isNaN(d.getTime())) {
-    return null
-  }
-  return d.toISOString()
-}
 
 export function buildAuditLogsQueryParams(
   params: AuditLogsListParams
@@ -26,6 +12,9 @@ export function buildAuditLogsQueryParams(
   if (params.q) {
     sp.set('q', params.q)
   }
+  if (params.actor) {
+    sp.set('actor', params.actor)
+  }
   for (const st of params.status ?? []) {
     sp.append('status', st)
   }
@@ -36,12 +25,8 @@ export function buildAuditLogsQueryParams(
     sp.append('resource', res)
   }
 
-  let fromIso = params.from ? toBoundaryRFC3339(params.from, false) : null
-  let toIso = params.to ? toBoundaryRFC3339(params.to, true) : null
-  if (fromIso && toIso && fromIso > toIso && params.from && params.to) {
-    fromIso = toBoundaryRFC3339(params.to, false)
-    toIso = toBoundaryRFC3339(params.from, true)
-  }
+  const fromIso = params.from ? toBoundaryRFC3339(params.from, false) : null
+  const toIso = params.to ? toBoundaryRFC3339(params.to, true) : null
   if (fromIso) {
     sp.set('from', fromIso)
   }

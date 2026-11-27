@@ -10,10 +10,12 @@ import {
 import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
 import { normalizeApiError } from '@/lib/api/error'
+import { formatServerErrorMessage } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -23,6 +25,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { AUDIT_ACTION_OPTIONS, AUDIT_RESOURCE_OPTIONS } from '../catalog'
+import { normalizeDateRange } from '../date'
 import { auditLogsQueryOptions } from '../queries'
 import type { AuditLogsSearch } from '../schema'
 import type { AuditLogItem, AuditLogsListParams } from '../types'
@@ -49,6 +53,8 @@ export function AuditLogsTable({
   const { t, i18n } = useTranslation('audit')
   const { t: tCommon } = useTranslation('common')
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [actorDraft, setActorDraft] = useState(search.actor ?? '')
+  const normalizedRange = normalizeDateRange(search.from, search.to)
 
   const {
     globalFilter,
@@ -79,6 +85,7 @@ export function AuditLogsTable({
       page: pagination.pageIndex + 1,
       pageSize: pagination.pageSize,
       q: globalFilter || undefined,
+      actor: search.actor,
       status:
         search.status && search.status.length > 0 ? search.status : undefined,
       action:
@@ -87,8 +94,8 @@ export function AuditLogsTable({
         search.resource && search.resource.length > 0
           ? search.resource
           : undefined,
-      from: search.from,
-      to: search.to,
+      from: normalizedRange.from,
+      to: normalizedRange.to,
       sort: activeSort?.id as AuditLogsListParams['sort'],
       order: activeSort ? (activeSort.desc ? 'desc' : 'asc') : undefined,
     }
@@ -96,11 +103,12 @@ export function AuditLogsTable({
     pagination.pageIndex,
     pagination.pageSize,
     globalFilter,
+    search.actor,
     search.status,
     search.action,
     search.resource,
-    search.from,
-    search.to,
+    normalizedRange.from,
+    normalizedRange.to,
     sorting,
   ])
 
@@ -118,6 +126,30 @@ export function AuditLogsTable({
       ensurePageInRange(pageCount)
     }
   }, [data, pageCount, ensurePageInRange])
+
+  // Keep the typed actor value in sync with URL-driven navigation (back/forward,
+  // reset, or a pasted link).
+  useEffect(() => {
+    setActorDraft(search.actor ?? '')
+  }, [search.actor])
+
+  // Normalize a reversed manual URL range so the badge, URL, and request agree.
+  useEffect(() => {
+    if (!normalizedRange.reversed) return
+    navigate({
+      search: (prev) => ({
+        ...prev,
+        page: undefined,
+        from: normalizedRange.from,
+        to: normalizedRange.to,
+      }),
+    })
+  }, [
+    normalizedRange.reversed,
+    normalizedRange.from,
+    normalizedRange.to,
+    navigate,
+  ])
 
   const columns = useMemo(
     () =>
@@ -154,14 +186,31 @@ export function AuditLogsTable({
 
   const hasDateFilter = Boolean(search.from || search.to)
   const hasAnyFilter =
-    Boolean(globalFilter) || columnFilters.length > 0 || hasDateFilter
+    Boolean(globalFilter) ||
+    Boolean(search.actor) ||
+    columnFilters.length > 0 ||
+    hasDateFilter
+
+  const applyActorFilter = () => {
+    const next = actorDraft.trim()
+    if (next === (search.actor ?? '')) return
+    navigate({
+      search: (prev) => ({
+        ...prev,
+        page: undefined,
+        actor: next || undefined,
+      }),
+    })
+  }
 
   const handleResetAll = () => {
+    setActorDraft('')
     navigate({
       search: (prev) => ({
         ...prev,
         page: undefined,
         q: undefined,
+        actor: undefined,
         status: undefined,
         action: undefined,
         resource: undefined,
@@ -186,46 +235,18 @@ export function AuditLogsTable({
       {
         columnId: 'action',
         title: t('filters.action'),
-        options: [
-          { label: t('actions.authLogin'), value: 'auth.login' },
-          { label: t('actions.authLogout'), value: 'auth.logout' },
-          { label: t('actions.authRefresh'), value: 'auth.refresh' },
-          {
-            label: t('actions.authRefreshReplay'),
-            value: 'auth.refresh_replay',
-          },
-          { label: t('actions.setupInit'), value: 'setup.init' },
-          { label: t('actions.roleCreate'), value: 'role.create' },
-          { label: t('actions.roleUpdate'), value: 'role.update' },
-          { label: t('actions.roleDelete'), value: 'role.delete' },
-          { label: t('actions.fileUpload'), value: 'file.upload' },
-          { label: t('actions.fileUploadAvatar'), value: 'file.upload_avatar' },
-          { label: t('actions.fileDelete'), value: 'file.delete' },
-          { label: t('actions.profileUpdate'), value: 'profile.update' },
-          {
-            label: t('actions.profileChangePassword'),
-            value: 'profile.change_password',
-          },
-          {
-            label: t('actions.profileSessionRevoke'),
-            value: 'profile.session_revoke',
-          },
-          {
-            label: t('actions.profileSessionsRevokeOthers'),
-            value: 'profile.sessions_revoke_others',
-          },
-        ],
+        options: AUDIT_ACTION_OPTIONS.map((option) => ({
+          label: t(option.labelKey),
+          value: option.value,
+        })),
       },
       {
         columnId: 'resource',
         title: t('filters.resource'),
-        options: [
-          { label: t('resources.session'), value: 'session' },
-          { label: t('resources.system'), value: 'system' },
-          { label: t('resources.user'), value: 'user' },
-          { label: t('resources.role'), value: 'role' },
-          { label: t('resources.file'), value: 'file' },
-        ],
+        options: AUDIT_RESOURCE_OPTIONS.map((option) => ({
+          label: t(option.labelKey),
+          value: option.value,
+        })),
       },
     ],
     [t]
@@ -238,24 +259,42 @@ export function AuditLogsTable({
       <DataTableToolbar
         table={table}
         searchPlaceholder={t('searchPlaceholder')}
+        searchMaxLength={100}
         filters={filterConfigs}
         hasActiveFilters={hasAnyFilter}
         onReset={handleResetAll}
         extraFilters={
-          <AuditDateRangeFilter
-            from={search.from}
-            to={search.to}
-            onChange={({ from, to }) => {
-              navigate({
-                search: (prev) => ({
-                  ...prev,
-                  page: undefined,
-                  from,
-                  to,
-                }),
-              })
-            }}
-          />
+          <>
+            <Input
+              value={actorDraft}
+              onChange={(event) => setActorDraft(event.target.value)}
+              onBlur={applyActorFilter}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  applyActorFilter()
+                }
+              }}
+              placeholder={t('filters.actorPlaceholder')}
+              aria-label={t('filters.actor')}
+              maxLength={100}
+              className='h-8 w-40 sm:w-48'
+            />
+            <AuditDateRangeFilter
+              from={search.from}
+              to={search.to}
+              onChange={({ from, to }) => {
+                navigate({
+                  search: (prev) => ({
+                    ...prev,
+                    page: undefined,
+                    from,
+                    to,
+                  }),
+                })
+              }}
+            />
+          </>
         }
         actions={
           <div className='flex items-center gap-2'>
@@ -271,7 +310,7 @@ export function AuditLogsTable({
               size='sm'
               className='h-8'
               onClick={() => void refetch()}
-              aria-label={tCommon('retry')}
+              aria-label={tCommon('refresh')}
             >
               <RefreshCw className='size-3.5' />
             </Button>
@@ -284,7 +323,7 @@ export function AuditLogsTable({
           <AlertCircle className='size-4' />
           <AlertTitle>{t('error.loadFailed')}</AlertTitle>
           <AlertDescription className='flex flex-wrap items-center justify-between gap-2'>
-            <span>{apiError.message || tCommon('retry')}</span>
+            <span>{formatServerErrorMessage(apiError)}</span>
             <Button
               type='button'
               variant='outline'
@@ -383,7 +422,7 @@ export function AuditLogsTable({
                   ))}
                 </TableRow>
               ))
-            ) : (
+            ) : isError ? null : (
               <TableRow className='hover:bg-transparent'>
                 <TableCell
                   colSpan={table.getVisibleLeafColumns().length}

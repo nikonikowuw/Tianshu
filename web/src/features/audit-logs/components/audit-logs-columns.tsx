@@ -3,34 +3,9 @@ import { type ColumnDef } from '@tanstack/react-table'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { Badge } from '@/components/ui/badge'
 import { LongText } from '@/components/shared/long-text'
+import { getAuditActionLabelKey, getAuditResourceLabelKey } from '../catalog'
 import type { AuditLogItem } from '../types'
 import { AuditLogRowActions } from './audit-log-row-actions'
-
-const ACTION_LABEL_KEY: Record<string, string> = {
-  'setup.init': 'actions.setupInit',
-  'auth.login': 'actions.authLogin',
-  'auth.logout': 'actions.authLogout',
-  'auth.refresh': 'actions.authRefresh',
-  'auth.refresh_replay': 'actions.authRefreshReplay',
-  'role.create': 'actions.roleCreate',
-  'role.update': 'actions.roleUpdate',
-  'role.delete': 'actions.roleDelete',
-  'file.upload': 'actions.fileUpload',
-  'file.upload_avatar': 'actions.fileUploadAvatar',
-  'file.delete': 'actions.fileDelete',
-  'profile.update': 'actions.profileUpdate',
-  'profile.change_password': 'actions.profileChangePassword',
-  'profile.session_revoke': 'actions.profileSessionRevoke',
-  'profile.sessions_revoke_others': 'actions.profileSessionsRevokeOthers',
-}
-
-const RESOURCE_LABEL_KEY: Record<string, string> = {
-  system: 'resources.system',
-  session: 'resources.session',
-  user: 'resources.user',
-  role: 'resources.role',
-  file: 'resources.file',
-}
 
 export function formatAuditTimestamp(iso: string, locale: string): string {
   const parsed = new Date(iso)
@@ -52,7 +27,7 @@ export function formatAuditActionLabel(
   action: string,
   t: TFunction<'audit'>
 ): string {
-  const key = ACTION_LABEL_KEY[action]
+  const key = getAuditActionLabelKey(action)
   return key ? t(key) : action
 }
 
@@ -60,7 +35,7 @@ export function formatAuditResourceLabel(
   resource: string,
   t: TFunction<'audit'>
 ): string {
-  const key = RESOURCE_LABEL_KEY[resource]
+  const key = getAuditResourceLabelKey(resource)
   return key ? t(key) : resource
 }
 

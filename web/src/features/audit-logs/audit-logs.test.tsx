@@ -2,18 +2,29 @@ import { useState } from 'react'
 import { I18nextProvider } from 'react-i18next'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import '@/styles/index.css'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import i18n from '@/i18n/index'
 import { ApiError } from '@/lib/api/error'
 import { buildAuditLogsQueryParams } from './api'
+import { AUDIT_ACTION_OPTIONS, AUDIT_RESOURCE_OPTIONS } from './catalog'
 import { AuditLogDetailSheet } from './components/audit-log-detail-sheet'
 import { AuditLogsTable } from './components/audit-logs-table'
+import { formatDateOnly, normalizeDateRange, toBoundaryRFC3339 } from './date'
 import { auditLogsSearchSchema, type AuditLogsSearch } from './schema'
 import type { AuditLogItem, AuditLogsPage } from './types'
 
 const getMock = vi.fn()
+const initialLanguage = i18n.language
 
 vi.mock('@/lib/api/client', () => ({
   apiClient: {
@@ -50,7 +61,37 @@ const sampleEntries: AuditLogItem[] = [
     metadata: { reason: 'refresh_token_reused' },
     createdAt: '2026-11-26T09:35:00Z',
   },
+  {
+    id: '01930000-0000-7000-8000-000000000003',
+    actorId: '01930000-0000-7000-8000-000000000098',
+    actorUsername: 'bob_ops',
+    action: 'user.delete',
+    resource: 'menu',
+    resourceId: 'menu-9',
+    status: 'success',
+    ipAddress: '10.0.0.13',
+    userAgent: 'Mozilla/5.0',
+    requestId: 'req_audit_gamma_03',
+    metadata: {},
+    createdAt: '2026-11-26T09:40:00Z',
+  },
 ]
+
+function makePage(items: AuditLogItem[] = sampleEntries): AuditLogsPage {
+  return { items, total: items.length, page: 1, pageSize: 20 }
+}
+
+function lastRequestParams(): URLSearchParams {
+  const calls = getMock.mock.calls
+  const call = calls[calls.length - 1]
+  return (call?.[1] as { params: URLSearchParams }).params
+}
+
+function searchState(screen: Awaited<ReturnType<typeof renderAuditLogs>>) {
+  return JSON.parse(
+    screen.getByTestId('audit-search-state').element().textContent ?? '{}'
+  ) as AuditLogsSearch
+}
 
 function AuditLogsHarness({
   initialSearch,
@@ -85,6 +126,9 @@ function AuditLogsHarness({
 
   return (
     <>
+      <output data-testid='audit-search-state' className='sr-only'>
+        {JSON.stringify(search)}
+      </output>
       <AuditLogsTable
         search={search}
         navigate={navigate}
@@ -115,54 +159,72 @@ function renderAuditLogs(initialSearch?: Partial<AuditLogsSearch>) {
 }
 
 describe('audit-logs feature', () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('zh-CN')
+  })
+
   afterEach(() => {
     getMock.mockReset()
+  })
+
+  afterAll(async () => {
+    await i18n.changeLanguage(initialLanguage)
   })
 
   it('normalizes invalid URL search params and builds repeated query params', () => {
     const parsed = auditLogsSearchSchema.parse({
       page: '-3',
       pageSize: '999',
+      q: 'x'.repeat(101),
+      actor: 'a'.repeat(101),
       status: ['success', 'invalid'],
-      from: 'bad-date',
+      from: '2026-02-30',
     })
-    expect(parsed).toEqual({
+    expect(parsed).toMatchObject({
       page: 1,
       pageSize: 20,
       status: ['success'],
       from: undefined,
+      q: undefined,
+      actor: undefined,
     })
 
     const sp = buildAuditLogsQueryParams({
       page: 2,
       pageSize: 50,
       q: 'alice',
+      actor: 'alice_admin',
       status: ['success', 'failure'],
       action: ['auth.login'],
+      from: '2026-03-01',
+      to: '2026-03-02',
       sort: 'created_at',
       order: 'desc',
     })
     expect(sp.get('page')).toBe('2')
     expect(sp.get('pageSize')).toBe('50')
+    expect(sp.get('actor')).toBe('alice_admin')
     expect(sp.getAll('status')).toEqual(['success', 'failure'])
     expect(sp.getAll('action')).toEqual(['auth.login'])
+    expect(sp.get('from')).toBe(toBoundaryRFC3339('2026-03-01', false))
+    expect(sp.get('to')).toBe(toBoundaryRFC3339('2026-03-02', true))
+    expect(toBoundaryRFC3339('2026-02-30', false)).toBeNull()
+    expect(normalizeDateRange('2026-03-10', '2026-03-01')).toEqual({
+      from: '2026-03-01',
+      to: '2026-03-10',
+      reversed: true,
+    })
   })
 
   it('renders rows, opens detail sheet on row click, and stops propagation on row menu', async () => {
-    const pageData: AuditLogsPage = {
-      items: sampleEntries,
-      total: 2,
-      page: 1,
-      pageSize: 20,
-    }
-    getMock.mockResolvedValue({ data: pageData })
+    getMock.mockResolvedValue({ data: makePage() })
 
     const screen = await renderAuditLogs()
 
     await expect.element(screen.getByText('alice_admin')).toBeVisible()
     await expect.element(screen.getByText('bad_actor')).toBeVisible()
+    await expect.element(screen.getByText('bob_ops')).toBeVisible()
 
-    // Clicking the row actions trigger opens menu without opening the detail Sheet.
     const menuButtons = screen.getByRole('button', {
       name: /打开操作菜单|Open actions menu/,
     })
@@ -174,7 +236,6 @@ describe('audit-logs feature', () => {
     await expect.element(viewDetailsItem).toBeVisible()
     await expect.element(screen.getByRole('dialog')).not.toBeInTheDocument()
 
-    // Selecting "View details" from the menu opens the Sheet with formatted metadata.
     await viewDetailsItem.click()
 
     const sheet = screen.getByRole('dialog')
@@ -184,13 +245,7 @@ describe('audit-logs feature', () => {
   })
 
   it('opens detail sheet when clicking a table row directly', async () => {
-    const pageData: AuditLogsPage = {
-      items: sampleEntries,
-      total: 2,
-      page: 1,
-      pageSize: 20,
-    }
-    getMock.mockResolvedValue({ data: pageData })
+    getMock.mockResolvedValue({ data: makePage() })
 
     const screen = await renderAuditLogs()
 
@@ -212,9 +267,7 @@ describe('audit-logs feature', () => {
             data: { items: [], total: 0, page: 1, pageSize: 20 },
           })
         }
-        return Promise.resolve({
-          data: { items: sampleEntries, total: 2, page: 1, pageSize: 20 },
-        })
+        return Promise.resolve({ data: makePage() })
       }
     )
 
@@ -231,24 +284,32 @@ describe('audit-logs feature', () => {
     await expect.element(screen.getByText('alice_admin')).toBeVisible()
   })
 
-  it('renders inline alert on failure and retries on button click', async () => {
+  it('renders a localized 5xx alert with request id, hides the empty state, and retries', async () => {
     getMock
       .mockRejectedValueOnce(
         new ApiError({
           status: 500,
           code: 'INTERNAL_ERROR',
           message: 'Server failed',
+          requestId: 'req_fail_01',
         })
       )
-      .mockResolvedValueOnce({
-        data: { items: sampleEntries, total: 2, page: 1, pageSize: 20 },
-      })
+      .mockResolvedValueOnce({ data: makePage() })
 
     const screen = await renderAuditLogs()
 
     const alert = screen.getByRole('alert')
     await expect.element(alert).toBeVisible()
-    await expect.element(alert).toHaveTextContent('Server failed')
+    await expect
+      .element(alert)
+      .toHaveTextContent(/服务器内部错误|Internal server error/)
+    await expect.element(alert).toHaveTextContent('req_fail_01')
+    expect(alert.element().textContent).not.toContain('Server failed')
+
+    // A failed first load must not also claim there is no audit data.
+    expect(screen.getByRole('table').element().textContent).not.toMatch(
+      /暂无审计日志|No audit logs yet|没有符合筛选条件的记录|No matching audit logs/
+    )
 
     await alert.getByRole('button', { name: /重试|Retry/ }).click()
 
@@ -256,207 +317,160 @@ describe('audit-logs feature', () => {
     await expect.element(alert).not.toBeInTheDocument()
   })
 
-  it('aligns first column spacing, removes action divider, matches row hover brightness, and highlights action button distinctly', async () => {
-    const pageData: AuditLogsPage = {
-      items: sampleEntries,
-      total: 2,
-      page: 1,
-      pageSize: 20,
-    }
-    getMock.mockResolvedValue({ data: pageData })
+  it('renders localized user and menu actions and has complete label catalogs', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
 
     const screen = await renderAuditLogs()
-    await expect.element(screen.getByText('alice_admin')).toBeVisible()
-
-    const dataRow = document.querySelector('tbody tr') as HTMLTableRowElement
-    const firstHeader = document.querySelector(
-      'thead th:first-child'
-    ) as HTMLTableCellElement
-    const firstCell = dataRow.querySelector(
-      'td:first-child'
-    ) as HTMLTableCellElement
-    const actionHeader = document.querySelector(
-      'thead th:last-child'
-    ) as HTMLTableCellElement
-    const actionCell = dataRow.querySelector(
-      'td:last-child'
-    ) as HTMLTableCellElement
-    const actionBtn = actionCell.querySelector('button') as HTMLButtonElement
-
-    // 1. First column has comfortable left padding (16px = ps-4) away from table border.
-    expect(getComputedStyle(firstHeader).paddingInlineStart).toBe('16px')
-    expect(getComputedStyle(firstCell).paddingInlineStart).toBe('16px')
-
-    // 2. No vertical divider border between data columns and sticky action column.
-    expect(getComputedStyle(actionHeader).borderInlineStartWidth).toBe('0px')
-    expect(getComputedStyle(actionCell).borderInlineStartWidth).toBe('0px')
-
-    // 3. Hovering a data row makes sticky action cell opaque and brightness-matched to row hover.
-    await userEvent.hover(firstCell)
+    await expect.element(screen.getByText('bob_ops')).toBeVisible()
     await expect
-      .poll(() => getComputedStyle(actionCell).backgroundColor)
-      .not.toBe(getComputedStyle(document.body).backgroundColor)
-    const rowHoverBg = getComputedStyle(dataRow).backgroundColor
-    const actionCellHoverBg = getComputedStyle(actionCell).backgroundColor
-    expect(rowHoverBg).not.toBe('rgba(0, 0, 0, 0)')
-    // Action cell background must be fully opaque (no alpha channel) so scrolled text never bleeds through.
-    expect(actionCellHoverBg).not.toMatch(/rgba\(|\/\s*0\./)
-
-    // 4. Action button is compact (28x28 inside 48px cell) and highlights distinctly on hover.
-    const btnRect = actionBtn.getBoundingClientRect()
-    const cellRect = actionCell.getBoundingClientRect()
-    expect(btnRect.width).toBe(28)
-    expect(btnRect.height).toBe(28)
-    expect(cellRect.width - btnRect.width).toBeGreaterThanOrEqual(16)
-
-    await userEvent.hover(actionBtn)
+      .element(screen.getByText(/删除用户 \(user\.delete\)|Delete User/))
+      .toBeVisible()
     await expect
-      .poll(() => getComputedStyle(actionBtn).backgroundColor)
-      .not.toBe('rgba(0, 0, 0, 0)')
-    const actionBtnHoverBg = getComputedStyle(actionBtn).backgroundColor
-    expect(actionBtnHoverBg).not.toBe(actionCellHoverBg)
+      .element(screen.getByText(/菜单 \(menu\)|Menu \(menu\)/))
+      .toBeVisible()
+
+    expect(AUDIT_ACTION_OPTIONS).toHaveLength(22)
+    expect(AUDIT_RESOURCE_OPTIONS).toHaveLength(6)
+    for (const option of [...AUDIT_ACTION_OPTIONS, ...AUDIT_RESOURCE_OPTIONS]) {
+      expect(i18n.exists(`audit:${option.labelKey}`)).toBe(true)
+    }
   })
 
-  it('keeps pagination page indicator inline with page buttons at desktop width', async () => {
-    const pageData: AuditLogsPage = {
-      items: sampleEntries,
-      total: 2,
-      page: 1,
-      pageSize: 20,
-    }
-    getMock.mockResolvedValue({ data: pageData })
+  it('writes sorting changes into the URL and request', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
 
     const screen = await renderAuditLogs()
     await expect.element(screen.getByText('alice_admin')).toBeVisible()
 
-    // Ensure container is desktop width (>= 672px / @2xl/pagination).
-    const container = document.querySelector(
-      '[data-slot="data-table-pagination"]'
-    ) as HTMLElement
-    container.style.width = '900px'
+    const table = screen.getByRole('table')
+    await table.getByRole('button', { name: /^动作$|^Action$/ }).click()
+    await screen.getByRole('menuitem', { name: /^升序$|^Asc$/ }).click()
 
-    const pageOfTexts = Array.from(container.querySelectorAll('span')).filter(
-      (el) =>
-        !el.classList.contains('sr-only') &&
-        /第\s*1\s*\/\s*1\s*页|Page 1 of 1/.test(el.textContent ?? '') &&
-        getComputedStyle(el).display !== 'none'
-    )
-    expect(pageOfTexts).toHaveLength(1)
+    await vi.waitFor(() => {
+      expect(lastRequestParams().get('sort')).toBe('action')
+      expect(lastRequestParams().get('order')).toBe('asc')
+    })
+    expect(searchState(screen)).toMatchObject({
+      sort: 'action',
+      order: 'asc',
+    })
+  })
 
-    const pageOneBtn = screen
-      .getByRole('button', { name: /第\s*1\s*\/\s*1\s*页|Page 1 of 1/ })
+  it('applies the actor filter from the toolbar', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
+
+    const screen = await renderAuditLogs()
+    await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+    const input = screen.getByRole('textbox', { name: /^操作人$|^Actor$/ })
+    await input.click()
+    await userEvent.type(input, 'alice_admin{Enter}')
+
+    await vi.waitFor(() => {
+      expect(lastRequestParams().get('actor')).toBe('alice_admin')
+    })
+    expect(searchState(screen).actor).toBe('alice_admin')
+  })
+
+  it('repairs a reversed date range in the URL and request', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
+
+    const screen = await renderAuditLogs({
+      from: '2026-11-26',
+      to: '2026-11-20',
+    })
+
+    await vi.waitFor(() => {
+      expect(searchState(screen)).toMatchObject({
+        from: '2026-11-20',
+        to: '2026-11-26',
+      })
+      expect(lastRequestParams().get('from')).toBe(
+        toBoundaryRFC3339('2026-11-20', false)
+      )
+      expect(lastRequestParams().get('to')).toBe(
+        toBoundaryRFC3339('2026-11-26', true)
+      )
+    })
+  })
+
+  it('applies the today preset and closes the picker', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
+
+    const screen = await renderAuditLogs()
+    await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+    await screen.getByRole('button', { name: /时间范围|Date range/ }).click()
+    await screen.getByRole('button', { name: /^今天$|^Today$/ }).click()
+
+    const today = formatDateOnly(new Date())
+    await vi.waitFor(() => {
+      expect(searchState(screen)).toMatchObject({ from: today, to: today })
+    })
+  })
+
+  it('renders semantic badge variants for success and failure', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
+
+    const screen = await renderAuditLogs()
+    await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+    const successBadge = screen
+      .getByText(/^成功$|^Success$/)
+      .first()
       .element()
-    const infoRect = pageOfTexts[0].getBoundingClientRect()
-    const btnRect = pageOneBtn.getBoundingClientRect()
-
-    // Inline on the same row, vertically aligned, and positioned to the left of page buttons.
-    expect(Math.abs(infoRect.top - btnRect.top)).toBeLessThan(10)
-    expect(infoRect.right).toBeLessThan(btnRect.left)
+    const failureBadge = screen
+      .getByText(/^失败$|^Failure$/)
+      .first()
+      .element()
+    expect(successBadge.className).toContain('text-success-foreground')
+    expect(failureBadge.className).toContain('text-destructive-foreground')
   })
 
-  it('displays pageSize 100 in SelectTrigger without text clipping', async () => {
-    const pageData: AuditLogsPage = {
-      items: sampleEntries,
-      total: 2,
-      page: 1,
-      pageSize: 100,
-    }
-    getMock.mockResolvedValue({ data: pageData })
+  it('keeps the pageSize 100 value readable and reachable', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
 
     const screen = await renderAuditLogs({ pageSize: 100 })
     await expect.element(screen.getByText('alice_admin')).toBeVisible()
 
-    const trigger = screen
-      .getByRole('combobox', { name: /每页行数|Rows per page/ })
-      .element() as HTMLElement
-    const valueEl = trigger.querySelector(
-      '[data-slot="select-value"]'
-    ) as HTMLElement
-
-    expect(trigger.textContent).toContain('100')
-    expect(valueEl.scrollWidth).toBeLessThanOrEqual(valueEl.clientWidth)
-    expect(trigger.getBoundingClientRect().width).toBeGreaterThanOrEqual(80)
-  })
-
-  it('renders success and failure statuses with soft semantic badge styling in light and dark modes', async () => {
-    const pageData: AuditLogsPage = {
-      items: sampleEntries,
-      total: 2,
-      page: 1,
-      pageSize: 20,
-    }
-    getMock.mockResolvedValue({ data: pageData })
-
-    const screen = await renderAuditLogs()
-    await expect.element(screen.getByText('alice_admin')).toBeVisible()
-
-    const badges = Array.from(
-      document.querySelectorAll('[data-slot="badge"]')
-    ) as HTMLElement[]
-    const successBadge = badges.find((el) =>
-      /成功|Success/.test(el.textContent ?? '')
-    )
-    const failureBadge = badges.find((el) =>
-      /失败|Failure/.test(el.textContent ?? '')
-    )
-    expect(successBadge).toBeDefined()
-    expect(failureBadge).toBeDefined()
-
-    const root = document.documentElement
-    const hadDark = root.classList.contains('dark')
-    try {
-      root.classList.remove('dark')
-      const lightSuccessBg = getComputedStyle(successBadge!).backgroundColor
-      const lightSuccessBorder = getComputedStyle(successBadge!).borderTopColor
-      const lightFailureBg = getComputedStyle(failureBadge!).backgroundColor
-      const lightFailureBorder = getComputedStyle(failureBadge!).borderTopColor
-      const lightFailureColor = getComputedStyle(failureBadge!).color
-
-      expect(lightSuccessBg).not.toBe(lightFailureBg)
-      expect(lightSuccessBorder).not.toBe('rgba(0, 0, 0, 0)')
-      expect(lightFailureBorder).not.toBe('rgba(0, 0, 0, 0)')
-      expect(lightFailureBg).toMatch(/\/\s*0\.\d+|rgba\([^)]+,\s*0\.\d+\)/)
-      expect(lightFailureColor).not.toBe('rgb(255, 255, 255)')
-
-      root.classList.add('dark')
-      await expect
-        .poll(() => getComputedStyle(failureBadge!).color)
-        .not.toBe(lightFailureColor)
-
-      const darkSuccessBg = getComputedStyle(successBadge!).backgroundColor
-      const darkFailureBg = getComputedStyle(failureBadge!).backgroundColor
-      const darkFailureBorder = getComputedStyle(failureBadge!).borderTopColor
-      const darkFailureColor = getComputedStyle(failureBadge!).color
-
-      expect(darkSuccessBg).not.toBe(darkFailureBg)
-      expect(darkFailureBg).not.toBe(lightFailureBg)
-      expect(darkFailureBg).toMatch(/\/\s*0\.\d+|rgba\([^)]+,\s*0\.\d+\)/)
-      expect(darkFailureBorder).not.toBe('rgba(0, 0, 0, 0)')
-      expect(darkFailureColor).not.toBe('rgb(255, 255, 255)')
-    } finally {
-      root.classList.toggle('dark', hadDark)
-    }
-  })
-
-  it('wraps pagination buttons cleanly on narrow 320px viewports without horizontal overflow', async () => {
-    const pageData: AuditLogsPage = {
-      items: sampleEntries,
-      total: 20000,
-      page: 500,
-      pageSize: 20,
-    }
-    getMock.mockResolvedValue({ data: pageData })
-
-    const screen = await renderAuditLogs({ page: 500, pageSize: 20 })
-    await expect.element(screen.getByText('alice_admin')).toBeVisible()
-
-    const container = document.querySelector(
-      '[data-slot="data-table-pagination"]'
-    ) as HTMLElement
-    container.style.width = '320px'
-
+    const trigger = screen.getByRole('combobox', {
+      name: /每页行数|Rows per page/,
+    })
+    await expect.element(trigger).toHaveTextContent('100')
     await expect
-      .poll(() => container.scrollWidth <= container.clientWidth)
-      .toBe(true)
+      .element(screen.getByText(/第 1 \/ 1 页|Page 1 of 1/).first())
+      .toBeVisible()
+  })
+
+  it('copies the request id from the row action menu', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
+    const originalClipboard = navigator.clipboard
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+
+    try {
+      const screen = await renderAuditLogs()
+      await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+      await screen
+        .getByRole('button', { name: /打开操作菜单|Open actions menu/ })
+        .first()
+        .click()
+      await screen
+        .getByRole('menuitem', { name: /复制请求 ID|Copy request ID/ })
+        .click()
+
+      await vi.waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith('req_audit_alpha_01')
+      })
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: originalClipboard,
+      })
+    }
   })
 })

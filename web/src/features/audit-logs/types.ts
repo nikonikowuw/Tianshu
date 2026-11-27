@@ -21,6 +21,7 @@ export type AuditLogsListParams = {
   page: number
   pageSize: number
   q?: string
+  actor?: string
   status?: string[]
   action?: string[]
   resource?: string[]
