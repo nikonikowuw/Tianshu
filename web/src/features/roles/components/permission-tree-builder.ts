@@ -45,6 +45,43 @@ function prunePermissionlessNodes(
   return out
 }
 
+function normalizePermissionBranches(
+  nodes: PermissionTreeNode[],
+  permissionLabelByCode: Map<string, string>
+): PermissionTreeNode[] {
+  return nodes.map((node) => {
+    const children = normalizePermissionBranches(
+      node.children,
+      permissionLabelByCode
+    )
+    if (children.length > 0 && node.permissionCode) {
+      const childCodes = new Set(children.flatMap(collectCodes))
+      const nextChildren = childCodes.has(node.permissionCode)
+        ? children
+        : [
+            {
+              id: `${node.id}::self`,
+              label:
+                permissionLabelByCode.get(node.permissionCode) ?? node.label,
+              type: node.type,
+              icon: node.icon,
+              permissionCode: node.permissionCode,
+              children: [],
+            },
+            ...children,
+          ]
+      // Split non-leaf menu permissions into an explicit child leaf so read
+      // permissions can be toggled independently from button actions.
+      return {
+        ...node,
+        permissionCode: undefined,
+        children: nextChildren,
+      }
+    }
+    return { ...node, children }
+  })
+}
+
 export function collectExpandableIds(nodes: PermissionTreeNode[]): string[] {
   const ids: string[] = []
   for (const n of nodes) {
@@ -60,7 +97,7 @@ export function buildPermissionTree(
   groups: PermissionGroup[],
   otherLabel: string
 ): PermissionTreeNode[] {
-  if (menuTree.length === 0 || !('type' in menuTree[0])) {
+  if (menuTree.length === 0) {
     return groups.map((g) => ({
       id: `group:${g.module}`,
       label: g.label,
@@ -75,7 +112,17 @@ export function buildPermissionTree(
     }))
   }
 
-  const tree = prunePermissionlessNodes(menuTree.map(mapMenuNode))
+  const permissionLabelByCode = new Map<string, string>()
+  for (const g of groups) {
+    for (const p of g.permissions) {
+      permissionLabelByCode.set(p.code, p.name)
+    }
+  }
+
+  const tree = normalizePermissionBranches(
+    prunePermissionlessNodes(menuTree.map(mapMenuNode)),
+    permissionLabelByCode
+  )
   const boundCodes = new Set<string>()
   for (const root of tree) {
     for (const c of collectCodes(root)) {

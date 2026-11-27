@@ -65,9 +65,9 @@ export function createRoleColumns(params: {
         <DataTableColumnHeader column={column} title={t('columns.code')} />
       ),
       cell: ({ row }) => (
-        <span className='font-mono text-xs text-muted-foreground'>
+        <LongText className='max-w-44 font-mono text-xs text-muted-foreground'>
           {row.original.code}
-        </span>
+        </LongText>
       ),
     },
     {

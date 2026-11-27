@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, Loader2, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { normalizeApiError } from '@/lib/api/error'
+import { formatServerErrorMessage } from '@/lib/handle-server-error'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -51,6 +52,7 @@ type RoleFormSheetProps = {
   open: boolean
   mode: RoleSheetMode
   role: RoleItem | null
+  canUpdate?: boolean
   onOpenChange: (open: boolean) => void
 }
 
@@ -65,6 +67,7 @@ export function RoleFormSheet({
   open,
   mode,
   role,
+  canUpdate = true,
   onOpenChange,
 }: RoleFormSheetProps) {
   const { t, i18n } = useTranslation('roles')
@@ -81,9 +84,11 @@ export function RoleFormSheet({
 
   const isReadOnly = mode === 'view' || Boolean(role?.isSystem)
   const isEdit = mode === 'edit' && role !== null && !role.isSystem
-  // Viewing a custom role through the read-only entry is not a permission problem,
-  // so it must not reuse the "contact an administrator" copy.
-  const isCustomView = mode === 'view' && role !== null && !role.isSystem
+  // Viewing a custom role through the read-only entry is not a permission problem
+  // when the user holds roles:update, so only show the read-only contact hint when
+  // update permission is absent.
+  const isCustomView =
+    mode === 'view' && role !== null && !role.isSystem && canUpdate
 
   const schema = useMemo(
     () =>
@@ -108,7 +113,11 @@ export function RoleFormSheet({
     enabled: open,
   })
 
-  const { data: menuTreeData } = useQuery({
+  const {
+    data: menuTreeData,
+    isLoading: isMenuTreeLoading,
+    isError: isMenuTreeError,
+  } = useQuery({
     ...roleMenuTreeQueryOptions(i18n.language),
     enabled: open,
   })
@@ -206,10 +215,10 @@ export function RoleFormSheet({
           }
         }
         if (!mapped) {
-          setBannerError(apiErr.message)
+          setBannerError(formatServerErrorMessage(err))
         }
       } else {
-        setBannerError(apiErr.message)
+        setBannerError(formatServerErrorMessage(err))
       }
     }
   })
@@ -263,7 +272,7 @@ export function RoleFormSheet({
             <ScrollArea className='min-h-0 flex-1'>
               <div className='space-y-5 px-6 py-5'>
                 {bannerError && (
-                  <Alert variant='destructive' role='alert'>
+                  <Alert variant='destructive'>
                     <AlertCircle className='size-4' />
                     <AlertDescription>{bannerError}</AlertDescription>
                   </Alert>
@@ -382,16 +391,7 @@ export function RoleFormSheet({
                         )}
                       </div>
 
-                      {isCatalogLoading ? (
-                        <div className='space-y-3'>
-                          {Array.from({ length: 3 }).map((_, idx) => (
-                            <Skeleton
-                              key={`perm-skel-${idx}`}
-                              className='h-24 w-full rounded-lg'
-                            />
-                          ))}
-                        </div>
-                      ) : isCatalogError ? (
+                      {isCatalogError ? (
                         <Alert variant='destructive'>
                           <AlertCircle className='size-4' />
                           <AlertDescription className='flex items-center justify-between gap-2'>
@@ -406,9 +406,21 @@ export function RoleFormSheet({
                             </Button>
                           </AlertDescription>
                         </Alert>
+                      ) : isCatalogLoading ||
+                        (isMenuTreeLoading && !isMenuTreeError) ? (
+                        <div className='space-y-3'>
+                          {Array.from({ length: 3 }).map((_, idx) => (
+                            <Skeleton
+                              key={`perm-skel-${idx}`}
+                              className='h-24 w-full rounded-lg'
+                            />
+                          ))}
+                        </div>
                       ) : (
                         <RolePermissionTree
-                          menuTree={menuTreeData?.items ?? []}
+                          menuTree={
+                            isMenuTreeError ? [] : (menuTreeData?.items ?? [])
+                          }
                           groups={catalog?.groups ?? []}
                           selectedPermissions={selectedPermissions}
                           disabled={isReadOnly || isSubmitting}
@@ -443,7 +455,7 @@ export function RoleFormSheet({
                   </Button>
                   <Button type='submit' disabled={isSubmitting}>
                     {isSubmitting && (
-                      <Loader2 className='me-2 size-4 animate-spin' />
+                      <Loader2 className='size-4 animate-spin' />
                     )}
                     {isEdit ? t('sheet.saveEdit') : t('sheet.saveCreate')}
                   </Button>

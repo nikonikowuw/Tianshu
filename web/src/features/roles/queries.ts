@@ -4,6 +4,7 @@ import {
   useMutation,
   useQueryClient,
 } from '@tanstack/react-query'
+import { syncCurrentProfileIfHasRole } from '@/lib/auth/gateway'
 import {
   createRole,
   deleteRole,
@@ -23,7 +24,7 @@ export const rolesKeys = {
   list: (params: RolesListParams, lang: string) =>
     ['roles', 'list', lang, params] as const,
   permissions: (lang: string) => ['permissions', 'catalog', lang] as const,
-  menuTree: (lang: string) => ['roles', 'menu-tree', lang] as const,
+  menuTree: (lang: string) => ['menus', 'tree', lang] as const,
 }
 
 export function roleMenuTreeQueryOptions(lang: string) {
@@ -70,8 +71,13 @@ export function useUpdateRoleMutation() {
     mutationFn: ({ id, payload }: { id: string; payload: UpdateRolePayload }) =>
       updateRole(id, payload),
     meta: { silent: true },
-    onSuccess: () => {
+    onSuccess: (updatedRole) => {
       void queryClient.invalidateQueries({ queryKey: rolesKeys.all })
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
+      void queryClient.invalidateQueries({ queryKey: ['menus', 'user'] })
+      void syncCurrentProfileIfHasRole(updatedRole.code).catch(() => {
+        // Non-fatal: subsequent protected requests or 403 refresh will still converge.
+      })
     },
   })
 }
@@ -83,6 +89,8 @@ export function useDeleteRoleMutation() {
     meta: { silent: true },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: rolesKeys.all })
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
+      void queryClient.invalidateQueries({ queryKey: ['menus', 'user'] })
     },
   })
 }

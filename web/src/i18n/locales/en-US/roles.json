@@ -12,8 +12,7 @@
     "updatedAt": "Updated At"
   },
   "badges": {
-    "system": "System",
-    "custom": "Custom"
+    "system": "System"
   },
   "filters": {
     "type": "Role Type",
@@ -51,6 +50,8 @@
     "otherPermissions": "Other Unbound Permissions",
     "expandAll": "Expand",
     "collapseAll": "Collapse",
+    "expandNode": "Expand {{label}}",
+    "collapseNode": "Collapse {{label}}",
     "nodeTypes": {
       "directory": "Dir",
       "menu": "Menu",

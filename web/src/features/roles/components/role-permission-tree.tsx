@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { resolveMenuIcon } from '@/lib/icons'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -29,6 +30,7 @@ export function RolePermissionTree({
   onChange,
 }: RolePermissionTreeProps) {
   const { t } = useTranslation('roles')
+  const treeId = useId()
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set())
 
   const treeNodes = useMemo(
@@ -91,6 +93,8 @@ export function RolePermissionTree({
               ? 'indeterminate'
               : false
       const IconComp = resolveMenuIcon(node.icon)
+      const isNodeDisabled = disabled || nodeCodes.length === 0
+      const checkboxId = `${treeId}-${node.id}`
 
       return (
         <div key={node.id}>
@@ -103,7 +107,11 @@ export function RolePermissionTree({
                 type='button'
                 onClick={() => toggleExpand(node.id)}
                 className='flex size-5 shrink-0 items-center justify-center rounded hover:bg-muted'
-                aria-label={node.label}
+                aria-expanded={isExpanded}
+                aria-label={t(
+                  isExpanded ? 'sheet.collapseNode' : 'sheet.expandNode',
+                  { label: node.label }
+                )}
               >
                 {isExpanded ? (
                   <ChevronDown className='size-3.5 text-muted-foreground' />
@@ -116,17 +124,21 @@ export function RolePermissionTree({
             )}
 
             <Checkbox
+              id={checkboxId}
               checked={checkState}
-              disabled={disabled || nodeCodes.length === 0}
+              disabled={isNodeDisabled}
               aria-label={node.label}
               onCheckedChange={(val) => toggleNode(node, val === true)}
             />
 
-            <button
-              type='button'
-              disabled={disabled || nodeCodes.length === 0}
-              onClick={() => toggleNode(node, checkState !== true)}
-              className='flex min-w-0 flex-1 items-center gap-2 text-start disabled:cursor-not-allowed'
+            <label
+              htmlFor={checkboxId}
+              className={cn(
+                'flex min-w-0 flex-1 items-center gap-2 text-start select-none',
+                isNodeDisabled
+                  ? 'cursor-not-allowed opacity-70'
+                  : 'cursor-pointer'
+              )}
             >
               {IconComp && (
                 <IconComp className='size-3.5 shrink-0 text-muted-foreground' />
@@ -143,7 +155,7 @@ export function RolePermissionTree({
                   {node.permissionCode}
                 </span>
               )}
-            </button>
+            </label>
           </div>
           {hasChildren && isExpanded && renderNodes(node.children, depth + 1)}
         </div>
