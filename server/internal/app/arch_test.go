@@ -18,7 +18,11 @@ import (
 
 const modulePrefix = "tianshu/"
 
-// TestArchitectureBoundaries enforces package dependency direction and //go:embed allowlist.
+func shouldSkipDir(name string) bool {
+	return name == ".git" || name == "tmp" || name == "bin" || name == "vendor"
+}
+
+// TestArchitectureBoundaries enforces package dependency direction, module encapsulation, init bans, and //go:embed allowlist.
 func TestArchitectureBoundaries(t *testing.T) {
 	serverRoot, err := filepath.Abs("../..")
 	if err != nil {
@@ -31,8 +35,7 @@ func TestArchitectureBoundaries(t *testing.T) {
 			return walkErr
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "tmp" || name == "bin" || name == "vendor" {
+			if shouldSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -55,6 +58,7 @@ func TestArchitectureBoundaries(t *testing.T) {
 
 		checkEmbedAllowlist(t, relSlash, path)
 		checkModuleStoreEncapsulation(t, relSlash, fileAST)
+		checkModuleInitForbidden(t, relSlash, fileAST)
 		return nil
 	})
 	if err != nil {
@@ -79,6 +83,18 @@ func checkModuleStoreEncapsulation(t *testing.T, relPath string, fileAST *ast.Fi
 					t.Errorf("%s must not export %s (store must stay private inside module)", relPath, ts.Name.Name)
 				}
 			}
+		}
+	}
+}
+
+func checkModuleInitForbidden(t *testing.T, relPath string, fileAST *ast.File) {
+	t.Helper()
+	if !strings.HasPrefix(relPath, "internal/modules/") || strings.Contains(relPath, "/internal/dbgen/") {
+		return
+	}
+	for _, decl := range fileAST.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "init" {
+			t.Errorf("%s must not define func init() inside a business module", relPath)
 		}
 	}
 }
@@ -121,7 +137,7 @@ func TestPackageDependencyDirection(t *testing.T) {
 			return walkErr
 		}
 		if d.IsDir() {
-			if d.Name() == "tmp" || d.Name() == "bin" {
+			if shouldSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -179,6 +195,11 @@ func verifyImportRule(t *testing.T, relPath, imp string) {
 				t.Errorf("module %s (%s) must not import sibling module %s", curDomain, relPath, targetDomain)
 			}
 		}
+		dbgenPkg := modulePrefix + "internal/modules/" + curDomain + "/internal/dbgen"
+		storePath := "internal/modules/" + curDomain + "/store.go"
+		if imp == dbgenPkg && relPath != storePath && !strings.HasPrefix(relPath, "internal/modules/"+curDomain+"/internal/dbgen/") {
+			t.Errorf("module file %s must not import %s directly (encapsulate SQL behind %s)", relPath, dbgenPkg, storePath)
+		}
 	case strings.HasPrefix(relPath, "cmd/server/"):
 		if strings.HasPrefix(imp, modulePrefix+"internal/modules/") {
 			t.Errorf("cmd/server (%s) must wire via internal/app, not import %q", relPath, imp)
@@ -197,17 +218,40 @@ func TestAppAPINotFoundReturnsJSON(t *testing.T) {
 	}
 	defer func() { _ = application.Close(t.Context()) }()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/not-found", nil)
-	rec := httptest.NewRecorder()
-	application.Engine().ServeHTTP(rec, req)
+	for _, target := range []string{
+		"/api",
+		"/api/v1/not-found",
+		"//api/v1/not-found",
+		"/./api/v1/not-found",
+		"/api/v1/../v1/not-found",
+	} {
+		t.Run("api_not_found_"+target, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			rec := httptest.NewRecorder()
+			application.Engine().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("GET %s status = %d, want 404", target, rec.Code)
+			}
+			if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+				t.Fatalf("GET %s Content-Type = %q, want application/json", target, rec.Header().Get("Content-Type"))
+			}
+			if rec.Header().Get("X-Request-Id") == "" {
+				t.Fatalf("GET %s missing X-Request-Id header", target)
+			}
+		})
 	}
-	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
-		t.Fatalf("Content-Type = %q, want application/json", rec.Header().Get("Content-Type"))
-	}
-	if rec.Header().Get("X-Request-Id") == "" {
-		t.Fatal("missing X-Request-Id header")
-	}
+
+	t.Run("spa_fallback_does_not_return_json_404", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/users/123", nil)
+		rec := httptest.NewRecorder()
+		application.Engine().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK && rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("GET /users/123 status = %d, want 200 or 503", rec.Code)
+		}
+		if strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+			t.Fatalf("GET /users/123 unexpectedly returned JSON Content-Type = %q", rec.Header().Get("Content-Type"))
+		}
+	})
 }

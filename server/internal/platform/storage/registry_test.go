@@ -70,4 +70,8 @@ func TestRegistryRoutesByPersistedDriver(t *testing.T) {
 	if _, err := reg.Driver("unknown"); !errors.Is(err, storage.ErrDriverNotConfigured) {
 		t.Fatalf("Driver(unknown) error = %v, want ErrDriverNotConfigured", err)
 	}
+
+	if err := reg.Close(); err != nil {
+		t.Fatalf("reg.Close() error = %v", err)
+	}
 }

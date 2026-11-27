@@ -299,3 +299,34 @@ func TestAuthLoginRateLimitConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestServerRateLimitAndBodyLimitConfig(t *testing.T) {
+	t.Run("rejects negative api_rate_limit and max_request_body_bytes", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Server.APIRateLimit = -1
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for negative server.api_rate_limit")
+		}
+
+		cfg = config.Default()
+		cfg.Server.MaxRequestBodyBytes = -1
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected validation error for negative server.max_request_body_bytes")
+		}
+	})
+
+	t.Run("accepts zero to disable global limit and supports env overrides", func(t *testing.T) {
+		t.Setenv("TIANSHU_SERVER__API_RATE_LIMIT", "0")
+		t.Setenv("TIANSHU_SERVER__MAX_REQUEST_BODY_BYTES", "2097152")
+		cfg, err := config.LoadWithExplicit("", nil)
+		if err != nil {
+			t.Fatalf("LoadWithExplicit() error = %v", err)
+		}
+		if cfg.Server.APIRateLimit != 0 {
+			t.Fatalf("Server.APIRateLimit = %d, want 0", cfg.Server.APIRateLimit)
+		}
+		if cfg.Server.MaxRequestBodyBytes != 2097152 {
+			t.Fatalf("Server.MaxRequestBodyBytes = %d, want 2097152", cfg.Server.MaxRequestBodyBytes)
+		}
+	})
+}

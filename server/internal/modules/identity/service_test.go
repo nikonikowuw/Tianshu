@@ -1658,6 +1658,40 @@ func TestProfileUpdateChangePasswordAndSessions(t *testing.T) {
 	})
 }
 
+func TestEnsureActiveCaller(t *testing.T) {
+	t.Run("accepts active user with active session", func(t *testing.T) {
+		fx := newTestFixture(t)
+		if err := fx.svc.EnsureActiveCaller(t.Context(), fx.mgrID, fx.mgrSessID); err != nil {
+			t.Fatalf("EnsureActiveCaller() error = %v", err)
+		}
+	})
+
+	t.Run("rejects missing user, nil session, inactive session, and disabled user", func(t *testing.T) {
+		fx := newTestFixture(t)
+
+		if err := fx.svc.EnsureActiveCaller(t.Context(), uuid.New(), fx.mgrSessID); !assertAppErrorStatus(err, http.StatusUnauthorized) {
+			t.Fatalf("missing user err = %v, want 401", err)
+		}
+		if err := fx.svc.EnsureActiveCaller(t.Context(), fx.mgrID, uuid.Nil); !assertAppErrorStatus(err, http.StatusUnauthorized) {
+			t.Fatalf("nil session err = %v, want 401", err)
+		}
+		if err := fx.svc.EnsureActiveCaller(t.Context(), fx.mgrID, uuid.New()); !assertAppErrorStatus(err, http.StatusUnauthorized) {
+			t.Fatalf("revoked/unknown session err = %v, want 401", err)
+		}
+
+		fx.store.users[fx.mgrID].user.Status = StatusDisabled
+		err := fx.svc.EnsureActiveCaller(t.Context(), fx.mgrID, fx.mgrSessID)
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != http.StatusForbidden || appErr.Code != errCodeAccountDisabled {
+			t.Fatalf("disabled user err = %v, want 403 %s", err, errCodeAccountDisabled)
+		}
+	})
+}
+
+func assertAppErrorStatus(err error, wantStatus int) bool {
+	appErr, ok := apperr.As(err)
+	return ok && appErr.Status == wantStatus
+}
+
 type hookTx struct {
 	beforeTx func()
 }

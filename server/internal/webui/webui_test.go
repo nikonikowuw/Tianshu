@@ -76,6 +76,22 @@ func TestNewHandler(t *testing.T) {
 			wantBodyContains: `"code":"RESOURCE_NOT_FOUND"`,
 		},
 		{
+			name:             "uncleaned double-slash api path returns json 404",
+			method:           http.MethodGet,
+			path:             "//api/v1/not-found",
+			wantStatus:       http.StatusNotFound,
+			wantContentType:  "application/json",
+			wantBodyContains: `"code":"RESOURCE_NOT_FOUND"`,
+		},
+		{
+			name:             "dot-prefixed api path returns json 404",
+			method:           http.MethodGet,
+			path:             "/./api/v1/not-found",
+			wantStatus:       http.StatusNotFound,
+			wantContentType:  "application/json",
+			wantBodyContains: `"code":"RESOURCE_NOT_FOUND"`,
+		},
+		{
 			name:       "non get or head method returns 405",
 			method:     http.MethodPost,
 			path:       "/users",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -174,8 +175,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		})
 		identityAccess.svc = accessSvc
 		if err := accessSvc.SyncCatalog(ctx); err != nil {
-			pool.Close()
-			_ = memCache.Close()
+			closeInitResources(pool, memCache, storeReg)
 			return nil, fmt.Errorf("sync access catalog: %w", err)
 		}
 		accessHandler = access.NewHandler(accessSvc, bundle)
@@ -189,8 +189,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			log,
 		)
 		if err := setupSvc.BootstrapFromEnv(ctx, cfg.Bootstrap); err != nil {
-			pool.Close()
-			_ = memCache.Close()
+			closeInitResources(pool, memCache, storeReg)
 			return nil, fmt.Errorf("bootstrap initial admin: %w", err)
 		}
 		setupHandler = setup.NewHandler(setupSvc)
@@ -201,7 +200,6 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			// production clusters should set a dedicated secret for independent rotation.
 			signedURLSecret = cfg.Auth.JWTSecret
 		}
-		filesAvatarCaller := &filesAvatarCallerAdapter{identity: identitySvc}
 		filesSvc = files.NewService(
 			pool,
 			storeReg,
@@ -216,7 +214,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 				Tx:           tx,
 				Actors:       &filesActorAdapter{svc: identitySvc},
 				AvatarRef:    &filesAvatarRefAdapter{svc: identitySvc},
-				AvatarCaller: filesAvatarCaller,
+				AvatarCaller: &filesAvatarCallerAdapter{svc: identitySvc},
 				Audit:        &filesAuditAdapter{svc: auditSvc},
 				Log:          log,
 			},
@@ -240,7 +238,6 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			},
 		)
 		identitySessionMgr.svc = authSvc
-		filesAvatarCaller.auth = authSvc
 		var authAllowedOrigins []string
 		if cfg.CORS.Enabled {
 			authAllowedOrigins = cfg.CORS.AllowedOrigins
@@ -260,10 +257,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		RedactPathPrefixes: []string{"/api/v1/files/signed/"},
 	})
 	if err != nil {
-		if pool != nil {
-			pool.Close()
-		}
-		_ = memCache.Close()
+		closeInitResources(pool, memCache, storeReg)
 		return nil, fmt.Errorf("init http engine: %w", err)
 	}
 
@@ -349,8 +343,7 @@ func (a *App) Run(ctx context.Context) error {
 	case err := <-errCh:
 		janitorCancel()
 		janitorWG.Wait()
-		_ = a.Close(context.Background())
-		runErr = err
+		runErr = errors.Join(err, a.Close(context.Background()))
 	case <-ctx.Done():
 		shutdownTimeout := a.cfg.Server.ShutdownTimeout
 		if shutdownTimeout <= 0 {
@@ -462,6 +455,11 @@ func (a *App) Close(ctx context.Context) error {
 
 func (a *App) closeResources() error {
 	var errs []error
+	if a.storage != nil {
+		if err := a.storage.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close storage: %w", err))
+		}
+	}
 	if a.cache != nil {
 		if err := a.cache.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close cache: %w", err))
@@ -471,6 +469,26 @@ func (a *App) closeResources() error {
 		a.db.Close()
 	}
 	return errors.Join(errs...)
+}
+
+func closeInitResources(pool *pgxpool.Pool, cacheStore io.Closer, reg *storage.Registry) {
+	if reg != nil {
+		_ = reg.Close()
+	}
+	if cacheStore != nil {
+		_ = cacheStore.Close()
+	}
+	if pool != nil {
+		pool.Close()
+	}
+}
+
+func closeStorageDrivers(drivers []storage.Storage) {
+	for _, d := range drivers {
+		if closer, ok := d.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}
 }
 
 func initStorage(ctx context.Context, cfg config.StorageConfig, log *slog.Logger) (*storage.Registry, error) {
@@ -509,10 +527,22 @@ func initStorage(ctx context.Context, cfg config.StorageConfig, log *slog.Logger
 			AutoCreateBucket: cfg.S3.AutoCreateBucket,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("init s3 storage: %w", err)
+			if activeDriver == storage.DriverS3 {
+				closeStorageDrivers(drivers)
+				return nil, fmt.Errorf("init s3 storage: %w", err)
+			}
+			if log != nil {
+				log.Warn("skipping secondary s3 storage driver registration", "endpoint", cfg.S3.Endpoint, "bucket", cfg.S3.Bucket, "error", err)
+			}
+		} else {
+			drivers = append(drivers, s3Store)
 		}
-		drivers = append(drivers, s3Store)
 	}
 
-	return storage.NewRegistry(activeDriver, drivers...)
+	reg, err := storage.NewRegistry(activeDriver, drivers...)
+	if err != nil {
+		closeStorageDrivers(drivers)
+		return nil, err
+	}
+	return reg, nil
 }
