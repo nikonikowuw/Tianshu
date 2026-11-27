@@ -401,6 +401,42 @@ func (a *filesAvatarRefAdapter) IsAvatarFileInUse(ctx context.Context, fileID uu
 	return a.svc.IsAvatarFileInUse(ctx, fileID)
 }
 
+// filesAvatarCallerAdapter bridges identity.Service and auth.Service into files.AvatarCallerValidator
+// using late binding on auth.Service to preserve construction order.
+type filesAvatarCallerAdapter struct {
+	identity *identity.Service
+	auth     *auth.Service
+}
+
+var _ files.AvatarCallerValidator = (*filesAvatarCallerAdapter)(nil)
+
+func (a *filesAvatarCallerAdapter) EnsureActiveAvatarCaller(ctx context.Context, userID, sessionID uuid.UUID) error {
+	if a.identity == nil || a.auth == nil {
+		return apperr.Internal(errors.New("files avatar caller adapter: services not initialized"))
+	}
+	user, err := a.identity.GetByID(ctx, userID)
+	if err != nil {
+		if appErr, ok := apperr.As(err); ok && appErr.Code == identity.ErrCodeUserNotFound {
+			return apperr.Unauthorized(apperr.CodeUnauthorized)
+		}
+		return err
+	}
+	if user.Status == identity.StatusDisabled {
+		return apperr.Forbidden(auth.ErrCodeAccountDisabled)
+	}
+	if sessionID == uuid.Nil {
+		return apperr.Unauthorized(apperr.CodeUnauthorized)
+	}
+	active, err := a.auth.IsSessionActive(ctx, userID, sessionID)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return apperr.Unauthorized(apperr.CodeUnauthorized)
+	}
+	return nil
+}
+
 // filesAuditAdapter bridges audit.Service into files.AuditRecorder.
 type filesAuditAdapter struct {
 	svc *audit.Service

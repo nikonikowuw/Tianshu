@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"tianshu/internal/platform/database"
+	"tianshu/internal/platform/logger"
 	"tianshu/internal/platform/storage"
 	"tianshu/internal/shared/apperr"
 	"tianshu/internal/shared/pagination"
@@ -19,11 +22,13 @@ import (
 const (
 	signedURLPathPrefix = "/api/v1/files/signed/"
 
-	defaultMaxFileSizeBytes   = int64(10 << 20)
-	defaultMaxAvatarSizeBytes = int64(2 << 20)
-	defaultSignedURLTTL       = 5 * time.Minute
-	defaultCleanupBatchSize   = int32(100)
-	defaultPendingCleanupTTL  = 15 * time.Minute
+	defaultMaxFileSizeBytes     = int64(10 << 20)
+	defaultMaxAvatarSizeBytes   = int64(2 << 20)
+	defaultSignedURLTTL         = 5 * time.Minute
+	defaultCleanupBatchSize     = int32(100)
+	defaultPendingCleanupTTL    = 15 * time.Minute
+	defaultDeletingCleanupGrace = time.Minute
+	defaultCompensationTimeout  = 10 * time.Second
 
 	auditResourceFile       = "file"
 	auditActionUpload       = "file.upload"
@@ -43,11 +48,12 @@ type ServiceConfig struct {
 
 // ServiceDeps holds optional cross-cutting dependencies for files.Service.
 type ServiceDeps struct {
-	Tx        TxRunner
-	Actors    ActorResolver
-	AvatarRef AvatarRefChecker
-	Audit     AuditRecorder
-	Log       *slog.Logger
+	Tx           TxRunner
+	Actors       ActorResolver
+	AvatarRef    AvatarRefChecker
+	AvatarCaller AvatarCallerValidator
+	Audit        AuditRecorder
+	Log          *slog.Logger
 }
 
 // Service orchestrates file validation, multi-driver storage persistence, signed URLs, and orphan cleanup.
@@ -57,6 +63,7 @@ type Service struct {
 	tx                 TxRunner
 	actors             ActorResolver
 	avatarRef          AvatarRefChecker
+	avatarCaller       AvatarCallerValidator
 	audit              AuditRecorder
 	log                *slog.Logger
 	signer             *urlSigner
@@ -78,6 +85,9 @@ func NewService(
 	var d ServiceDeps
 	if len(deps) > 0 {
 		d = deps[0]
+	}
+	if pool != nil && d.Tx == nil {
+		d.Tx = database.NewTxManager(pool)
 	}
 	return newServiceWithStore(newStore(pool), reg, cfg, d)
 }
@@ -112,6 +122,7 @@ func newServiceWithStore(
 		tx:                 deps.Tx,
 		actors:             deps.Actors,
 		avatarRef:          deps.AvatarRef,
+		avatarCaller:       deps.AvatarCaller,
 		audit:              deps.Audit,
 		log:                log,
 		signer:             newURLSigner(cfg.SignedURLSecret),
@@ -139,7 +150,7 @@ func (s *Service) UploadPolicy() UploadPolicy {
 	return UploadPolicy{
 		MaxFileSizeBytes:   s.maxFileSizeBytes,
 		MaxAvatarSizeBytes: s.maxAvatarSizeBytes,
-		AllowedExtensions:  append([]string(nil), s.allowedExtensions...),
+		AllowedExtensions:  slices.Clone(s.allowedExtensions),
 	}
 }
 
@@ -160,6 +171,19 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (File, error) {
 
 // UploadAvatar validates an image, strips EXIF via pure-Go re-encoding (<=512px PNG), and stores it.
 func (s *Service) UploadAvatar(ctx context.Context, input UploadInput) (File, error) {
+	if input.UploaderID == nil || *input.UploaderID == uuid.Nil {
+		return File{}, apperr.Unauthorized(apperr.CodeUnauthorized)
+	}
+	if s.avatarCaller != nil {
+		if err := s.avatarCaller.EnsureActiveAvatarCaller(ctx, *input.UploaderID, input.SessionID); err != nil {
+			var appErr *apperr.Error
+			if errors.As(err, &appErr) {
+				return File{}, appErr
+			}
+			return File{}, apperr.Internal(err)
+		}
+	}
+
 	prepared, err := prepareAvatarUpload(input.Filename, input.Reader, s.maxAvatarSizeBytes)
 	if err != nil {
 		var appErr *apperr.Error
@@ -302,11 +326,12 @@ func (s *Service) persistPreparedUpload(
 }
 
 func (s *Service) compensateFailedUpload(ctx context.Context, drv storage.Storage, fileID uuid.UUID, objectKey string) {
-	compCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	compCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultCompensationTimeout)
 	defer cancel()
 
+	log := s.ctxLog(ctx)
 	if err := drv.Delete(compCtx, objectKey); err != nil {
-		s.log.Warn("failed to delete orphan object during upload compensation",
+		log.Warn("failed to delete orphan object during upload compensation",
 			"file_id", fileID.String(),
 			"storage_driver", drv.Driver(),
 			"object_key", objectKey,
@@ -314,7 +339,7 @@ func (s *Service) compensateFailedUpload(ctx context.Context, drv storage.Storag
 		)
 	}
 	if err := s.store.MarkFileStatus(compCtx, fileID, StatusFailed); err != nil {
-		s.log.Warn("failed to mark file status failed during upload compensation",
+		log.Warn("failed to mark file status failed during upload compensation",
 			"file_id", fileID.String(),
 			"error", err,
 		)
@@ -525,9 +550,10 @@ func (s *Service) Delete(ctx context.Context, input DeleteInput) error {
 	if s.storage == nil {
 		return nil
 	}
+	log := s.ctxLog(ctx)
 	drv, err := s.storage.Driver(target.StorageDriver)
 	if err != nil {
-		s.log.Warn("storage driver unavailable during delete; deferred to orphan janitor",
+		log.Warn("storage driver unavailable during delete; deferred to orphan janitor",
 			"file_id", target.ID.String(),
 			"storage_driver", target.StorageDriver,
 			"error", err,
@@ -535,11 +561,11 @@ func (s *Service) Delete(ctx context.Context, input DeleteInput) error {
 		return nil
 	}
 
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultCompensationTimeout)
 	defer cancel()
 
 	if err := drv.Delete(cleanupCtx, target.ObjectKey); err != nil {
-		s.log.Warn("storage delete failed; deferred to orphan janitor",
+		log.Warn("storage delete failed; deferred to orphan janitor",
 			"file_id", target.ID.String(),
 			"storage_driver", target.StorageDriver,
 			"object_key", target.ObjectKey,
@@ -548,8 +574,8 @@ func (s *Service) Delete(ctx context.Context, input DeleteInput) error {
 		return nil
 	}
 
-	if err := s.store.DeleteFileRow(cleanupCtx, target.ID); err != nil {
-		s.log.Warn("failed to delete finalized file row after object removal; deferred to janitor",
+	if _, err := s.store.DeleteFileRow(cleanupCtx, target.ID); err != nil {
+		log.Warn("failed to delete finalized file row after object removal; deferred to janitor",
 			"file_id", target.ID.String(),
 			"error", err,
 		)
@@ -578,24 +604,27 @@ func (s *Service) CleanupOrphans(ctx context.Context, pendingTTL time.Duration, 
 		return 0, nil
 	}
 
-	cutoff := s.now().UTC().Add(-pendingTTL)
-	candidates, err := s.store.ListCleanupCandidates(ctx, driverNames, cutoff, batchLimit)
+	now := s.now().UTC()
+	pendingCutoff := now.Add(-pendingTTL)
+	deletingCutoff := now.Add(-defaultDeletingCleanupGrace)
+	candidates, err := s.store.ListCleanupCandidates(ctx, driverNames, pendingCutoff, deletingCutoff, batchLimit)
 	if err != nil {
-		return 0, fmt.Errorf("list file cleanup candidates: %w", err)
+		return 0, apperr.Internal(fmt.Errorf("list file cleanup candidates: %w", err))
 	}
 
+	log := s.ctxLog(ctx)
 	var cleaned int64
 	for _, rec := range candidates {
 		if err := ctx.Err(); err != nil {
-			return cleaned, err
+			return cleaned, apperr.Internal(err)
 		}
 
 		// Atomically claim expired pending rows before touching storage to prevent TOCTOU deletion
 		// of an upload that transitioned to ready after ListCleanupCandidates returned.
 		if rec.Status == StatusPending {
-			claimed, claimErr := s.store.ClaimExpiredPendingFile(ctx, rec.ID, cutoff)
+			claimed, claimErr := s.store.ClaimExpiredPendingFile(ctx, rec.ID, pendingCutoff)
 			if claimErr != nil {
-				s.log.Warn("failed to claim expired pending file",
+				log.Warn("failed to claim expired pending file",
 					"file_id", rec.ID.String(),
 					"error", claimErr,
 				)
@@ -608,34 +637,51 @@ func (s *Service) CleanupOrphans(ctx context.Context, pendingTTL time.Duration, 
 
 		drv, err := s.storage.Driver(rec.StorageDriver)
 		if err != nil {
-			s.log.Warn("skipping orphan cleanup for unconfigured storage driver",
+			log.Warn("skipping orphan cleanup for unconfigured storage driver",
 				"file_id", rec.ID.String(),
 				"storage_driver", rec.StorageDriver,
 			)
 			continue
 		}
 		if err := drv.Delete(ctx, rec.ObjectKey); err != nil {
-			s.log.Warn("failed to delete orphan storage object",
+			log.Warn("failed to delete orphan storage object",
 				"file_id", rec.ID.String(),
 				"storage_driver", rec.StorageDriver,
 				"object_key", rec.ObjectKey,
 				"error", err,
 			)
 			// Push failing candidates to the back of the queue to avoid head-of-line blocking.
-			_ = s.store.TouchCleanupCandidate(ctx, rec.ID)
+			if touchErr := s.store.TouchCleanupCandidate(ctx, rec.ID); touchErr != nil {
+				log.Warn("failed to touch cleanup candidate after storage delete failure",
+					"file_id", rec.ID.String(),
+					"error", touchErr,
+				)
+			}
 			continue
 		}
-		if err := s.store.DeleteFileRow(ctx, rec.ID); err != nil {
-			s.log.Warn("failed to delete orphan file row",
+		deleted, err := s.store.DeleteFileRow(ctx, rec.ID)
+		if err != nil {
+			log.Warn("failed to delete orphan file row",
 				"file_id", rec.ID.String(),
 				"error", err,
 			)
-			_ = s.store.TouchCleanupCandidate(ctx, rec.ID)
+			if touchErr := s.store.TouchCleanupCandidate(ctx, rec.ID); touchErr != nil {
+				log.Warn("failed to touch cleanup candidate after db delete failure",
+					"file_id", rec.ID.String(),
+					"error", touchErr,
+				)
+			}
 			continue
 		}
-		cleaned++
+		if deleted {
+			cleaned++
+		}
 	}
 	return cleaned, nil
+}
+
+func (s *Service) ctxLog(ctx context.Context) *slog.Logger {
+	return logger.FromContext(ctx, s.log)
 }
 
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
@@ -651,7 +697,7 @@ func (s *Service) resolveUsername(ctx context.Context, userID *uuid.UUID) string
 	}
 	username, err := s.actors.GetUsername(ctx, *userID)
 	if err != nil {
-		s.log.Warn("failed to resolve actor username for file audit",
+		s.ctxLog(ctx).Warn("failed to resolve actor username for file audit",
 			"user_id", userID.String(),
 			"error", err,
 		)
@@ -682,7 +728,7 @@ func (s *Service) hydrateUploaders(ctx context.Context, items []File) {
 
 	names, err := s.actors.ListUsernamesByIDs(ctx, ids)
 	if err != nil {
-		s.log.Warn("failed to resolve file uploader usernames", "error", err)
+		s.ctxLog(ctx).Warn("failed to resolve file uploader usernames", "error", err)
 		return
 	}
 	for i := range items {
@@ -711,53 +757,12 @@ func effectiveDisposition(mimeType, requested string) string {
 func normalizeListFilter(filter ListFilter) (ListFilter, error) {
 	out := filter
 	out.Pagination = pagination.Normalize(filter.Pagination.Page, filter.Pagination.PageSize)
-	out.Q = strings.TrimSpace(filter.Q)
 
-	sortCol := strings.TrimSpace(filter.Sort)
-	if sortCol == "" {
-		sortCol = SortCreatedAt
+	normalized, fieldErrs := validateAndNormalizeFilterFields(out)
+	if len(fieldErrs) > 0 {
+		return ListFilter{}, apperr.Validation(sortAndDedupeFieldErrors(fieldErrs))
 	}
-	switch sortCol {
-	case SortCreatedAt, SortOriginalName, SortSizeBytes:
-		out.Sort = sortCol
-	default:
-		return ListFilter{}, apperr.Validation([]apperr.FieldError{{
-			Field:   "sort",
-			Message: "VALIDATION_ONE_OF",
-		}})
-	}
-
-	sortOrder := strings.ToLower(strings.TrimSpace(filter.Order))
-	if sortOrder == "" {
-		sortOrder = OrderDesc
-	}
-	switch sortOrder {
-	case OrderAsc, OrderDesc:
-		out.Order = sortOrder
-	default:
-		return ListFilter{}, apperr.Validation([]apperr.FieldError{{
-			Field:   "order",
-			Message: "VALIDATION_ONE_OF",
-		}})
-	}
-
-	for _, cat := range out.Categories {
-		if cat != CategoryImage && cat != CategoryDocument {
-			return ListFilter{}, apperr.Validation([]apperr.FieldError{{
-				Field:   "category",
-				Message: ErrCodeInvalidCategory,
-			}})
-		}
-	}
-	for _, drv := range out.Drivers {
-		if drv != storage.DriverLocal && drv != storage.DriverS3 {
-			return ListFilter{}, apperr.Validation([]apperr.FieldError{{
-				Field:   "driver",
-				Message: ErrCodeInvalidDriver,
-			}})
-		}
-	}
-	return out, nil
+	return normalized, nil
 }
 
 func cloneUUIDPtr(id *uuid.UUID) *uuid.UUID {

@@ -70,8 +70,8 @@
 ### 模块内调用链与可见性
 
 - 严格单向调用：`router.go` → `handler.go` → `service.go` → `store.go` → `internal/dbgen`。
-- **必须导出**：`Service`、`NewService`、`Handler`、`NewHandler`、`Messages()`、`RegisterRoutes`（如需公开接口则另增 `RegisterPublicRoutes`）、供 `app` 适配或测试引用的领域模型与错误码。
-- **必须私有（小写）**：`store` 结构体及 `newStore`（仅在 `NewService` 内部实例化）、`deps.go` 中的接口与局部结构、`request.go`/`response.go` 结构体、`handler.go` 中的具体接口方法。
+- **必须导出**：`Service`、`NewService`、`Handler`、`NewHandler`、`Messages()`、`RegisterRoutes`（如需公开接口则另增 `RegisterPublicRoutes`）、供 `app` 适配或测试引用的领域模型、错误码与 `deps.go` 中的消费方窄接口/局部结构（用于 `ServiceDeps` 注入与 `internal/app/adapters.go` 编译期接口断言）。
+- **必须私有（小写）**：`store` 结构体及 `newStore`（仅在 `NewService` 内部实例化）、`request.go`/`response.go` 结构体、`handler.go` 中的具体接口方法。
 
 ## 3. 运行时收口契约
 

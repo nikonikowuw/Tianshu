@@ -202,6 +202,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			// production clusters should set a dedicated secret for independent rotation.
 			signedURLSecret = cfg.Auth.JWTSecret
 		}
+		filesAvatarCaller := &filesAvatarCallerAdapter{identity: identitySvc}
 		filesSvc = files.NewService(
 			pool,
 			storeReg,
@@ -213,11 +214,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 				SignedURLTTL:       cfg.Storage.SignedURLTTL,
 			},
 			files.ServiceDeps{
-				Tx:        tx,
-				Actors:    &filesActorAdapter{svc: identitySvc},
-				AvatarRef: &filesAvatarRefAdapter{svc: identitySvc},
-				Audit:     &filesAuditAdapter{svc: auditSvc},
-				Log:       log,
+				Tx:           tx,
+				Actors:       &filesActorAdapter{svc: identitySvc},
+				AvatarRef:    &filesAvatarRefAdapter{svc: identitySvc},
+				AvatarCaller: filesAvatarCaller,
+				Audit:        &filesAuditAdapter{svc: auditSvc},
+				Log:          log,
 			},
 		)
 		identityFiles.svc = filesSvc
@@ -239,6 +241,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			},
 		)
 		identitySessionMgr.svc = authSvc
+		filesAvatarCaller.auth = authSvc
 		authHandler = auth.NewHandler(authSvc, cfg.CORS.AllowedOrigins)
 
 		dashboardSvc := dashboard.NewService(pool)

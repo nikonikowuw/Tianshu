@@ -62,14 +62,15 @@ type File struct {
 	UpdatedAt     time.Time
 }
 
-// IsImage reports whether the file's detected MIME type belongs to the safe image category.
+// IsImage reports whether the file belongs to the image category (aligned with Category() and SQL image/% filters).
+// Inline browser rendering and avatar binding enforce a stricter built-in bitmap allowlist separately.
 func (f File) IsImage() bool {
-	return isAllowedImageMIME(f.MIMEType)
+	return f.Category() == CategoryImage
 }
 
-// Category returns CategoryImage for images and CategoryDocument for all other files.
+// Category returns CategoryImage for image/* MIME types and CategoryDocument for all other files.
 func (f File) Category() string {
-	if strings.HasPrefix(strings.ToLower(f.MIMEType), "image/") {
+	if strings.HasPrefix(normalizeMIME(f.MIMEType), "image/") {
 		return CategoryImage
 	}
 	return CategoryDocument
@@ -86,6 +87,7 @@ type UploadInput struct {
 	Filename   string
 	Reader     io.Reader
 	UploaderID *uuid.UUID
+	SessionID  uuid.UUID
 	Meta       RequestMeta
 }
 

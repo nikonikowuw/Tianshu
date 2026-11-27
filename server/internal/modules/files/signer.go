@@ -5,13 +5,17 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-const signerDomainLabel = "tianshu:files:signed-url:v1"
+const (
+	signerDomainLabel     = "tianshu:files:signed-url:v1"
+	minSignedURLSecretLen = 32
+)
 
 type signedPayload struct {
 	FileID      string `json:"fid"`
@@ -24,12 +28,19 @@ type urlSigner struct {
 }
 
 func newURLSigner(secret string) *urlSigner {
-	mac := hmac.New(sha256.New, []byte(secret))
+	trimmed := strings.TrimSpace(secret)
+	if len(trimmed) < minSignedURLSecretLen {
+		return &urlSigner{}
+	}
+	mac := hmac.New(sha256.New, []byte(trimmed))
 	_, _ = mac.Write([]byte(signerDomainLabel))
 	return &urlSigner{key: mac.Sum(nil)}
 }
 
 func (s *urlSigner) Sign(fileID uuid.UUID, disposition string, expiresAt time.Time) (string, error) {
+	if len(s.key) == 0 {
+		return "", errors.New("signed url signer key is not configured")
+	}
 	raw, err := json.Marshal(signedPayload{
 		FileID:      fileID.String(),
 		Disposition: disposition,
@@ -44,6 +55,9 @@ func (s *urlSigner) Sign(fileID uuid.UUID, disposition string, expiresAt time.Ti
 }
 
 func (s *urlSigner) Verify(token string, now time.Time) (uuid.UUID, string, error) {
+	if len(s.key) == 0 {
+		return uuid.Nil, "", errInvalidSignedURL()
+	}
 	encodedPayload, encodedSig, ok := strings.Cut(strings.TrimSpace(token), ".")
 	if !ok || encodedPayload == "" || encodedSig == "" || strings.Contains(encodedSig, ".") {
 		return uuid.Nil, "", errInvalidSignedURL()

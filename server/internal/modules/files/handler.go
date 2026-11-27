@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"syscall"
@@ -53,7 +53,7 @@ func (h *Handler) handleMultipartUpload(c *gin.Context, maxBytes int64, isAvatar
 
 	if err := c.Request.ParseMultipartForm(min(maxBytes, multipartMemoryBytes)); err != nil {
 		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
+		if errors.As(err, &maxErr) || errors.Is(err, multipart.ErrMessageTooLarge) {
 			_ = c.Error(errFileTooLarge())
 			return
 		}
@@ -81,16 +81,21 @@ func (h *Handler) handleMultipartUpload(c *gin.Context, maxBytes int64, isAvatar
 	}
 	defer func() { _ = src.Close() }()
 
-	var uploaderID *uuid.UUID
+	var (
+		uploaderID *uuid.UUID
+		sessionID  uuid.UUID
+	)
 	if id, ok := authctx.IdentityFromContext(c.Request.Context()); ok {
 		uid := id.UserID
 		uploaderID = &uid
+		sessionID = id.SessionID
 	}
 
 	input := UploadInput{
 		Filename:   fh.Filename,
 		Reader:     src,
 		UploaderID: uploaderID,
+		SessionID:  sessionID,
 		Meta: RequestMeta{
 			IPAddress: c.ClientIP(),
 			UserAgent: c.Request.UserAgent(),
@@ -163,7 +168,7 @@ func (h *Handler) content(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	writeContentStream(c, stream)
+	h.writeContentStream(c, stream)
 }
 
 func (h *Handler) createSignedURL(c *gin.Context) {
@@ -204,7 +209,7 @@ func (h *Handler) signedContent(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	writeContentStream(c, stream)
+	h.writeContentStream(c, stream)
 }
 
 func (h *Handler) deleteFile(c *gin.Context) {
@@ -235,7 +240,7 @@ func (h *Handler) deleteFile(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func writeContentStream(c *gin.Context, stream ContentStream) {
+func (h *Handler) writeContentStream(c *gin.Context, stream ContentStream) {
 	defer func() { _ = stream.Reader.Close() }()
 
 	c.Header("X-Content-Type-Options", "nosniff")
@@ -247,7 +252,7 @@ func writeContentStream(c *gin.Context, stream ContentStream) {
 	c.Status(http.StatusOK)
 
 	if _, err := io.Copy(c.Writer, stream.Reader); err != nil && !isClientDisconnect(err) {
-		logger.FromContext(c.Request.Context(), nil).Warn("failed to stream file content",
+		logger.FromContext(c.Request.Context(), h.svc.log).Warn("failed to stream file content",
 			"file_id", stream.File.ID.String(),
 			"storage_driver", stream.File.StorageDriver,
 			"error", err,
@@ -267,8 +272,39 @@ func formatContentDisposition(disposition, filename string) string {
 		disposition = DispositionAttachment
 	}
 	asciiFallback := toASCIIFilename(filename)
-	escapedUTF8 := url.PathEscape(filename)
+	escapedUTF8 := encodeRFC8187(filename)
 	return fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, asciiFallback, escapedUTF8)
+}
+
+// encodeRFC8187 percent-encodes any byte outside RFC 8187 attr-char so strict HTTP parsers
+// accept filenames containing '=', ':', '@', quotes, spaces, or UTF-8 sequences.
+func encodeRFC8187(s string) string {
+	const upperHex = "0123456789ABCDEF"
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if isRFC8187AttrChar(ch) {
+			b.WriteByte(ch)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(upperHex[ch>>4])
+		b.WriteByte(upperHex[ch&0x0f])
+	}
+	return b.String()
+}
+
+func isRFC8187AttrChar(c byte) bool {
+	if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+		return true
+	}
+	switch c {
+	case '!', '#', '$', '&', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	default:
+		return false
+	}
 }
 
 func toASCIIFilename(name string) string {

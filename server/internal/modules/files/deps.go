@@ -22,6 +22,12 @@ type AvatarRefChecker interface {
 	IsAvatarFileInUse(ctx context.Context, fileID uuid.UUID) (bool, error)
 }
 
+// AvatarCallerValidator verifies that an avatar upload caller is an active, non-deleted user
+// operating from an unrevoked, unexpired session.
+type AvatarCallerValidator interface {
+	EnsureActiveAvatarCaller(ctx context.Context, userID, sessionID uuid.UUID) error
+}
+
 // AuditEntry is the minimal audit payload produced by the files module.
 type AuditEntry struct {
 	ActorID       *uuid.UUID

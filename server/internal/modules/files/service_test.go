@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -20,11 +21,13 @@ import (
 )
 
 type fakeFileStore struct {
-	mu            sync.Mutex
-	rows          map[uuid.UUID]File
-	failMarkReady error
-	failDeleteRow error
-	now           func() time.Time
+	mu              sync.Mutex
+	rows            map[uuid.UUID]File
+	failMarkReady   error
+	failDeleteRow   error
+	failListCleanup error
+	touchedIDs      []uuid.UUID
+	now             func() time.Time
 }
 
 func newFakeFileStore() *fakeFileStore {
@@ -32,6 +35,39 @@ func newFakeFileStore() *fakeFileStore {
 		rows: make(map[uuid.UUID]File),
 		now:  time.Now,
 	}
+}
+
+func (f *fakeFileStore) snapshot() map[uuid.UUID]File {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.rows)
+}
+
+func (f *fakeFileStore) restore(snap map[uuid.UUID]File) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows = snap
+}
+
+type fakeTxRunner struct {
+	store *fakeFileStore
+	audit *fakeAudit
+}
+
+func (r *fakeTxRunner) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	rowSnap := r.store.snapshot()
+	var auditLen int
+	if r.audit != nil {
+		auditLen = len(r.audit.entries)
+	}
+	if err := fn(ctx); err != nil {
+		r.store.restore(rowSnap)
+		if r.audit != nil {
+			r.audit.entries = r.audit.entries[:auditLen]
+		}
+		return err
+	}
+	return nil
 }
 
 func (f *fakeFileStore) InsertPendingFile(_ context.Context, rec File) (File, error) {
@@ -118,21 +154,23 @@ func (f *fakeFileStore) TouchCleanupCandidate(_ context.Context, id uuid.UUID) e
 	if ok && (rec.Status == StatusFailed || rec.Status == StatusDeleting) {
 		rec.UpdatedAt = f.now().UTC()
 		f.rows[id] = rec
+		f.touchedIDs = append(f.touchedIDs, id)
 	}
 	return nil
 }
 
-func (f *fakeFileStore) DeleteFileRow(_ context.Context, id uuid.UUID) error {
+func (f *fakeFileStore) DeleteFileRow(_ context.Context, id uuid.UUID) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failDeleteRow != nil {
-		return f.failDeleteRow
+		return false, f.failDeleteRow
 	}
 	rec, ok := f.rows[id]
 	if ok && (rec.Status == StatusFailed || rec.Status == StatusDeleting) {
 		delete(f.rows, id)
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 func (f *fakeFileStore) filterReady(filter ListFilter) []File {
@@ -177,20 +215,29 @@ func (f *fakeFileStore) ListReadyFiles(_ context.Context, filter ListFilter) ([]
 	return slices.Clone(rows[start:end]), nil
 }
 
-func (f *fakeFileStore) ListCleanupCandidates(_ context.Context, drivers []string, pendingCutoff time.Time, limit int32) ([]File, error) {
+func (f *fakeFileStore) ListCleanupCandidates(_ context.Context, drivers []string, pendingCutoff, deletingCutoff time.Time, limit int32) ([]File, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failListCleanup != nil {
+		return nil, f.failListCleanup
+	}
 	var out []File
 	for _, rec := range f.rows {
 		if len(drivers) > 0 && !slices.Contains(drivers, rec.StorageDriver) {
 			continue
 		}
-		if rec.Status == StatusFailed || rec.Status == StatusDeleting || (rec.Status == StatusPending && rec.UpdatedAt.Before(pendingCutoff)) {
+		eligible := rec.Status == StatusFailed ||
+			(rec.Status == StatusDeleting && rec.UpdatedAt.Before(deletingCutoff)) ||
+			(rec.Status == StatusPending && rec.UpdatedAt.Before(pendingCutoff))
+		if eligible {
 			out = append(out, rec)
 		}
 	}
 	slices.SortFunc(out, func(a, b File) int {
-		return cmp.Compare(a.UpdatedAt.UnixNano(), b.UpdatedAt.UnixNano())
+		if c := cmp.Compare(a.UpdatedAt.UnixNano(), b.UpdatedAt.UnixNano()); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID.String(), b.ID.String())
 	})
 	if len(out) > int(limit) {
 		out = out[:limit]
@@ -200,9 +247,18 @@ func (f *fakeFileStore) ListCleanupCandidates(_ context.Context, drivers []strin
 
 type failingStorage struct {
 	storage.Storage
-	failPut    error
-	failGet    error
-	failDelete error
+	driverOverride string
+	failPut        error
+	failGet        error
+	failDelete     error
+	failDeleteKey  string
+}
+
+func (f *failingStorage) Driver() string {
+	if f.driverOverride != "" {
+		return f.driverOverride
+	}
+	return f.Storage.Driver()
 }
 
 func (f *failingStorage) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
@@ -220,7 +276,7 @@ func (f *failingStorage) Get(ctx context.Context, key string) (io.ReadCloser, er
 }
 
 func (f *failingStorage) Delete(ctx context.Context, key string) error {
-	if f.failDelete != nil {
+	if f.failDelete != nil && (f.failDeleteKey == "" || f.failDeleteKey == key) {
 		return f.failDelete
 	}
 	return f.Storage.Delete(ctx, key)
@@ -250,6 +306,14 @@ type fakeAvatarRefs struct {
 
 func (r fakeAvatarRefs) IsAvatarFileInUse(_ context.Context, id uuid.UUID) (bool, error) {
 	return r.inUse[id], nil
+}
+
+type fakeAvatarCaller struct {
+	err error
+}
+
+func (c fakeAvatarCaller) EnsureActiveAvatarCaller(_ context.Context, _, _ uuid.UUID) error {
+	return c.err
 }
 
 type fakeAudit struct {
@@ -284,6 +348,7 @@ func TestServiceUploadListPreviewDeleteAndAvatarGuard(t *testing.T) {
 		SignedURLSecret: "test-secret-key-at-least-32-bytes",
 		SignedURLTTL:    5 * time.Minute,
 	}, ServiceDeps{
+		Tx:        &fakeTxRunner{store: st, audit: aud},
 		Actors:    fakeActors{names: map[uuid.UUID]string{uploaderID: "alice"}},
 		AvatarRef: avatarRefs,
 		Audit:     aud,
@@ -306,10 +371,10 @@ func TestServiceUploadListPreviewDeleteAndAvatarGuard(t *testing.T) {
 		t.Fatalf("expected upload audit entry, got %+v", aud.entries)
 	}
 
-	// List hydrates uploader usernames and supports filtering.
+	// List hydrates uploader usernames and supports filtering (including case/whitespace normalization).
 	res, err := svc.List(ctx, ListFilter{
 		Pagination: pagination.Normalize(1, 20),
-		Categories: []string{CategoryImage},
+		Categories: []string{" IMAGE ", "image"},
 	})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
@@ -328,8 +393,11 @@ func TestServiceUploadListPreviewDeleteAndAvatarGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSignedContent() error = %v", err)
 	}
-	gotBytes, _ := io.ReadAll(stream.Reader)
+	gotBytes, err := io.ReadAll(stream.Reader)
 	_ = stream.Reader.Close()
+	if err != nil {
+		t.Fatalf("read signed stream: %v", err)
+	}
 	if !bytes.Equal(gotBytes, pngData) || stream.Disposition != DispositionInline {
 		t.Fatalf("unexpected signed stream: len=%d disp=%q", len(gotBytes), stream.Disposition)
 	}
@@ -383,10 +451,15 @@ func TestServiceUploadAndDeleteCompensationAndOrphanCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
 	st := newFakeFileStore()
+	st.now = func() time.Time { return now }
 	svc := newServiceWithStore(st, reg, ServiceConfig{
 		SignedURLSecret: "test-secret-key-at-least-32-bytes",
-	}, ServiceDeps{})
+	}, ServiceDeps{
+		Tx: &fakeTxRunner{store: st},
+	})
+	svc.now = func() time.Time { return now }
 
 	ctx := context.Background()
 
@@ -417,7 +490,7 @@ func TestServiceUploadAndDeleteCompensationAndOrphanCleanup(t *testing.T) {
 		t.Fatalf("CleanupOrphans() = (%d, %v), remaining rows = %d", cleaned, err, len(st.rows))
 	}
 
-	// 2) Delete when storage backend temporarily fails keeps row in deleting status until janitor retries.
+	// 2) Delete when storage backend temporarily fails keeps row in deleting status until janitor retries past grace window.
 	rec, err := svc.Upload(ctx, UploadInput{
 		Filename: "retry.txt",
 		Reader:   strings.NewReader("retry-body"),
@@ -437,8 +510,15 @@ func TestServiceUploadAndDeleteCompensationAndOrphanCleanup(t *testing.T) {
 		t.Fatalf("row status = %q, want deleting", st.rows[rec.ID].Status)
 	}
 
-	// Storage recovers -> janitor cleans both storage object and DB row.
+	// Within grace period (< 1m), janitor does not race with an in-flight Delete().
 	flaky.failDelete = nil
+	cleanedEarly, err := svc.CleanupOrphans(ctx, 15*time.Minute, 50)
+	if err != nil || cleanedEarly != 0 || len(st.rows) != 1 {
+		t.Fatalf("CleanupOrphans() within deleting grace window = (%d, %v), rows = %d, want (0, nil, 1)", cleanedEarly, err, len(st.rows))
+	}
+
+	// After grace period passes, janitor cleans both storage object and DB row.
+	now = now.Add(2 * time.Minute)
 	cleaned, err = svc.CleanupOrphans(ctx, 15*time.Minute, 50)
 	if err != nil || cleaned != 1 || len(st.rows) != 0 {
 		t.Fatalf("CleanupOrphans() after recovery = (%d, %v), remaining = %d", cleaned, err, len(st.rows))
@@ -453,8 +533,8 @@ type racingCleanupStore struct {
 	promoteOnList uuid.UUID
 }
 
-func (r *racingCleanupStore) ListCleanupCandidates(ctx context.Context, drivers []string, pendingCutoff time.Time, limit int32) ([]File, error) {
-	items, err := r.fakeFileStore.ListCleanupCandidates(ctx, drivers, pendingCutoff, limit)
+func (r *racingCleanupStore) ListCleanupCandidates(ctx context.Context, drivers []string, pendingCutoff, deletingCutoff time.Time, limit int32) ([]File, error) {
+	items, err := r.fakeFileStore.ListCleanupCandidates(ctx, drivers, pendingCutoff, deletingCutoff, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +596,7 @@ func TestServiceCleanupOrphansDoesNotDeletePromotedReadyFile(t *testing.T) {
 	}
 }
 
-func TestServiceUploadCompensatesWhenAuditFails(t *testing.T) {
+func TestServiceUploadAndDeleteRollbackWhenAuditFails(t *testing.T) {
 	localStore, err := storage.NewLocal(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)
@@ -529,8 +609,12 @@ func TestServiceUploadCompensatesWhenAuditFails(t *testing.T) {
 	aud := &fakeAudit{fail: errors.New("audit insert failed")}
 	svc := newServiceWithStore(st, reg, ServiceConfig{
 		SignedURLSecret: "test-secret-key-at-least-32-bytes",
-	}, ServiceDeps{Audit: aud})
+	}, ServiceDeps{
+		Tx:    &fakeTxRunner{store: st, audit: aud},
+		Audit: aud,
+	})
 
+	// Upload audit failure rolls back MarkFileReady and triggers compensation to failed + object removal.
 	_, err = svc.Upload(context.Background(), UploadInput{
 		Filename: "audit.txt",
 		Reader:   strings.NewReader("audit-body"),
@@ -548,6 +632,295 @@ func TestServiceUploadCompensatesWhenAuditFails(t *testing.T) {
 		if _, statErr := localStore.Stat(context.Background(), rec.ObjectKey); !errors.Is(statErr, storage.ErrNotFound) {
 			t.Fatalf("expected object compensated after audit failure, stat err = %v", statErr)
 		}
+	}
+
+	// Upload succeeds when audit works, then Delete fails on audit -> tx rolls back, row stays ready and object intact.
+	aud.fail = nil
+	ready, err := svc.Upload(context.Background(), UploadInput{
+		Filename: "keep.txt",
+		Reader:   strings.NewReader("keep-body"),
+	})
+	if err != nil {
+		t.Fatalf("Upload() error = %v", err)
+	}
+
+	aud.fail = errors.New("audit delete failed")
+	if err := svc.Delete(context.Background(), DeleteInput{FileID: ready.ID}); err == nil {
+		t.Fatal("expected Delete to fail when audit recording fails")
+	}
+	if got, err := svc.Get(context.Background(), ready.ID); err != nil || got.Status != StatusReady {
+		t.Fatalf("expected file to remain ready after rolled-back Delete, got (%+v, %v)", got, err)
+	}
+	if _, err := localStore.Stat(context.Background(), ready.ObjectKey); err != nil {
+		t.Fatalf("expected storage object intact after rolled-back Delete, stat err = %v", err)
+	}
+}
+
+func TestServiceMultiDriverRoutingAndNotFoundMapping(t *testing.T) {
+	localStore, err := storage.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocal(local): %v", err)
+	}
+	s3Backing, err := storage.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocal(s3-fake): %v", err)
+	}
+	fakeS3 := &failingStorage{Storage: s3Backing, driverOverride: storage.DriverS3}
+	reg, err := storage.NewRegistry(storage.DriverLocal, localStore, fakeS3)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	st := newFakeFileStore()
+	svc := newServiceWithStore(st, reg, ServiceConfig{
+		SignedURLSecret: "test-secret-key-at-least-32-bytes",
+	}, ServiceDeps{
+		Tx: &fakeTxRunner{store: st},
+	})
+
+	ctx := context.Background()
+	localRec, err := svc.Upload(ctx, UploadInput{
+		Filename: "local.txt",
+		Reader:   strings.NewReader("from-local"),
+	})
+	if err != nil {
+		t.Fatalf("Upload local: %v", err)
+	}
+
+	// Seed an existing S3-backed ready record while default driver is local.
+	s3ID := uuid.Must(uuid.NewV7())
+	s3Key := "2026/11/" + s3ID.String() + ".txt"
+	if _, err := fakeS3.Put(ctx, s3Key, strings.NewReader("from-s3")); err != nil {
+		t.Fatalf("fakeS3.Put: %v", err)
+	}
+	st.rows[s3ID] = File{
+		ID:            s3ID,
+		StorageDriver: storage.DriverS3,
+		ObjectKey:     s3Key,
+		OriginalName:  "remote.txt",
+		MIMEType:      mimeTXT,
+		SizeBytes:     7,
+		SHA256:        strings.Repeat("c", 64),
+		Status:        StatusReady,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	}
+
+	// OpenContent routes to s3 driver and reads s3 payload.
+	stream, err := svc.OpenContent(ctx, s3ID, false)
+	if err != nil {
+		t.Fatalf("OpenContent(s3) error = %v", err)
+	}
+	body, err := io.ReadAll(stream.Reader)
+	_ = stream.Reader.Close()
+	if err != nil || string(body) != "from-s3" {
+		t.Fatalf("OpenContent(s3) body = (%q, %v), want from-s3", string(body), err)
+	}
+
+	// Deleting s3 record removes only the s3 object while keeping local object intact.
+	if err := svc.Delete(ctx, DeleteInput{FileID: s3ID}); err != nil {
+		t.Fatalf("Delete(s3) error = %v", err)
+	}
+	if _, err := fakeS3.Stat(ctx, s3Key); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("expected s3 object deleted, stat err = %v", err)
+	}
+	if _, err := localStore.Stat(ctx, localRec.ObjectKey); err != nil {
+		t.Fatalf("expected local object untouched, stat err = %v", err)
+	}
+
+	// Missing physical object for a ready row maps storage.ErrNotFound -> 404 FILES_NOT_FOUND.
+	if err := localStore.Delete(ctx, localRec.ObjectKey); err != nil {
+		t.Fatalf("remove local object: %v", err)
+	}
+	_, err = svc.OpenContent(ctx, localRec.ID, false)
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Status != 404 || appErr.Code != ErrCodeNotFound {
+		t.Fatalf("OpenContent missing object = %v, want 404 %s", err, ErrCodeNotFound)
+	}
+}
+
+func TestServiceCleanupOrphansErrorsBackoffAndCancellation(t *testing.T) {
+	baseLocal, err := storage.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	flaky := &failingStorage{Storage: baseLocal}
+	reg, err := storage.NewRegistry(storage.DriverLocal, flaky)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	now := time.Date(2026, 11, 27, 13, 0, 0, 0, time.UTC)
+	st := newFakeFileStore()
+	st.now = func() time.Time { return now }
+	svc := newServiceWithStore(st, reg, ServiceConfig{
+		SignedURLSecret: "test-secret-key-at-least-32-bytes",
+	}, ServiceDeps{})
+	svc.now = func() time.Time { return now }
+
+	// 1) Store query failure returns *apperr.Error (500 INTERNAL_ERROR).
+	st.failListCleanup = errors.New("db down")
+	_, err = svc.CleanupOrphans(context.Background(), 15*time.Minute, 10)
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Status != 500 || appErr.Code != apperr.CodeInternal {
+		t.Fatalf("CleanupOrphans DB error = %v, want 500 %s", err, apperr.CodeInternal)
+	}
+	st.failListCleanup = nil
+
+	// 2) Storage delete failure on first candidate touches it (back-off) and still cleans second candidate.
+	idFail := uuid.Must(uuid.NewV7())
+	keyFail := "2026/11/" + idFail.String() + ".txt"
+	idOK := uuid.Must(uuid.NewV7())
+	keyOK := "2026/11/" + idOK.String() + ".txt"
+	if _, err := baseLocal.Put(context.Background(), keyFail, strings.NewReader("a")); err != nil {
+		t.Fatalf("put fail: %v", err)
+	}
+	if _, err := baseLocal.Put(context.Background(), keyOK, strings.NewReader("b")); err != nil {
+		t.Fatalf("put ok: %v", err)
+	}
+	st.rows[idFail] = File{
+		ID: idFail, StorageDriver: storage.DriverLocal, ObjectKey: keyFail,
+		Status: StatusFailed, UpdatedAt: now.Add(-10 * time.Minute),
+	}
+	st.rows[idOK] = File{
+		ID: idOK, StorageDriver: storage.DriverLocal, ObjectKey: keyOK,
+		Status: StatusFailed, UpdatedAt: now.Add(-5 * time.Minute),
+	}
+
+	flaky.failDelete = errors.New("permission denied")
+	flaky.failDeleteKey = keyFail
+	cleaned, err := svc.CleanupOrphans(context.Background(), 15*time.Minute, 10)
+	if err != nil || cleaned != 1 {
+		t.Fatalf("CleanupOrphans partial = (%d, %v), want (1, nil)", cleaned, err)
+	}
+	if !slices.Contains(st.touchedIDs, idFail) {
+		t.Fatalf("expected failed candidate %s to be touched for backoff, touched=%v", idFail, st.touchedIDs)
+	}
+	if _, exists := st.rows[idOK]; exists {
+		t.Fatal("expected second candidate to be cleaned despite first candidate failing")
+	}
+
+	// 3) Context cancellation returns *apperr.Error unwrapping context.Canceled.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = svc.CleanupOrphans(cancelCtx, 15*time.Minute, 10)
+	appErr, ok = apperr.As(err)
+	if !ok || appErr.Status != 500 || appErr.Code != apperr.CodeInternal || !errors.Is(err, context.Canceled) {
+		t.Fatalf("CleanupOrphans canceled = %v, want 500 %s wrapping context.Canceled", err, apperr.CodeInternal)
+	}
+}
+
+func TestServiceListFilterValidationAndWeakSigner(t *testing.T) {
+	localStore, err := storage.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	reg, err := storage.NewRegistry(storage.DriverLocal, localStore)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	st := newFakeFileStore()
+	svc := newServiceWithStore(st, reg, ServiceConfig{
+		SignedURLSecret: "short", // intentionally < 32 bytes to verify fail-closed signer
+	}, ServiceDeps{})
+
+	// Multiple invalid fields directly at service layer are all collected and sorted.
+	tooMany := make([]string, maxMultiFilterLen+1)
+	for i := range tooMany {
+		tooMany[i] = "application/x-type-" + strings.Repeat("a", i+1)
+	}
+	_, err = svc.List(context.Background(), ListFilter{
+		Q:          "bad\x00query",
+		Categories: []string{"video"},
+		Drivers:    []string{"gcs"},
+		MIMETypes:  tooMany,
+		Sort:       "bad",
+		Order:      "sideways",
+	})
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Status != 422 || len(appErr.Fields) != 6 {
+		t.Fatalf("direct List invalid filter = %v, want 422 with 6 sorted errors", err)
+	}
+	for i := 1; i < len(appErr.Fields); i++ {
+		if appErr.Fields[i-1].Field >= appErr.Fields[i].Field {
+			t.Fatalf("errors not sorted ascending: %+v", appErr.Fields)
+		}
+	}
+
+	// Invalid UTF-8 and overlong Q / mimeType item rejected with 422.
+	for _, bad := range []ListFilter{
+		{Q: string([]byte{0xff, 0xfe})},
+		{Q: strings.Repeat("a", maxSearchQueryLen+1)},
+		{MIMETypes: []string{"image/png\x00"}},
+		{MIMETypes: []string{strings.Repeat("x", maxMIMETypeFilterLen+1)}},
+	} {
+		_, err := svc.List(context.Background(), bad)
+		if appErr, ok := apperr.As(err); !ok || appErr.Status != 422 {
+			t.Fatalf("List(%+v) = %v, want 422", bad, err)
+		}
+	}
+
+	// Weak/empty signing secret fails closed on both CreateSignedURL and OpenSignedContent.
+	rec, err := svc.Upload(context.Background(), UploadInput{
+		Filename: "a.txt",
+		Reader:   strings.NewReader("abc"),
+	})
+	if err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if _, err := svc.CreateSignedURL(context.Background(), rec.ID, DispositionAttachment); err == nil {
+		t.Fatal("expected CreateSignedURL with weak secret to fail")
+	}
+	if _, err := svc.OpenSignedContent(context.Background(), "abc.def"); err == nil {
+		t.Fatal("expected OpenSignedContent with weak secret to fail")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrCodeInvalidSignedURL {
+		t.Fatalf("OpenSignedContent weak secret err = %v, want %s", err, ErrCodeInvalidSignedURL)
+	}
+}
+
+func TestServiceUploadAvatarEnforcesActiveCaller(t *testing.T) {
+	localStore, err := storage.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	reg, err := storage.NewRegistry(storage.DriverLocal, localStore)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	st := newFakeFileStore()
+	caller := &fakeAvatarCaller{}
+	svc := newServiceWithStore(st, reg, ServiceConfig{
+		SignedURLSecret: "test-secret-key-at-least-32-bytes",
+	}, ServiceDeps{
+		AvatarCaller: caller,
+	})
+
+	pngData := makePNGBytes(t, 16, 16)
+
+	// Missing UploaderID is rejected with 401.
+	if _, err := svc.UploadAvatar(context.Background(), UploadInput{
+		Filename: "me.png",
+		Reader:   bytes.NewReader(pngData),
+	}); err == nil {
+		t.Fatal("expected UploadAvatar with nil UploaderID to fail")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+		t.Fatalf("nil UploaderID err = %v, want 401", err)
+	}
+
+	// Revoked session / disabled user rejected before creating any DB row.
+	uid := uuid.Must(uuid.NewV7())
+	caller.err = apperr.Forbidden("AUTH_ACCOUNT_DISABLED")
+	if _, err := svc.UploadAvatar(context.Background(), UploadInput{
+		Filename:   "me.png",
+		Reader:     bytes.NewReader(pngData),
+		UploaderID: &uid,
+	}); err == nil {
+		t.Fatal("expected disabled caller to be rejected")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 403 || appErr.Code != "AUTH_ACCOUNT_DISABLED" {
+		t.Fatalf("disabled caller err = %v, want 403 AUTH_ACCOUNT_DISABLED", err)
+	}
+	if len(st.rows) != 0 {
+		t.Fatalf("expected zero rows created when caller check fails, got %d", len(st.rows))
 	}
 }
 

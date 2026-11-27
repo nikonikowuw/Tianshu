@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,7 @@ func newTestFilesEngine(
 	perms map[string]bool,
 	maxFileBytes int64,
 	avatarRefs fakeAvatarRefs,
+	extraDeps ...func(*ServiceDeps),
 ) (*gin.Engine, *Service, uuid.UUID) {
 	t.Helper()
 
@@ -59,15 +61,20 @@ func newTestFilesEngine(
 	}
 
 	actorID := uuid.Must(uuid.NewV7())
+	sessionID := uuid.Must(uuid.NewV7())
+	deps := ServiceDeps{
+		Actors:    fakeActors{names: map[uuid.UUID]string{actorID: "tester"}},
+		AvatarRef: avatarRefs,
+	}
+	for _, fn := range extraDeps {
+		fn(&deps)
+	}
 	svc := newServiceWithStore(newFakeFileStore(), reg, ServiceConfig{
 		MaxFileSizeBytes:   maxFileBytes,
 		MaxAvatarSizeBytes: 2 << 20,
 		SignedURLSecret:    "contract-test-secret-at-least-32-bytes",
 		SignedURLTTL:       5 * time.Minute,
-	}, ServiceDeps{
-		Actors:    fakeActors{names: map[uuid.UUID]string{actorID: "tester"}},
-		AvatarRef: avatarRefs,
-	})
+	}, deps)
 	handler := NewHandler(svc)
 
 	apiV1 := engine.Group("/api/v1")
@@ -81,8 +88,9 @@ func newTestFilesEngine(
 			return
 		}
 		c.Request = c.Request.WithContext(authctx.WithIdentity(c.Request.Context(), authctx.Identity{
-			UserID:   actorID,
-			Username: "tester",
+			UserID:    actorID,
+			SessionID: sessionID,
+			Username:  "tester",
 		}))
 		c.Next()
 	})
@@ -127,6 +135,13 @@ func makeMultipartFileRequest(t *testing.T, url, fieldName, filename string, pay
 	return req
 }
 
+func decodeJSON(t *testing.T, data []byte, dst any) {
+	t.Helper()
+	if err := json.Unmarshal(data, dst); err != nil {
+		t.Fatalf("json.Unmarshal(%s): %v", string(data), err)
+	}
+}
+
 func TestFilesHTTPContracts(t *testing.T) {
 	avatarRefs := fakeAvatarRefs{inUse: make(map[uuid.UUID]bool)}
 	engine, _, _ := newTestFilesEngine(t, map[string]bool{
@@ -164,9 +179,7 @@ func TestFilesHTTPContracts(t *testing.T) {
 		MaxAvatarSizeBytes int64    `json:"maxAvatarSizeBytes"`
 		AllowedExtensions  []string `json:"allowedExtensions"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &policy); err != nil {
-		t.Fatalf("decode upload policy: %v", err)
-	}
+	decodeJSON(t, rec.Body.Bytes(), &policy)
 	if policy.MaxFileSizeBytes != 1024 || policy.MaxAvatarSizeBytes != 2<<20 {
 		t.Fatalf("unexpected upload policy limits: %+v", policy)
 	}
@@ -175,6 +188,30 @@ func TestFilesHTTPContracts(t *testing.T) {
 	}
 	if slices.Contains(policy.AllowedExtensions, ".svg") {
 		t.Fatalf("upload policy must not advertise SVG: %+v", policy.AllowedExtensions)
+	}
+
+	// 400 BAD_REQUEST on non-multipart upload, 400 FILES_MISSING_FILE on missing file field, 400 FILES_EMPTY_FILE on empty file.
+	nonMultipart := httptest.NewRequest(http.MethodPost, "/api/v1/files", strings.NewReader("plain"))
+	nonMultipart.Header.Set("Authorization", "Bearer test-token")
+	nonMultipart.Header.Set("Content-Type", "text/plain")
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, nonMultipart)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), apperr.CodeBadRequest) {
+		t.Fatalf("non-multipart upload: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	missingField := makeMultipartFileRequest(t, "/api/v1/files", "wrongfield", "a.txt", []byte("hi"))
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, missingField)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), ErrCodeMissingFile) {
+		t.Fatalf("missing file field: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	emptyFile := makeMultipartFileRequest(t, "/api/v1/files", "file", "empty.txt", nil)
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, emptyFile)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), ErrCodeEmptyFile) {
+		t.Fatalf("empty file upload: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// 400 FILES_TYPE_NOT_ALLOWED for SVG with zh-CN vs en-US Accept-Language translation difference.
@@ -186,7 +223,7 @@ func TestFilesHTTPContracts(t *testing.T) {
 		t.Fatalf("svg upload status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
 	}
 	var errRespEN map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &errRespEN)
+	decodeJSON(t, rec.Body.Bytes(), &errRespEN)
 	if errRespEN["code"] != ErrCodeTypeNotAllowed {
 		t.Fatalf("svg error code = %v, want %s", errRespEN["code"], ErrCodeTypeNotAllowed)
 	}
@@ -199,15 +236,19 @@ func TestFilesHTTPContracts(t *testing.T) {
 	rec = httptest.NewRecorder()
 	engine.ServeHTTP(rec, svgReqZH)
 	var errRespZH map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &errRespZH)
+	decodeJSON(t, rec.Body.Bytes(), &errRespZH)
 	if errRespEN["message"] == "" || errRespZH["message"] == "" || errRespEN["message"] == errRespZH["message"] {
 		t.Fatalf("expected distinct localized messages, en=%v zh=%v", errRespEN["message"], errRespZH["message"])
 	}
 
 	// 422 validation errors on GET /files: sorted by field, no raw {{min}}/{{max}} template placeholders.
+	manyMIMEs := make([]string, maxMultiFilterLen+1)
+	for i := range manyMIMEs {
+		manyMIMEs[i] = "application/x-t-" + strings.Repeat("z", i+1)
+	}
 	badQueryReq := httptest.NewRequest(
 		http.MethodGet,
-		"/api/v1/files?page=0&pageSize=5&category=video&driver=gcs&sort=bad&order=sideways&q="+strings.Repeat("a", 101),
+		"/api/v1/files?page=0&pageSize=5&category=video&driver=gcs&sort=bad&order=sideways&q="+strings.Repeat("a", 101)+"&mimeType="+strings.Join(manyMIMEs, ","),
 		nil,
 	)
 	badQueryReq.Header.Set("Authorization", "Bearer test-token")
@@ -227,10 +268,8 @@ func TestFilesHTTPContracts(t *testing.T) {
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &valBody); err != nil {
-		t.Fatalf("decode 422 response: %v", err)
-	}
-	if valBody.Code != apperr.CodeValidationFailed || len(valBody.Errors) != 7 {
+	decodeJSON(t, rec.Body.Bytes(), &valBody)
+	if valBody.Code != apperr.CodeValidationFailed || len(valBody.Errors) != 8 {
 		t.Fatalf("unexpected 422 body: %+v", valBody)
 	}
 	for i := 1; i < len(valBody.Errors); i++ {
@@ -239,13 +278,37 @@ func TestFilesHTTPContracts(t *testing.T) {
 		}
 	}
 
-	// 422 on invalid UUID path param and 404 on missing file.
+	// NUL byte and invalid UTF-8 in q / mimeType return 422 VALIDATION_FAILED (never 500).
+	for _, rawQuery := range []string{
+		"q=test%00",
+		"q=%ff",
+		"mimeType=image/png%00",
+		"mimeType=" + strings.Repeat("a", maxMIMETypeFilterLen+1),
+	} {
+		qReq := httptest.NewRequest(http.MethodGet, "/api/v1/files?"+rawQuery, nil)
+		qReq.Header.Set("Authorization", "Bearer test-token")
+		qRec := httptest.NewRecorder()
+		engine.ServeHTTP(qRec, qReq)
+		if qRec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("GET /files?%s status = %d, want 422 (body=%s)", rawQuery, qRec.Code, qRec.Body.String())
+		}
+	}
+
+	// 422 on invalid UUID path param and 404 on missing file (GET & DELETE).
 	badUUIDReq := httptest.NewRequest(http.MethodGet, "/api/v1/files/not-a-uuid", nil)
 	badUUIDReq.Header.Set("Authorization", "Bearer test-token")
 	rec = httptest.NewRecorder()
 	engine.ServeHTTP(rec, badUUIDReq)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid uuid status = %d, want 422", rec.Code)
+	}
+
+	badDelUUID := httptest.NewRequest(http.MethodDelete, "/api/v1/files/not-a-uuid", nil)
+	badDelUUID.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, badDelUUID)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("DELETE invalid uuid status = %d, want 422", rec.Code)
 	}
 
 	missingID := uuid.Must(uuid.NewV7()).String()
@@ -257,6 +320,14 @@ func TestFilesHTTPContracts(t *testing.T) {
 		t.Fatalf("missing GET /files/:id status = %d, want 404", rec.Code)
 	}
 
+	notFoundDel := httptest.NewRequest(http.MethodDelete, "/api/v1/files/"+missingID, nil)
+	notFoundDel.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, notFoundDel)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing DELETE /files/:id status = %d, want 404", rec.Code)
+	}
+
 	// 401 FILES_INVALID_SIGNED_URL on invalid signed token.
 	badSignedRec := httptest.NewRecorder()
 	engine.ServeHTTP(badSignedRec, httptest.NewRequest(http.MethodGet, "/api/v1/files/signed/invalid.token", nil))
@@ -264,15 +335,22 @@ func TestFilesHTTPContracts(t *testing.T) {
 		t.Fatalf("invalid signed url status=%d body=%s", badSignedRec.Code, badSignedRec.Body.String())
 	}
 
-	// 413 FILES_TOO_LARGE when exceeding configured limit (1024 bytes).
+	// 413 FILES_TOO_LARGE on both fh.Size check (2048B) and http.MaxBytesReader cap (>1 MiB + maxBytes).
 	bigReq := makeMultipartFileRequest(t, "/api/v1/files", "file", "large.txt", bytes.Repeat([]byte("a"), 2048))
 	rec = httptest.NewRecorder()
 	engine.ServeHTTP(rec, bigReq)
-	if rec.Code != http.StatusRequestEntityTooLarge {
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), ErrCodeTooLarge) {
 		t.Fatalf("oversize upload status = %d, want 413 (body=%s)", rec.Code, rec.Body.String())
 	}
 
-	// 201 upload PNG + signed inline preview + content download + avatar in-use 409 + 204 delete.
+	hugeReq := makeMultipartFileRequest(t, "/api/v1/files", "file", "huge.txt", bytes.Repeat([]byte("b"), int(multipartFormOverheadBytes)+4096))
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, hugeReq)
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), ErrCodeTooLarge) {
+		t.Fatalf("MaxBytesReader oversize upload status = %d, want 413 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	// 201 upload PNG + non-empty list DTO + content inline/download + signed URL + avatar 409 + 204 delete + post-delete signed 404.
 	pngData := makePNGBytes(t, 12, 12)
 	upReq := makeMultipartFileRequest(t, "/api/v1/files", "file", "logo.png", pngData)
 	rec = httptest.NewRecorder()
@@ -280,15 +358,47 @@ func TestFilesHTTPContracts(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("png upload status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
 	}
-	var created struct {
-		ID      string `json:"id"`
-		IsImage bool   `json:"isImage"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
-		t.Fatalf("decode created dto: %v", err)
-	}
-	if created.ID == "" || !created.IsImage {
+	var created fileDTO
+	decodeJSON(t, rec.Body.Bytes(), &created)
+	if created.ID == "" || !created.IsImage || created.Category != CategoryImage || created.Uploader == nil || created.Uploader.Username != "tester" {
 		t.Fatalf("unexpected created dto: %+v", created)
+	}
+
+	// Non-empty GET /api/v1/files returns populated DTO fields.
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/files", nil)
+	listReq.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, listReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /files status = %d, want 200", rec.Code)
+	}
+	var listResp struct {
+		Items    []fileDTO `json:"items"`
+		Total    int64     `json:"total"`
+		Page     int       `json:"page"`
+		PageSize int       `json:"pageSize"`
+	}
+	decodeJSON(t, rec.Body.Bytes(), &listResp)
+	if listResp.Total != 1 || len(listResp.Items) != 1 || listResp.Items[0].ID != created.ID || listResp.Items[0].OriginalName != "logo.png" {
+		t.Fatalf("unexpected non-empty list response: %+v", listResp)
+	}
+
+	// GET /api/v1/files/:id/content defaults inline for images, switches to attachment for ?download=1 and ?download=true.
+	imgInlineReq := httptest.NewRequest(http.MethodGet, "/api/v1/files/"+created.ID+"/content", nil)
+	imgInlineReq.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, imgInlineReq)
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Disposition"), "inline;") {
+		t.Fatalf("image content default status=%d disp=%q", rec.Code, rec.Header().Get("Content-Disposition"))
+	}
+	for _, q := range []string{"?download=1", "?download=true"} {
+		imgDLReq := httptest.NewRequest(http.MethodGet, "/api/v1/files/"+created.ID+"/content"+q, nil)
+		imgDLReq.Header.Set("Authorization", "Bearer test-token")
+		rec = httptest.NewRecorder()
+		engine.ServeHTTP(rec, imgDLReq)
+		if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Disposition"), "attachment;") {
+			t.Fatalf("image content %s status=%d disp=%q", q, rec.Code, rec.Header().Get("Content-Disposition"))
+		}
 	}
 
 	// GET /api/v1/files/:id returns 200 metadata.
@@ -298,6 +408,24 @@ func TestFilesHTTPContracts(t *testing.T) {
 	engine.ServeHTTP(rec, getReq)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /files/:id status = %d, want 200", rec.Code)
+	}
+
+	// Empty body on POST /files/:id/signed-url returns 200; >64 KiB body returns 413.
+	emptySignReq := httptest.NewRequest(http.MethodPost, "/api/v1/files/"+created.ID+"/signed-url", nil)
+	emptySignReq.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, emptySignReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty body signed-url status = %d, want 200", rec.Code)
+	}
+
+	oversizedSignReq := httptest.NewRequest(http.MethodPost, "/api/v1/files/"+created.ID+"/signed-url", strings.NewReader(`{"disposition":"`+strings.Repeat("a", int(maxSignedURLBodyBytes)+128)+`"}`))
+	oversizedSignReq.Header.Set("Authorization", "Bearer test-token")
+	oversizedSignReq.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, oversizedSignReq)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized signed-url status = %d, want 413", rec.Code)
 	}
 
 	// Mint signed URL with chunked body (ContentLength = -1) honors disposition: attachment.
@@ -313,14 +441,14 @@ func TestFilesHTTPContracts(t *testing.T) {
 	var chunkedSigned struct {
 		URL string `json:"url"`
 	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &chunkedSigned)
+	decodeJSON(t, rec.Body.Bytes(), &chunkedSigned)
 	chunkedPubRec := httptest.NewRecorder()
 	engine.ServeHTTP(chunkedPubRec, httptest.NewRequest(http.MethodGet, chunkedSigned.URL, nil))
 	if chunkedPubRec.Code != http.StatusOK || !strings.HasPrefix(chunkedPubRec.Header().Get("Content-Disposition"), "attachment;") {
 		t.Fatalf("chunked signed attachment status=%d disp=%q", chunkedPubRec.Code, chunkedPubRec.Header().Get("Content-Disposition"))
 	}
 
-	// Malformed JSON on signed-url (even with ContentLength = -1) returns 400; invalid disposition returns 422.
+	// Malformed JSON on signed-url returns 400; invalid disposition returns 422.
 	malformedReq := httptest.NewRequest(http.MethodPost, "/api/v1/files/"+created.ID+"/signed-url", io.NopCloser(strings.NewReader(`{invalid`)))
 	malformedReq.ContentLength = -1
 	malformedReq.Header.Set("Authorization", "Bearer test-token")
@@ -352,7 +480,7 @@ func TestFilesHTTPContracts(t *testing.T) {
 	var signedResp struct {
 		URL string `json:"url"`
 	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &signedResp)
+	decodeJSON(t, rec.Body.Bytes(), &signedResp)
 
 	pubRec := httptest.NewRecorder()
 	engine.ServeHTTP(pubRec, httptest.NewRequest(http.MethodGet, signedResp.URL, nil))
@@ -371,13 +499,17 @@ func TestFilesHTTPContracts(t *testing.T) {
 	if !strings.HasPrefix(pubRec.Header().Get("Content-Disposition"), "inline;") {
 		t.Fatalf("image disposition = %q, want inline", pubRec.Header().Get("Content-Disposition"))
 	}
-	gotBody, _ := io.ReadAll(pubRec.Body)
+	gotBody, err := io.ReadAll(pubRec.Body)
+	if err != nil {
+		t.Fatalf("read signed response body: %v", err)
+	}
 	if !bytes.Equal(gotBody, pngData) {
 		t.Fatal("signed content bytes mismatch")
 	}
 
-	// Upload PDF and verify forced attachment disposition even without ?download=1.
-	pdfReq := makeMultipartFileRequest(t, "/api/v1/files", "file", "合同.pdf", []byte("%PDF-1.4\n%%EOF\n"))
+	// Upload PDF with Chinese & RFC 8187 reserved characters (=, :, @) and verify Content-Disposition parses cleanly.
+	specialPDFName := "合同=2026@10:30.pdf"
+	pdfReq := makeMultipartFileRequest(t, "/api/v1/files", "file", specialPDFName, []byte("%PDF-1.4\n%%EOF\n"))
 	rec = httptest.NewRecorder()
 	engine.ServeHTTP(rec, pdfReq)
 	if rec.Code != http.StatusCreated {
@@ -386,14 +518,22 @@ func TestFilesHTTPContracts(t *testing.T) {
 	var createdPDF struct {
 		ID string `json:"id"`
 	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &createdPDF)
+	decodeJSON(t, rec.Body.Bytes(), &createdPDF)
 
 	dlReq := httptest.NewRequest(http.MethodGet, "/api/v1/files/"+createdPDF.ID+"/content", nil)
 	dlReq.Header.Set("Authorization", "Bearer test-token")
 	rec = httptest.NewRecorder()
 	engine.ServeHTTP(rec, dlReq)
-	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Disposition"), "attachment;") {
-		t.Fatalf("pdf content status=%d disp=%q", rec.Code, rec.Header().Get("Content-Disposition"))
+	cd := rec.Header().Get("Content-Disposition")
+	if rec.Code != http.StatusOK || !strings.HasPrefix(cd, "attachment;") {
+		t.Fatalf("pdf content status=%d disp=%q", rec.Code, cd)
+	}
+	mediaType, params, err := mime.ParseMediaType(cd)
+	if err != nil {
+		t.Fatalf("mime.ParseMediaType(%q) failed: %v", cd, err)
+	}
+	if mediaType != "attachment" || params["filename"] != specialPDFName {
+		t.Fatalf("parsed Content-Disposition = (%q, %+v), want attachment / %q", mediaType, params, specialPDFName)
 	}
 
 	// 409 FILES_IN_USE when avatar references file.
@@ -406,7 +546,7 @@ func TestFilesHTTPContracts(t *testing.T) {
 		t.Fatalf("delete in-use status = %d, want 409", rec.Code)
 	}
 
-	// 204 No Content once unreferenced.
+	// 204 No Content once unreferenced, and previously issued signed URL immediately returns 404.
 	delete(avatarRefs.inUse, uuid.MustParse(created.ID))
 	delReq = httptest.NewRequest(http.MethodDelete, "/api/v1/files/"+created.ID, nil)
 	delReq.Header.Set("Authorization", "Bearer test-token")
@@ -415,15 +555,44 @@ func TestFilesHTTPContracts(t *testing.T) {
 	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
 		t.Fatalf("delete status=%d bodyLen=%d, want 204 empty", rec.Code, rec.Body.Len())
 	}
+
+	deletedSignedRec := httptest.NewRecorder()
+	engine.ServeHTTP(deletedSignedRec, httptest.NewRequest(http.MethodGet, signedResp.URL, nil))
+	if deletedSignedRec.Code != http.StatusNotFound || !strings.Contains(deletedSignedRec.Body.String(), ErrCodeNotFound) {
+		t.Fatalf("signed URL after delete status=%d body=%s, want 404", deletedSignedRec.Code, deletedSignedRec.Body.String())
+	}
 }
 
-func TestFilesPermissionsAndUploadRateLimit(t *testing.T) {
+func TestFormatContentDispositionRFC8187(t *testing.T) {
+	for _, name := range []string{
+		"report=2026.pdf",
+		"photo@2x.png",
+		"log-10:30.txt",
+		"合同;v1.pdf",
+		`weird "name" file.txt`,
+		"中文 文件名.png",
+	} {
+		header := formatContentDisposition(DispositionAttachment, name)
+		mediaType, params, err := mime.ParseMediaType(header)
+		if err != nil {
+			t.Fatalf("mime.ParseMediaType(%q) for %q failed: %v", header, name, err)
+		}
+		if mediaType != DispositionAttachment || params["filename"] != name {
+			t.Fatalf("round-trip for %q: got (%q, %+v)", name, mediaType, params)
+		}
+	}
+}
+
+func TestFilesPermissionsAvatarErrorsAndUploadRateLimit(t *testing.T) {
+	caller := &fakeAvatarCaller{}
 	// Read-only user gets 403 on upload and delete, but can upload own avatar.
 	engine, _, _ := newTestFilesEngine(t, map[string]bool{
 		"files:read":   true,
 		"files:upload": false,
 		"files:delete": false,
-	}, 1<<20, fakeAvatarRefs{inUse: map[uuid.UUID]bool{}})
+	}, 1<<20, fakeAvatarRefs{inUse: map[uuid.UUID]bool{}}, func(d *ServiceDeps) {
+		d.AvatarCaller = caller
+	})
 
 	upReq := makeMultipartFileRequest(t, "/api/v1/files", "file", "a.txt", []byte("hello"))
 	rec := httptest.NewRecorder()
@@ -440,19 +609,52 @@ func TestFilesPermissionsAndUploadRateLimit(t *testing.T) {
 		t.Fatalf("delete without files:delete status = %d, want 403", rec.Code)
 	}
 
-	// User without files:read gets 403 on list.
+	// User without files:read gets 403 on list and content endpoints.
 	noReadEngine, _, _ := newTestFilesEngine(t, map[string]bool{
 		"files:read": false,
 	}, 1<<20, fakeAvatarRefs{inUse: map[uuid.UUID]bool{}})
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/files", nil)
-	listReq.Header.Set("Authorization", "Bearer test-token")
-	rec = httptest.NewRecorder()
-	noReadEngine.ServeHTTP(rec, listReq)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("list without files:read status = %d, want 403", rec.Code)
+	for _, target := range []string{
+		"/api/v1/files",
+		"/api/v1/files/" + uuid.Must(uuid.NewV7()).String() + "/content",
+	} {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r.Header.Set("Authorization", "Bearer test-token")
+		w := httptest.NewRecorder()
+		noReadEngine.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("GET %s without files:read status = %d, want 403", target, w.Code)
+		}
 	}
 
-	// Avatar endpoint allows authenticated user without files:upload and enforces 20/min limit.
+	// Avatar endpoint rejects corrupt images (400 FILES_INVALID_IMAGE), non-images (400 FILES_TYPE_NOT_ALLOWED),
+	// and revoked/inactive sessions (401).
+	avatarErrEngine, _, _ := newTestFilesEngine(t, map[string]bool{}, 1<<20, fakeAvatarRefs{inUse: map[uuid.UUID]bool{}}, func(d *ServiceDeps) {
+		d.AvatarCaller = caller
+	})
+	corruptReq := makeMultipartFileRequest(t, "/api/v1/files/avatar", "file", "bad.png", makePNGBytes(t, 16, 16)[:20])
+	rec = httptest.NewRecorder()
+	avatarErrEngine.ServeHTTP(rec, corruptReq)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), ErrCodeInvalidImage) {
+		t.Fatalf("corrupt avatar status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	pdfAvatarReq := makeMultipartFileRequest(t, "/api/v1/files/avatar", "file", "doc.pdf", []byte("%PDF-1.4\n%%EOF\n"))
+	rec = httptest.NewRecorder()
+	avatarErrEngine.ServeHTTP(rec, pdfAvatarReq)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), ErrCodeTypeNotAllowed) {
+		t.Fatalf("pdf avatar status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	caller.err = apperr.Unauthorized(apperr.CodeUnauthorized)
+	revokedReq := makeMultipartFileRequest(t, "/api/v1/files/avatar", "file", "me.png", makePNGBytes(t, 16, 16))
+	rec = httptest.NewRecorder()
+	avatarErrEngine.ServeHTTP(rec, revokedReq)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session avatar upload status=%d, want 401", rec.Code)
+	}
+	caller.err = nil
+
+	// Avatar endpoint allows authenticated active user without files:upload and enforces 20/min limit.
 	pngBytes := makePNGBytes(t, 16, 16)
 	for i := 0; i < uploadRateLimitPerMinute; i++ {
 		req := makeMultipartFileRequest(t, "/api/v1/files/avatar", "file", "me.png", pngBytes)
