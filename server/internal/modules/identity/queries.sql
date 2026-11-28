@@ -52,13 +52,6 @@ SET last_login_at = now(),
 WHERE id = $1
   AND deleted_at IS NULL;
 
--- name: UpdateUserPasswordHash :exec
-UPDATE users
-SET password_hash = $2,
-    updated_at = now()
-WHERE id = $1
-  AND deleted_at IS NULL;
-
 -- name: UpdateUserPasswordHashIfMatches :execrows
 UPDATE users
 SET password_hash = $2,

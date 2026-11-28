@@ -8,9 +8,20 @@ import (
 	"github.com/google/uuid"
 
 	"tianshu/internal/modules/access"
+	"tianshu/internal/modules/files"
 	"tianshu/internal/modules/identity"
 	"tianshu/internal/shared/apperr"
 )
+
+func TestIdentityFilesAdapterMapsNotFoundToDomainErr(t *testing.T) {
+	if got := mapValidateAvatarFileErr(apperr.NotFound(files.ErrCodeNotFound)); got != identity.ErrInvalidAvatarFile {
+		t.Fatalf("mapValidateAvatarFileErr(FILES_NOT_FOUND) = %v, want identity.ErrInvalidAvatarFile", got)
+	}
+	other := apperr.Internal(context.Canceled)
+	if got := mapValidateAvatarFileErr(other); got != other {
+		t.Fatalf("expected non-not-found error to pass through unchanged, got %v", got)
+	}
+}
 
 func TestIdentityAccessAdapterMapsMissingRoleToValidationError(t *testing.T) {
 	// Verify the adapter maps ACCESS_ROLE_NOT_FOUND into 422 roleIds: USERS_INVALID_ROLE.
@@ -94,6 +105,9 @@ func TestLateBoundAdaptersRejectNilServices(t *testing.T) {
 
 	callerAdapter := &filesAvatarCallerAdapter{}
 	assertInternal(t, "EnsureActiveAvatarCaller", callerAdapter.EnsureActiveAvatarCaller(ctx, uid, sid))
+
+	auditAdapter := &identityAuditAdapter{}
+	assertInternal(t, "identityAuditAdapter.Record", auditAdapter.Record(ctx, identity.AuditEntry{}))
 }
 
 func TestFilesAvatarCallerAdapterDelegatesValidation(t *testing.T) {

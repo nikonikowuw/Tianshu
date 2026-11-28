@@ -574,24 +574,6 @@ func (q *Queries) UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const updateUserPasswordHash = `-- name: UpdateUserPasswordHash :exec
-UPDATE users
-SET password_hash = $2,
-    updated_at = now()
-WHERE id = $1
-  AND deleted_at IS NULL
-`
-
-type UpdateUserPasswordHashParams struct {
-	ID           uuid.UUID
-	PasswordHash string
-}
-
-func (q *Queries) UpdateUserPasswordHash(ctx context.Context, arg UpdateUserPasswordHashParams) error {
-	_, err := q.db.Exec(ctx, updateUserPasswordHash, arg.ID, arg.PasswordHash)
-	return err
-}
-
 const updateUserPasswordHashIfMatches = `-- name: UpdateUserPasswordHashIfMatches :execrows
 UPDATE users
 SET password_hash = $2,

@@ -71,65 +71,27 @@ type changePasswordRequest struct {
 func bindListUsersRequest(c *gin.Context) (UserListFilter, error) {
 	var fieldErrs []apperr.FieldError
 
-	page, pageOK := parseOptionalInt(c.Query("page"), pagination.DefaultPage)
-	if !pageOK || page < pagination.DefaultPage {
-		fieldErrs = append(fieldErrs, apperr.FieldError{
-			Field:   "page",
-			Message: ErrCodeInvalidPage,
-		})
-	}
+	page, pageSize, pageErrs := parseListPagination(c)
+	fieldErrs = append(fieldErrs, pageErrs...)
 
-	pageSize, pageSizeOK := parseOptionalInt(c.Query("pageSize"), pagination.DefaultPageSize)
-	if !pageSizeOK || pageSize < pagination.MinPageSize || pageSize > pagination.MaxPageSize {
-		fieldErrs = append(fieldErrs, apperr.FieldError{
-			Field:   "pageSize",
-			Message: ErrCodeInvalidPageSize,
-		})
+	q, qErr := parseListSearchQuery(c.Query("q"))
+	if qErr != nil {
+		fieldErrs = append(fieldErrs, *qErr)
 	}
-
-	q := strings.TrimSpace(c.Query("q"))
-	if !isValidText(q) {
-		fieldErrs = append(fieldErrs, apperr.FieldError{
-			Field:   "q",
-			Message: "VALIDATION_DEFAULT",
-		})
-	} else if utf8.RuneCountInString(q) > maxSearchQueryRunes {
-		fieldErrs = append(fieldErrs, apperr.FieldError{
-			Field:   "q",
-			Message: ErrCodeQueryTooLong,
-		})
-	}
-
 	statuses, statusErr := parseStatusQuery(c.QueryArray("status"))
 	if statusErr != nil {
 		fieldErrs = append(fieldErrs, *statusErr)
 	}
-
 	roleIDs, roleErr := parseRoleIDQuery(c.QueryArray("roleId"))
 	if roleErr != nil {
 		fieldErrs = append(fieldErrs, *roleErr)
 	}
-
-	sortBy := strings.TrimSpace(c.Query("sort"))
-	if sortBy != "" && !isAllowedUserSort(sortBy) {
-		fieldErrs = append(fieldErrs, apperr.FieldError{
-			Field:   "sort",
-			Message: "VALIDATION_ONE_OF",
-		})
-	}
-
-	order := strings.ToLower(strings.TrimSpace(c.Query("order")))
-	if order != "" && order != "asc" && order != "desc" {
-		fieldErrs = append(fieldErrs, apperr.FieldError{
-			Field:   "order",
-			Message: "VALIDATION_ONE_OF",
-		})
-	}
+	sortBy, order, sortErrs := parseListSortOrder(c)
+	fieldErrs = append(fieldErrs, sortErrs...)
 
 	if len(fieldErrs) > 0 {
 		return UserListFilter{}, apperr.Validation(fieldErrs)
 	}
-
 	return UserListFilter{
 		Pagination: pagination.Normalize(page, pageSize),
 		Q:          q,
@@ -138,6 +100,43 @@ func bindListUsersRequest(c *gin.Context) (UserListFilter, error) {
 		Sort:       sortBy,
 		Order:      order,
 	}, nil
+}
+
+func parseListPagination(c *gin.Context) (int, int, []apperr.FieldError) {
+	var fieldErrs []apperr.FieldError
+	page, pageOK := parseOptionalInt(c.Query("page"), pagination.DefaultPage)
+	if !pageOK || page < pagination.DefaultPage {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "page", Message: ErrCodeInvalidPage})
+	}
+	pageSize, pageSizeOK := parseOptionalInt(c.Query("pageSize"), pagination.DefaultPageSize)
+	if !pageSizeOK || pageSize < pagination.MinPageSize || pageSize > pagination.MaxPageSize {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "pageSize", Message: ErrCodeInvalidPageSize})
+	}
+	return page, pageSize, fieldErrs
+}
+
+func parseListSearchQuery(raw string) (string, *apperr.FieldError) {
+	q := strings.TrimSpace(raw)
+	if !isValidText(q) {
+		return "", &apperr.FieldError{Field: "q", Message: "VALIDATION_DEFAULT"}
+	}
+	if utf8.RuneCountInString(q) > maxSearchQueryRunes {
+		return "", &apperr.FieldError{Field: "q", Message: ErrCodeQueryTooLong}
+	}
+	return q, nil
+}
+
+func parseListSortOrder(c *gin.Context) (string, string, []apperr.FieldError) {
+	var fieldErrs []apperr.FieldError
+	sortBy := strings.TrimSpace(c.Query("sort"))
+	if sortBy != "" && !isAllowedUserSort(sortBy) {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "sort", Message: "VALIDATION_ONE_OF"})
+	}
+	order := strings.ToLower(strings.TrimSpace(c.Query("order")))
+	if order != "" && order != "asc" && order != "desc" {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "order", Message: "VALIDATION_ONE_OF"})
+	}
+	return sortBy, order, fieldErrs
 }
 
 func parseOptionalInt(raw string, fallback int) (int, bool) {
