@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { PermissionGuard } from '@/components/shared/permission-guard'
 import { buildUsersQueryParams } from './api'
+import { RoleMultiSelect } from './components/role-multi-select'
 import { UserDeleteDialog } from './components/user-delete-dialog'
 import { UserFormSheet } from './components/user-form-sheet'
 import { UserResetPasswordDialog } from './components/user-reset-password-dialog'
@@ -174,6 +175,27 @@ describe('users feature', () => {
     expect(sp.get('order')).toBe('asc')
 
     expect(usersSearchSchema.parse({ q: 'a'.repeat(101) }).q).toBeUndefined()
+    expect(usersSearchSchema.parse({ q: 123 }).q).toBe('123')
+    expect(usersSearchSchema.parse({ q: true }).q).toBe('true')
+
+    const validRoleIds = Array.from(
+      { length: 22 },
+      (_, idx) => `01950000-0000-7000-8000-${String(idx + 1).padStart(12, '0')}`
+    )
+    const parsedRoles = usersSearchSchema.parse({
+      roleId: [
+        'not-a-uuid',
+        '00000000-0000-0000-0000-000000000000',
+        validRoleIds[0].toUpperCase(),
+        ...validRoleIds,
+      ],
+    })
+    expect(parsedRoles.roleId).toHaveLength(20)
+    expect(parsedRoles.roleId?.[0]).toBe(validRoleIds[0])
+    expect(parsedRoles.roleId).not.toContain('not-a-uuid')
+    expect(parsedRoles.roleId).not.toContain(
+      '00000000-0000-0000-0000-000000000000'
+    )
   })
 
   it('renders users table, resets page on search, and distinguishes empty states', async () => {
@@ -265,7 +287,7 @@ describe('users feature', () => {
     expect(resetRaw.page).toBeUndefined()
   })
 
-  it('shows error alert on load failure and retries', async () => {
+  it('shows error alert without empty row on load failure and retries', async () => {
     await changeAppLanguage('en-US')
     getMock.mockImplementation((url: string) => {
       if (url === '/roles/options') {
@@ -276,6 +298,7 @@ describe('users feature', () => {
           status: 500,
           code: 'INTERNAL_ERROR',
           message: 'Server failed to load users',
+          requestId: 'req-users-500',
         })
       )
     })
@@ -295,8 +318,15 @@ describe('users feature', () => {
       )
       .toBeVisible()
     await expect
-      .element(screen.getByText('Server failed to load users'))
+      .element(
+        screen.getByText(
+          i18n.t('errors:serverError', { requestId: 'req-users-500' })
+        )
+      )
       .toBeVisible()
+    await expect
+      .element(screen.getByText(i18n.t('users:empty.noData')))
+      .not.toBeInTheDocument()
 
     getMock.mockImplementation((url: string) => {
       if (url === '/roles/options') {
@@ -311,6 +341,38 @@ describe('users feature', () => {
       screen.getByRole('button', { name: i18n.t('users:error.retry') })
     )
     await expect.element(screen.getByText('Root Admin')).toBeVisible()
+  })
+
+  it('shows empty.noData when no users exist without active filters', async () => {
+    await changeAppLanguage('en-US')
+    getMock.mockImplementation((url: string) => {
+      if (url === '/roles/options') {
+        return Promise.resolve({ data: roleOptionsData })
+      }
+      return Promise.resolve({
+        data: { items: [], total: 0, page: 1, pageSize: 20 },
+      })
+    })
+
+    const client = createClient()
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <UsersTableHarness />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    await expect
+      .element(screen.getByText(i18n.t('users:empty.noData')))
+      .toBeVisible()
+    await expect
+      .element(
+        screen.getByRole('button', {
+          name: i18n.t('common:table.clearFilters'),
+        })
+      )
+      .not.toBeInTheDocument()
   })
 
   it('enforces permissions, self-protection, and super_admin protection in row actions', async () => {
@@ -662,6 +724,7 @@ describe('users feature', () => {
         status: 500,
         code: 'INTERNAL_ERROR',
         message: 'Reset failed banner',
+        requestId: 'req-reset-500',
       })
     )
 
@@ -707,14 +770,17 @@ describe('users feature', () => {
         name: i18n.t('users:resetPasswordDialog.confirm'),
       })
     )
-    await expect.element(screen.getByText('Reset failed banner')).toBeVisible()
+    const expectedBanner = i18n.t('errors:serverError', {
+      requestId: 'req-reset-500',
+    })
+    await expect.element(screen.getByText(expectedBanner)).toBeVisible()
 
     await userEvent.click(
       screen.getByRole('button', { name: i18n.t('common:cancel') })
     )
     await userEvent.click(screen.getByRole('button', { name: 'reopen-reset' }))
     await expect
-      .element(screen.getByText('Reset failed banner'))
+      .element(screen.getByText(expectedBanner))
       .not.toBeInTheDocument()
 
     deleteMock.mockRejectedValueOnce(
@@ -804,5 +870,294 @@ describe('users feature', () => {
       })
     )
     expect(deleteMock).toHaveBeenCalledWith(`/users/${sampleUsers[1].id}`)
+  })
+
+  it('validates client-side schemas and clears bannerError on switch/external close', async () => {
+    await changeAppLanguage('en-US')
+    useAuthStore.getState().setSession({
+      accessToken: 'tok',
+      user: {
+        id: '01950000-0000-7000-8000-000000000101',
+        username: 'root',
+        email: 'root@example.com',
+        displayName: 'Root Admin',
+      },
+      roles: ['super_admin'],
+      permissions: ['users:read', 'users:create', 'users:update'],
+    })
+
+    getMock.mockResolvedValue({ data: roleOptionsData })
+    postMock.mockRejectedValueOnce(
+      new ApiError({
+        status: 500,
+        code: 'INTERNAL_ERROR',
+        message: 'Create failed',
+        requestId: 'req-create-500',
+      })
+    )
+
+    function SheetHarness({ open }: { open: boolean }) {
+      const [isOpen, setIsOpen] = useState(open)
+      const [prevProp, setPrevProp] = useState(open)
+      if (open !== prevProp) {
+        setPrevProp(open)
+        setIsOpen(open)
+      }
+      return (
+        <UserFormSheet
+          open={isOpen}
+          mode='create'
+          user={null}
+          onOpenChange={setIsOpen}
+        />
+      )
+    }
+
+    const client = createClient()
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <SheetHarness open={true} />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    const usernameInput = screen.getByPlaceholder(
+      i18n.t('users:form.usernamePlaceholder')
+    )
+    const emailInput = screen.getByPlaceholder(
+      i18n.t('users:form.emailPlaceholder')
+    )
+    const passwordInput = screen.getByPlaceholder(
+      i18n.t('users:form.passwordPlaceholder')
+    )
+    const submitBtn = screen.getByRole('button', {
+      name: i18n.t('users:form.submitCreate'),
+    })
+
+    await userEvent.fill(usernameInput, 'bob')
+    await userEvent.fill(emailInput, 'not-an-email')
+    await userEvent.fill(passwordInput, 'short')
+    await userEvent.click(submitBtn)
+
+    await expect
+      .element(screen.getByText(i18n.t('validation:invalidEmail')))
+      .toBeVisible()
+    await expect
+      .element(screen.getByText(i18n.t('validation:passwordMin')))
+      .toBeVisible()
+    expect(postMock).not.toHaveBeenCalled()
+
+    await userEvent.clear(emailInput)
+    await userEvent.fill(emailInput, 'bob@example.com')
+    await userEvent.clear(passwordInput)
+    await userEvent.fill(passwordInput, 'password123')
+    await userEvent.click(submitBtn)
+
+    const createBanner = i18n.t('errors:serverError', {
+      requestId: 'req-create-500',
+    })
+    await expect.element(screen.getByText(createBanner)).toBeVisible()
+
+    // Toggling Radix Switch should clear bannerError even though it does not fire native form onChange.
+    await userEvent.click(screen.getByRole('switch'))
+    await expect.element(screen.getByText(createBanner)).not.toBeInTheDocument()
+
+    // Re-trigger bannerError and close via external prop without handleOpenChange.
+    postMock.mockRejectedValueOnce(
+      new ApiError({
+        status: 500,
+        code: 'INTERNAL_ERROR',
+        message: 'Create failed again',
+        requestId: 'req-create-501',
+      })
+    )
+    await userEvent.click(submitBtn)
+    const secondBanner = i18n.t('errors:serverError', {
+      requestId: 'req-create-501',
+    })
+    await expect.element(screen.getByText(secondBanner)).toBeVisible()
+    await screen.rerender(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <SheetHarness open={false} />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await screen.rerender(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <SheetHarness open={true} />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await expect.element(screen.getByText(secondBanner)).not.toBeInTheDocument()
+    await screen.unmount()
+
+    const resetScreen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <UserResetPasswordDialog
+            user={sampleUsers[1]}
+            open={true}
+            onOpenChange={vi.fn()}
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await userEvent.fill(
+      resetScreen.getByLabelText(
+        i18n.t('users:resetPasswordDialog.newPassword'),
+        { exact: true }
+      ),
+      'newpassword123'
+    )
+    await userEvent.fill(
+      resetScreen.getByLabelText(
+        i18n.t('users:resetPasswordDialog.confirmPassword')
+      ),
+      'different123'
+    )
+    await userEvent.click(
+      resetScreen.getByRole('button', {
+        name: i18n.t('users:resetPasswordDialog.confirm'),
+      })
+    )
+    await expect
+      .element(resetScreen.getByText(i18n.t('validation:passwordMismatch')))
+      .toBeVisible()
+    expect(patchMock).not.toHaveBeenCalled()
+  })
+
+  it('locks super_admin in RoleMultiSelect for non-super-admins and self', async () => {
+    await changeAppLanguage('en-US')
+    const client = createClient()
+
+    const nonSuperOnChange = vi.fn()
+    const nonSuperScreen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <RoleMultiSelect
+            options={roleOptionsData.items}
+            value={[roleOptionsData.items[0].id, roleOptionsData.items[1].id]}
+            onChange={nonSuperOnChange}
+            actorIsSuperAdmin={false}
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    await expect
+      .element(
+        nonSuperScreen.getByRole('button', {
+          name: i18n.t('users:form.removeRole', { name: 'Super Admin' }),
+        })
+      )
+      .not.toBeInTheDocument()
+    await userEvent.click(
+      nonSuperScreen.getByRole('button', {
+        name: i18n.t('users:form.removeRole', { name: 'Viewer' }),
+      })
+    )
+    expect(nonSuperOnChange).toHaveBeenCalledWith([roleOptionsData.items[0].id])
+    await nonSuperScreen.unmount()
+
+    const selfOnChange = vi.fn()
+    const selfScreen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <RoleMultiSelect
+            options={roleOptionsData.items}
+            value={[roleOptionsData.items[0].id]}
+            onChange={selfOnChange}
+            actorIsSuperAdmin={true}
+            isSelf={true}
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    await expect
+      .element(
+        selfScreen.getByRole('button', {
+          name: i18n.t('users:form.removeRole', { name: 'Super Admin' }),
+        })
+      )
+      .not.toBeInTheDocument()
+    await userEvent.click(selfScreen.getByRole('combobox'))
+    await expect
+      .element(selfScreen.getByRole('option', { name: 'Super Admin' }))
+      .toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('syncs current profile and invalidates profile/menus/dashboard when updating self', async () => {
+    await changeAppLanguage('en-US')
+    useAuthStore.getState().setSession({
+      accessToken: 'tok',
+      user: {
+        id: sampleUsers[0].id,
+        username: 'root',
+        email: 'root@example.com',
+        displayName: 'Root Admin',
+      },
+      roles: ['super_admin'],
+      permissions: ['users:read', 'users:update'],
+    })
+
+    getMock.mockImplementation((url: string) => {
+      if (url === '/roles/options') {
+        return Promise.resolve({ data: roleOptionsData })
+      }
+      if (url === '/auth/me') {
+        return Promise.resolve({
+          data: {
+            user: {
+              id: sampleUsers[0].id,
+              username: 'root',
+              email: 'root@example.com',
+              displayName: 'Root Renamed',
+            },
+            roles: ['super_admin'],
+            permissions: ['users:read', 'users:update'],
+          },
+        })
+      }
+      return Promise.resolve({ data: {} })
+    })
+    patchMock.mockResolvedValueOnce({
+      data: { ...sampleUsers[0], displayName: 'Root Renamed' },
+    })
+
+    const client = createClient()
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries')
+
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <I18nextProvider i18n={i18n}>
+          <UserFormSheet
+            open={true}
+            mode='edit'
+            user={sampleUsers[0]}
+            onOpenChange={vi.fn()}
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    const displayNameInput = screen.getByPlaceholder(
+      i18n.t('users:form.displayNamePlaceholder')
+    )
+    await userEvent.clear(displayNameInput)
+    await userEvent.fill(displayNameInput, 'Root Renamed')
+    await userEvent.click(
+      screen.getByRole('button', { name: i18n.t('users:form.submitSave') })
+    )
+
+    await expect
+      .poll(() => useAuthStore.getState().user?.displayName)
+      .toBe('Root Renamed')
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['dashboard'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['profile', 'me'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['menus', 'user'] })
   })
 })

@@ -2,6 +2,10 @@ import { z } from 'zod'
 import { type TFunction } from 'i18next'
 
 const usernamePattern = /^[a-z0-9._-]+$/
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const nilUuid = '00000000-0000-0000-0000-000000000000'
+const maxRoleFilters = 20
 
 const stringOrArray = z
   .union([z.array(z.string()), z.string()])
@@ -28,10 +32,15 @@ export const usersSearchSchema = z.object({
     .transform((v) => v ?? 20)
     .catch(20),
   q: z
-    .string()
-    .trim()
-    .max(100)
-    .transform((v) => (v === '' ? undefined : v))
+    .preprocess(
+      (val) =>
+        typeof val === 'number' || typeof val === 'boolean' ? String(val) : val,
+      z
+        .string()
+        .trim()
+        .max(100)
+        .transform((v) => (v === '' ? undefined : v))
+    )
     .optional()
     .catch(undefined),
   status: stringOrArray
@@ -41,7 +50,16 @@ export const usersSearchSchema = z.object({
     .optional()
     .catch([]),
   roleId: stringOrArray
-    .transform((arr) => Array.from(new Set(arr)))
+    .transform((arr) =>
+      Array.from(
+        new Set(
+          arr
+            .filter((v) => uuidPattern.test(v))
+            .map((v) => v.toLowerCase())
+            .filter((v) => v !== nilUuid)
+        )
+      ).slice(0, maxRoleFilters)
+    )
     .optional()
     .catch([]),
   sort: z

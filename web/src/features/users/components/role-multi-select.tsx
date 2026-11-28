@@ -195,7 +195,7 @@ export function RoleMultiSelect({
                     type='button'
                     onClick={() => toggleRole(role)}
                     className='ms-0.5 rounded-full hover:bg-muted-foreground/20'
-                    aria-label={role.name}
+                    aria-label={t('form.removeRole', { name: role.name })}
                   >
                     <X className='size-3' />
                   </button>

@@ -7,6 +7,7 @@ import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { normalizeApiError } from '@/lib/api/error'
 import { useCurrentUser, useIsSuperAdmin } from '@/lib/auth/use-permission'
+import { formatServerErrorMessage } from '@/lib/handle-server-error'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -71,6 +72,14 @@ export function UserFormSheet({
   const currentUser = useCurrentUser()
   const actorIsSuperAdmin = useIsSuperAdmin()
   const [bannerError, setBannerError] = useState<string | null>(null)
+  const [prevOpen, setPrevOpen] = useState(open)
+
+  if (open !== prevOpen) {
+    setPrevOpen(open)
+    if (!open) {
+      setBannerError(null)
+    }
+  }
 
   const isEdit = mode === 'edit' && user !== null
   const isSelf = isEdit && currentUser?.id === user.id
@@ -188,7 +197,7 @@ export function UserFormSheet({
         }
         if (mapped) return
       }
-      setBannerError(apiErr.message)
+      setBannerError(formatServerErrorMessage(apiErr))
     }
   }
 
@@ -206,6 +215,7 @@ export function UserFormSheet({
 
         <Form {...form}>
           <form
+            noValidate
             onSubmit={form.handleSubmit((v) => void onSubmit(v))}
             onChange={() => {
               if (bannerError) setBannerError(null)
@@ -313,7 +323,10 @@ export function UserFormSheet({
                         <RoleMultiSelect
                           options={roleOptions}
                           value={field.value}
-                          onChange={field.onChange}
+                          onChange={(next) => {
+                            if (bannerError) setBannerError(null)
+                            field.onChange(next)
+                          }}
                           disabled={isSubmitting}
                           isLoading={isRoleOptionsLoading}
                           isError={isRoleOptionsError}
@@ -353,9 +366,10 @@ export function UserFormSheet({
                         <FormControl>
                           <Switch
                             checked={field.value === 'active'}
-                            onCheckedChange={(checked) =>
+                            onCheckedChange={(checked) => {
+                              if (bannerError) setBannerError(null)
                               field.onChange(checked ? 'active' : 'disabled')
-                            }
+                            }}
                             disabled={isSubmitting || isSelf}
                           />
                         </FormControl>
