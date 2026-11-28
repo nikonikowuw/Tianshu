@@ -16,7 +16,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"tianshu/internal/platform/logger"
 	"tianshu/internal/shared/apperr"
 	"tianshu/internal/shared/authctx"
 )
@@ -252,7 +251,7 @@ func (h *Handler) writeContentStream(c *gin.Context, stream ContentStream) {
 	c.Status(http.StatusOK)
 
 	if _, err := io.Copy(c.Writer, stream.Reader); err != nil && !isClientDisconnect(err) {
-		logger.FromContext(c.Request.Context(), h.svc.log).Warn("failed to stream file content",
+		h.svc.ctxLog(c.Request.Context()).Warn("failed to stream file content",
 			"file_id", stream.File.ID.String(),
 			"storage_driver", stream.File.StorageDriver,
 			"error", err,

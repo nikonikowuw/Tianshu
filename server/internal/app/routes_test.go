@@ -92,10 +92,11 @@ func buildWiredTestApp(t *testing.T, mutateCfg func(*config.Config)) (*App, *cac
 	accessSvc := access.NewService(nil, access.ServiceDeps{Cache: memCache, I18n: bundle, Log: log})
 	setupSvc := setup.NewService(&setupIdentityAdapter{svc: identitySvc}, accessSvc, nil, &setupAuditAdapter{svc: auditSvc}, log)
 	filesSvc := files.NewService(nil, storeReg, files.ServiceConfig{
-		MaxFileSizeBytes:   cfg.Storage.MaxFileSizeBytes,
-		MaxAvatarSizeBytes: cfg.Storage.MaxAvatarSizeBytes,
-		SignedURLSecret:    cfg.Auth.JWTSecret,
-		SignedURLTTL:       cfg.Storage.SignedURLTTL,
+		MaxFileSizeBytes:    cfg.Storage.MaxFileSizeBytes,
+		MaxAvatarSizeBytes:  cfg.Storage.MaxAvatarSizeBytes,
+		SignedURLSecret:     cfg.Auth.JWTSecret,
+		SignedURLTTL:        cfg.Storage.SignedURLTTL,
+		SignedURLPathPrefix: apiV1Prefix + "/files/signed/",
 	}, files.ServiceDeps{Log: log})
 	authSvc := auth.NewService(cfg.Auth, nil, auth.ServiceDeps{
 		Identity: &authIdentityAdapter{svc: identitySvc},
@@ -113,7 +114,7 @@ func buildWiredTestApp(t *testing.T, mutateCfg func(*config.Config)) (*App, *cac
 		CORS:               cfg.CORS,
 		Logger:             log,
 		I18n:               bundle,
-		RedactPathPrefixes: []string{"/api/v1/files/signed/"},
+		RedactPathPrefixes: []string{apiV1Prefix + "/files/signed/"},
 	})
 	if err != nil {
 		t.Fatalf("httpserver.NewEngine() error = %v", err)

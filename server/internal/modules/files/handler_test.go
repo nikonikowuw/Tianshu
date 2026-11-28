@@ -150,12 +150,22 @@ func TestFilesHTTPContracts(t *testing.T) {
 		"files:delete": true,
 	}, 1024, avatarRefs)
 
-	// 401 when unauthenticated.
-	rec := httptest.NewRecorder()
-	engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/files", nil))
-	if rec.Code != http.StatusUnauthorized || rec.Header().Get("X-Request-Id") == "" {
-		t.Fatalf("unauthenticated GET /files: status=%d reqID=%q", rec.Code, rec.Header().Get("X-Request-Id"))
+	// 401 when unauthenticated across protected endpoints.
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/files"},
+		{method: http.MethodGet, path: "/api/v1/files/config"},
+		{method: http.MethodPost, path: "/api/v1/files/avatar"},
+	} {
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code != http.StatusUnauthorized || rec.Header().Get("X-Request-Id") == "" {
+			t.Fatalf("unauthenticated %s %s: status=%d reqID=%q", tc.method, tc.path, rec.Code, rec.Header().Get("X-Request-Id"))
+		}
 	}
+	var rec *httptest.ResponseRecorder
 
 	// Empty list returns [] not null.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/files", nil)
@@ -246,35 +256,53 @@ func TestFilesHTTPContracts(t *testing.T) {
 	for i := range manyMIMEs {
 		manyMIMEs[i] = "application/x-t-" + strings.Repeat("z", i+1)
 	}
-	badQueryReq := httptest.NewRequest(
-		http.MethodGet,
-		"/api/v1/files?page=0&pageSize=5&category=video&driver=gcs&sort=bad&order=sideways&q="+strings.Repeat("a", 101)+"&mimeType="+strings.Join(manyMIMEs, ","),
-		nil,
-	)
-	badQueryReq.Header.Set("Authorization", "Bearer test-token")
-	badQueryReq.Header.Set("Accept-Language", "en-US")
-	rec = httptest.NewRecorder()
-	engine.ServeHTTP(rec, badQueryReq)
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("invalid list query status = %d, want 422 (body=%s)", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "{{") {
-		t.Fatalf("422 response contains unrendered template placeholder: %s", rec.Body.String())
-	}
-	var valBody struct {
-		Code   string `json:"code"`
-		Errors []struct {
+	type valErrBody struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Errors  []struct {
 			Field   string `json:"field"`
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	decodeJSON(t, rec.Body.Bytes(), &valBody)
-	if valBody.Code != apperr.CodeValidationFailed || len(valBody.Errors) != 8 {
-		t.Fatalf("unexpected 422 body: %+v", valBody)
+	badQueryURL := "/api/v1/files?page=0&pageSize=5&category=video&driver=gcs&sort=bad&order=sideways&q=" + strings.Repeat("a", 101) + "&mimeType=" + strings.Join(manyMIMEs, ",")
+	var valEN, valZH valErrBody
+	for _, item := range []struct {
+		lang string
+		out  *valErrBody
+	}{
+		{lang: "en-US", out: &valEN},
+		{lang: "zh-CN", out: &valZH},
+	} {
+		badQueryReq := httptest.NewRequest(http.MethodGet, badQueryURL, nil)
+		badQueryReq.Header.Set("Authorization", "Bearer test-token")
+		badQueryReq.Header.Set("Accept-Language", item.lang)
+		rec = httptest.NewRecorder()
+		engine.ServeHTTP(rec, badQueryReq)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid list query (%s) status = %d, want 422 (body=%s)", item.lang, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "{{") {
+			t.Fatalf("422 response (%s) contains unrendered template placeholder: %s", item.lang, rec.Body.String())
+		}
+		decodeJSON(t, rec.Body.Bytes(), item.out)
+		if item.out.Code != apperr.CodeValidationFailed || len(item.out.Errors) != 8 {
+			t.Fatalf("unexpected 422 body (%s): %+v", item.lang, item.out)
+		}
+		for i := 0; i < len(item.out.Errors); i++ {
+			if strings.TrimSpace(item.out.Errors[i].Message) == "" {
+				t.Fatalf("empty 422 field message (%s) at %d: %+v", item.lang, i, item.out.Errors[i])
+			}
+			if i > 0 && item.out.Errors[i-1].Field >= item.out.Errors[i].Field {
+				t.Fatalf("422 errors not sorted strictly ascending by field (%s): %+v", item.lang, item.out.Errors)
+			}
+		}
 	}
-	for i := 1; i < len(valBody.Errors); i++ {
-		if valBody.Errors[i-1].Field >= valBody.Errors[i].Field {
-			t.Fatalf("422 errors not sorted strictly ascending by field: %+v", valBody.Errors)
+	for i := range valEN.Errors {
+		if valEN.Errors[i].Field != valZH.Errors[i].Field {
+			t.Fatalf("422 field mismatch between locales: %s vs %s", valEN.Errors[i].Field, valZH.Errors[i].Field)
+		}
+		if valEN.Errors[i].Message == valZH.Errors[i].Message {
+			t.Fatalf("expected localized 422 field message for %q, got identical %q", valEN.Errors[i].Field, valEN.Errors[i].Message)
 		}
 	}
 
@@ -459,13 +487,30 @@ func TestFilesHTTPContracts(t *testing.T) {
 		t.Fatalf("malformed signed-url status = %d, want 400", rec.Code)
 	}
 
-	badDispReq := httptest.NewRequest(http.MethodPost, "/api/v1/files/"+created.ID+"/signed-url", strings.NewReader(`{"disposition":"preview"}`))
-	badDispReq.Header.Set("Authorization", "Bearer test-token")
-	badDispReq.Header.Set("Content-Type", "application/json")
-	rec = httptest.NewRecorder()
-	engine.ServeHTTP(rec, badDispReq)
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("invalid disposition status = %d, want 422", rec.Code)
+	var dispEN, dispZH valErrBody
+	for _, item := range []struct {
+		lang string
+		out  *valErrBody
+	}{
+		{lang: "en-US", out: &dispEN},
+		{lang: "zh-CN", out: &dispZH},
+	} {
+		badDispReq := httptest.NewRequest(http.MethodPost, "/api/v1/files/"+created.ID+"/signed-url", strings.NewReader(`{"disposition":"preview"}`))
+		badDispReq.Header.Set("Authorization", "Bearer test-token")
+		badDispReq.Header.Set("Content-Type", "application/json")
+		badDispReq.Header.Set("Accept-Language", item.lang)
+		rec = httptest.NewRecorder()
+		engine.ServeHTTP(rec, badDispReq)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid disposition (%s) status = %d, want 422", item.lang, rec.Code)
+		}
+		decodeJSON(t, rec.Body.Bytes(), item.out)
+		if item.out.Code != apperr.CodeValidationFailed || len(item.out.Errors) != 1 || item.out.Errors[0].Field != "disposition" || strings.TrimSpace(item.out.Errors[0].Message) == "" {
+			t.Fatalf("unexpected disposition 422 body (%s): %+v", item.lang, item.out)
+		}
+	}
+	if dispEN.Errors[0].Message == dispZH.Errors[0].Message {
+		t.Fatalf("expected localized disposition 422 message, got identical %q", dispEN.Errors[0].Message)
 	}
 
 	// Mint signed URL with inline disposition and fetch publicly without Authorization header.
@@ -609,20 +654,26 @@ func TestFilesPermissionsAvatarErrorsAndUploadRateLimit(t *testing.T) {
 		t.Fatalf("delete without files:delete status = %d, want 403", rec.Code)
 	}
 
-	// User without files:read gets 403 on list and content endpoints.
+	// User without files:read gets 403 across all files:read-protected endpoints.
 	noReadEngine, _, _ := newTestFilesEngine(t, map[string]bool{
 		"files:read": false,
 	}, 1<<20, fakeAvatarRefs{inUse: map[uuid.UUID]bool{}})
-	for _, target := range []string{
-		"/api/v1/files",
-		"/api/v1/files/" + uuid.Must(uuid.NewV7()).String() + "/content",
+	noReadID := uuid.Must(uuid.NewV7()).String()
+	for _, tc := range []struct {
+		method string
+		target string
+	}{
+		{method: http.MethodGet, target: "/api/v1/files"},
+		{method: http.MethodGet, target: "/api/v1/files/" + noReadID},
+		{method: http.MethodGet, target: "/api/v1/files/" + noReadID + "/content"},
+		{method: http.MethodPost, target: "/api/v1/files/" + noReadID + "/signed-url"},
 	} {
-		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r := httptest.NewRequest(tc.method, tc.target, nil)
 		r.Header.Set("Authorization", "Bearer test-token")
 		w := httptest.NewRecorder()
 		noReadEngine.ServeHTTP(w, r)
 		if w.Code != http.StatusForbidden {
-			t.Fatalf("GET %s without files:read status = %d, want 403", target, w.Code)
+			t.Fatalf("%s %s without files:read status = %d, want 403", tc.method, tc.target, w.Code)
 		}
 	}
 

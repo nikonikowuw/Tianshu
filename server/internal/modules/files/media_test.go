@@ -169,6 +169,7 @@ func TestPrepareGeneralUploadMIMETypesAndSecurityGuards(t *testing.T) {
 		{name: "pptx allowed", filename: "deck.pptx", payload: pptxBytes, maxBytes: 1 << 20, wantMIME: mimePPTX},
 		{name: "svg explicitly blocked", filename: "icon.svg", payload: []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`), maxBytes: 1 << 20, wantCode: ErrCodeTypeNotAllowed},
 		{name: "svg disguised as txt blocked", filename: "icon.txt", payload: []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`), maxBytes: 1 << 20, wantCode: ErrCodeTypeNotAllowed},
+		{name: "script after 1024-byte padding in txt blocked", filename: "padded.txt", payload: append(bytes.Repeat([]byte("a"), 2048), []byte(`<script>alert(1)</script>`)...), maxBytes: 1 << 20, wantCode: ErrCodeTypeNotAllowed},
 		{name: "html disguised as png blocked", filename: "xss.png", payload: []byte(`<!doctype html><script>alert(1)</script>`), maxBytes: 1 << 20, wantCode: ErrCodeTypeNotAllowed},
 		{name: "extension mismatch blocked", filename: "fake.pdf", payload: pngBytes, maxBytes: 1 << 20, wantCode: ErrCodeTypeNotAllowed},
 		{name: "empty file rejected", filename: "empty.txt", payload: nil, maxBytes: 1 << 20, wantCode: ErrCodeEmptyFile},
