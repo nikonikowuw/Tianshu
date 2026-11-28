@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import {
   AlertDialog,
@@ -29,7 +30,10 @@ type ConfirmDialogProps = {
 )
 
 export function ConfirmDialog(props: ConfirmDialogProps) {
+  const { t } = useTranslation('common')
   const {
+    open,
+    onOpenChange,
     title,
     desc,
     children,
@@ -38,15 +42,25 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     confirmTestId,
     cancelBtnText,
     destructive,
-    isLoading,
+    isLoading = false,
     disabled = false,
     form,
     handleConfirm,
-    ...actions
   } = props
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && isLoading) return
+    onOpenChange(nextOpen)
+  }
+
   return (
-    <AlertDialog {...actions}>
-      <AlertDialogContent className={cn(className && className)}>
+    <AlertDialog open={open} onOpenChange={handleOpenChange}>
+      <AlertDialogContent
+        className={cn(className && className)}
+        onEscapeKeyDown={(event) => {
+          if (isLoading) event.preventDefault()
+        }}
+      >
         <AlertDialogHeader className='text-start'>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription asChild>
@@ -56,7 +70,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         {children}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isLoading}>
-            {cancelBtnText ?? 'Cancel'}
+            {cancelBtnText ?? t('cancel')}
           </AlertDialogCancel>
           <Button
             type={form ? 'submit' : 'button'}
@@ -66,7 +80,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             variant={destructive ? 'destructive' : 'default'}
             disabled={disabled || isLoading}
           >
-            {confirmText ?? 'Continue'}
+            {confirmText ?? t('confirm')}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { type Table } from '@tanstack/react-table'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -18,40 +19,39 @@ type DataTableBulkActionsProps<TData> = {
 }
 
 /**
- * A modular toolbar for displaying bulk actions when table rows are selected.
- *
- * @template TData The type of data in the table.
- * @param {object} props The component props.
- * @param {Table<TData>} props.table The react-table instance.
- * @param {string} props.entityName The name of the entity being acted upon (e.g., "task", "user").
- * @param {React.ReactNode} props.children The action buttons to be rendered inside the toolbar.
- * @returns {React.ReactNode | null} The rendered component or null if no rows are selected.
+ * A modular toolbar for displaying bulk actions when current-page table rows are selected.
  */
 export function DataTableBulkActions<TData>({
   table,
   entityName,
   children,
 }: DataTableBulkActionsProps<TData>): React.ReactNode | null {
+  const { t } = useTranslation('common')
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedCount = selectedRows.length
   const toolbarRef = useRef<HTMLDivElement>(null)
   const [announcement, setAnnouncement] = useState('')
 
-  // Announce selection changes to screen readers
+  // 选中项变化时通过实时区域播报当前页选择状态
   useEffect(() => {
     if (selectedCount > 0) {
-      const message = `${selectedCount} ${entityName}${selectedCount > 1 ? 's' : ''} selected. Bulk actions toolbar is available.`
+      const message = t('table.bulkToolbarAnnouncement', {
+        count: selectedCount,
+        entity: entityName,
+      })
 
-      // Use queueMicrotask to defer state update and avoid cascading renders
       queueMicrotask(() => {
         setAnnouncement(message)
       })
 
-      // Clear announcement after a delay
       const timer = setTimeout(() => setAnnouncement(''), 3000)
       return () => clearTimeout(timer)
     }
-  }, [selectedCount, entityName])
+
+    queueMicrotask(() => {
+      setAnnouncement('')
+    })
+  }, [selectedCount, entityName, t])
 
   const handleClearSelection = () => {
     table.resetRowSelection()
@@ -138,12 +138,15 @@ export function DataTableBulkActions<TData>({
       <div
         ref={toolbarRef}
         role='toolbar'
-        aria-label={`Bulk actions for ${selectedCount} selected ${entityName}${selectedCount > 1 ? 's' : ''}`}
+        aria-label={t('table.bulkActionsLabel', {
+          count: selectedCount,
+          entity: entityName,
+        })}
         aria-describedby='bulk-actions-description'
         tabIndex={-1}
         onKeyDown={handleKeyDown}
         className={cn(
-          'fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl',
+          'fixed start-1/2 bottom-6 z-50 -translate-x-1/2 rounded-xl rtl:translate-x-1/2',
           'transition-all delay-100 duration-300 ease-out hover:scale-105',
           'focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
         )}
@@ -163,15 +166,15 @@ export function DataTableBulkActions<TData>({
                 size='icon'
                 onClick={handleClearSelection}
                 className='size-6 rounded-full'
-                aria-label='Clear selection'
-                title='Clear selection (Escape)'
+                aria-label={t('table.clearSelection')}
+                title={t('table.clearSelectionShortcut')}
               >
                 <X />
-                <span className='sr-only'>Clear selection</span>
+                <span className='sr-only'>{t('table.clearSelection')}</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Clear selection (Escape)</p>
+              <p>{t('table.clearSelectionShortcut')}</p>
             </TooltipContent>
           </Tooltip>
 
@@ -182,21 +185,27 @@ export function DataTableBulkActions<TData>({
           />
 
           <div
-            className='flex items-center gap-x-1 text-sm'
+            className='flex items-center gap-x-1.5 text-sm'
             id='bulk-actions-description'
           >
             <Badge
               variant='default'
               className='min-w-8 rounded-lg'
-              aria-label={`${selectedCount} selected`}
+              aria-label={t('table.bulkSelectedOnPage', {
+                count: selectedCount,
+              })}
             >
               {selectedCount}
-            </Badge>{' '}
+            </Badge>
             <span className='hidden sm:inline'>
-              {entityName}
-              {selectedCount > 1 ? 's' : ''}
-            </span>{' '}
-            selected
+              {t('table.bulkSelectedEntityOnPage', {
+                count: selectedCount,
+                entity: entityName,
+              })}
+            </span>
+            <span className='sm:hidden'>
+              {t('table.bulkSelectedOnPage', { count: selectedCount })}
+            </span>
           </div>
 
           <Separator
