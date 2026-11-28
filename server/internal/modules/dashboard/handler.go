@@ -17,12 +17,7 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) summary(c *gin.Context) {
-	var q summaryQuery
-	if err := c.ShouldBindQuery(&q); err != nil {
-		_ = c.Error(err)
-		return
-	}
-	input, err := q.toInput()
+	input, err := bindSummaryRequest(c)
 	if err != nil {
 		_ = c.Error(err)
 		return

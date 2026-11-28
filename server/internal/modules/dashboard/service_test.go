@@ -24,12 +24,22 @@ type fakeStore struct {
 	gotStartAt  time.Time
 	gotEndAt    time.Time
 	gotLimit    int32
+	readTxCalls int
+	readTxErr   error
 	userErr     error
 	roleErr     error
 	fileErr     error
 	sessionsErr error
 	trendErr    error
 	recentErr   error
+}
+
+func (f *fakeStore) WithinReadTx(ctx context.Context, fn func(context.Context, store) error) error {
+	f.readTxCalls++
+	if f.readTxErr != nil {
+		return f.readTxErr
+	}
+	return fn(ctx, f)
 }
 
 func (f *fakeStore) GetUserStats(_ context.Context, since time.Time) (UserStats, error) {
@@ -145,6 +155,9 @@ func TestSummaryDefaultsGapFillsTrendAndAggregates(t *testing.T) {
 	if st.gotLimit != defaultRecentLimit {
 		t.Fatalf("gotLimit = %d, want %d", st.gotLimit, defaultRecentLimit)
 	}
+	if st.readTxCalls != 1 {
+		t.Fatalf("readTxCalls = %d, want 1", st.readTxCalls)
+	}
 }
 
 func TestSummaryRangeValidationAndEmptyRecent(t *testing.T) {
@@ -189,6 +202,7 @@ func TestSummaryPropagatesStoreErrorsAsInternal(t *testing.T) {
 		name  string
 		store *fakeStore
 	}{
+		{name: "read tx", store: &fakeStore{readTxErr: boom}},
 		{name: "user stats", store: &fakeStore{userErr: boom}},
 		{name: "role stats", store: &fakeStore{roleErr: boom}},
 		{name: "file stats", store: &fakeStore{fileErr: boom}},

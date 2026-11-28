@@ -3,14 +3,12 @@ package dashboard
 import (
 	"strconv"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
-type summaryQuery struct {
-	Days string `form:"days"`
-}
-
-func (q summaryQuery) toInput() (SummaryInput, error) {
-	raw := strings.TrimSpace(q.Days)
+func bindSummaryRequest(c *gin.Context) (SummaryInput, error) {
+	raw := strings.TrimSpace(c.Query("days"))
 	if raw == "" {
 		return SummaryInput{}, nil
 	}
