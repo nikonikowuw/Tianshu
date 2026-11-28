@@ -121,7 +121,7 @@ export function Roles() {
         canUpdate={canUpdate}
         onOpenChange={(open) => {
           if (!open) {
-            setSheetState((prev) => ({ ...prev, open: false }))
+            setSheetState((prev) => ({ ...prev, open: false, role: null }))
           }
         }}
       />

@@ -423,7 +423,7 @@ function RolesHarness({
         role={sheet.role}
         canUpdate={canUpdate}
         onOpenChange={(open) => {
-          if (!open) setSheet((prev) => ({ ...prev, open: false }))
+          if (!open) setSheet((prev) => ({ ...prev, open: false, role: null }))
         }}
       />
 
@@ -513,6 +513,9 @@ describe('roles feature', () => {
     const overlong = rolesSearchSchema.parse({ q: 'a'.repeat(101) })
     expect(overlong.q).toBeUndefined()
 
+    const numericQuery = rolesSearchSchema.parse({ q: 123 })
+    expect(numericQuery.q).toBe('123')
+
     const sp = buildRolesQueryParams({
       page: 2,
       pageSize: 50,
@@ -594,6 +597,39 @@ describe('roles feature', () => {
     expect(unboundGroup?.label).toBe(i18n.t('roles:sheet.otherPermissions'))
     expect(unboundGroup?.children.map((c) => c.permissionCode)).toEqual([
       'audit:export',
+    ])
+
+    // When menuTree is non-empty but contains zero permission-bound nodes, fall back to module groups.
+    const permissionlessMenuTree: RoleMenuTreeNode[] = [
+      {
+        id: 'dir-empty',
+        type: 'directory',
+        code: 'dir_empty',
+        title: 'Empty Dir',
+        icon: '',
+        permissionCode: '',
+        children: [
+          {
+            id: 'menu-no-perm',
+            type: 'menu',
+            code: 'menu_no_perm',
+            title: 'Public Page',
+            icon: '',
+            permissionCode: '',
+            children: [],
+          },
+        ],
+      },
+    ]
+    const fallbackTree = buildPermissionTree(
+      permissionlessMenuTree,
+      catalogZh.groups,
+      i18n.t('roles:sheet.otherPermissions')
+    )
+    expect(fallbackTree.map((n) => n.id)).toEqual([
+      'group:dashboard',
+      'group:identity',
+      'group:audit',
     ])
   })
 
@@ -681,6 +717,46 @@ describe('roles feature', () => {
       )
       .toBeVisible()
     await userEvent.click(getByRole('checkbox', { name: '用户管理' }))
+    await expect
+      .element(
+        getByText(
+          i18n.t('roles:sheet.selectedSummary', { selected: 0, total: 5 })
+        )
+      )
+      .toBeVisible()
+
+    // Collapse all / expand all controls work across the tree.
+    await userEvent.click(
+      getByRole('button', {
+        name: i18n.t('roles:sheet.collapseAll'),
+        exact: true,
+      })
+    )
+    await expect
+      .element(getByText('查看用户', { exact: true }))
+      .not.toBeInTheDocument()
+    await userEvent.click(
+      getByRole('button', {
+        name: i18n.t('roles:sheet.expandAll'),
+        exact: true,
+      })
+    )
+    await expect.element(getByText('查看用户', { exact: true })).toBeVisible()
+
+    // Select all / clear all buttons select every unique code and reset cleanly.
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('roles:sheet.selectAll') })
+    )
+    await expect
+      .element(
+        getByText(
+          i18n.t('roles:sheet.selectedSummary', { selected: 5, total: 5 })
+        )
+      )
+      .toBeVisible()
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('roles:sheet.clearAll') })
+    )
     await expect
       .element(
         getByText(
@@ -831,6 +907,15 @@ describe('roles feature', () => {
 
     await expect.element(getByText('Code already taken')).toBeVisible()
     await expect.element(getByText('Unknown permission code')).toBeVisible()
+    const permGroup = getByRole('group', {
+      name: i18n.t('roles:sheet.permissionsLabel'),
+    })
+    await expect.element(permGroup).toHaveAttribute('aria-invalid', 'true')
+    const describedBy = permGroup.element().getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    expect(
+      document.getElementById(describedBy as string)?.textContent
+    ).toContain('Unknown permission code')
     await expect.element(getByRole('alert')).not.toBeInTheDocument()
 
     await userEvent.click(
@@ -841,6 +926,72 @@ describe('roles feature', () => {
         getByText(i18n.t('errors:serverError', { requestId: 'req-sheet-500' }))
       )
       .toBeVisible()
+  })
+
+  it('falls back to sheet banner when 422 includes unmapped fields and locks submit on 429 cooldown', async () => {
+    mockStandardGet()
+    postMock
+      .mockRejectedValueOnce(
+        new ApiError({
+          status: 422,
+          code: 'VALIDATION_FAILED',
+          message: 'Unexpected constraint failed',
+          fieldErrors: {
+            code: 'Code invalid',
+            unknownField: 'Unsupported payload field',
+          },
+        })
+      )
+      .mockRejectedValueOnce(
+        new ApiError({
+          status: 429,
+          code: 'RATE_LIMITED',
+          message: 'Too many requests',
+          retryAfter: 25,
+        })
+      )
+
+    const { getByRole, getByLabelText, getByText } = await renderRoles()
+    await expect.element(getByText('Operations Editor')).toBeVisible()
+
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('roles:createRole') })
+    )
+    await userEvent.fill(
+      getByLabelText(i18n.t('roles:sheet.codeLabel'), { exact: true }),
+      'ops_editor_new'
+    )
+    await userEvent.fill(
+      getByLabelText(i18n.t('roles:sheet.nameLabel'), { exact: true }),
+      'New Role'
+    )
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('roles:sheet.saveCreate') })
+    )
+
+    await expect.element(getByText('Code invalid')).toBeVisible()
+    await expect
+      .element(getByRole('alert'))
+      .toHaveTextContent('Unexpected constraint failed')
+
+    // Trigger 429 cooldown: RateLimitAlert appears, submit locks, and editing keeps cooldown alert visible.
+    const submitBtn = getByRole('button', {
+      name: i18n.t('roles:sheet.saveCreate'),
+    })
+    await userEvent.click(submitBtn)
+    const alert = getByRole('alert')
+    await expect
+      .element(alert)
+      .toHaveTextContent(i18n.t('errors:rateLimitedTitle'))
+    await expect.element(alert).toHaveTextContent(/25/)
+    await expect.element(submitBtn).toBeDisabled()
+
+    await userEvent.fill(
+      getByLabelText(i18n.t('roles:sheet.nameLabel'), { exact: true }),
+      'Edited During Cooldown'
+    )
+    await expect.element(alert).toBeVisible()
+    await expect.element(submitBtn).toBeDisabled()
   })
 
   it('edits custom role, syncs active session when holding edited role, and invalidates cross-module caches', async () => {
@@ -1162,11 +1313,26 @@ describe('roles feature', () => {
     await expect
       .element(getByText(i18n.t('roles:sheet.permissionsLoadFailed')))
       .toBeVisible()
+    // Must NOT display misleading `0 / 0` summary while catalog failed to load.
+    await expect
+      .element(
+        getByText(
+          i18n.t('roles:sheet.selectedSummary', { selected: 0, total: 0 })
+        )
+      )
+      .not.toBeInTheDocument()
 
     await userEvent.click(getByRole('button', { name: i18n.t('common:retry') }))
     // Falls back to flat catalog groups when /menus/tree errors.
     await expect.element(getByText('View Dashboard')).toBeVisible()
     await expect.element(getByText('Export Audit Logs')).toBeVisible()
+    await expect
+      .element(
+        getByText(
+          i18n.t('roles:sheet.selectedSummary', { selected: 0, total: 5 })
+        )
+      )
+      .toBeVisible()
   })
 
   it('renders inline list error without empty row, recovers on retry, and syncs search, filter, sort, and reset', async () => {
@@ -1318,5 +1484,108 @@ describe('roles feature', () => {
     expect(
       container.textContent?.includes(i18n.t('roles:empty.noMatchTitle'))
     ).toBe(false)
+  })
+
+  it('opens read-only sheet on row Enter key, supports pagination controls, and invalidates dashboard cache on create/delete', async () => {
+    const queryClient = createTestClient()
+    queryClient.setQueryData(['dashboard', 'summary'], { total: 3 })
+
+    getMock.mockImplementation((url: string, opts?: { params?: unknown }) => {
+      if (url === '/permissions') {
+        return Promise.resolve({ data: currentCatalog() })
+      }
+      if (url === '/menus/tree') {
+        return Promise.resolve({ data: currentMenuTree() })
+      }
+      const sp = opts?.params as URLSearchParams | undefined
+      const page = Number(sp?.get('page') ?? '1')
+      const pageSize = Number(sp?.get('pageSize') ?? '20')
+      return Promise.resolve({
+        data: {
+          items: sampleRoles,
+          total: 45,
+          page,
+          pageSize,
+        } satisfies RolesPage,
+      })
+    })
+    postMock.mockResolvedValueOnce({
+      data: {
+        ...sampleRoles[1],
+        id: '01930000-0000-7000-8000-000000000088',
+        code: 'qa_viewer',
+        name: 'QA Viewer',
+      },
+    })
+    deleteMock.mockResolvedValueOnce(undefined)
+
+    const searchSnapshots: RolesSearch[] = []
+    const { getByRole, getByLabelText, getByText } = await renderRoles(
+      {
+        onSearchChange: (s) => searchSnapshots.push(s),
+      },
+      queryClient
+    )
+    await expect.element(getByText('Super Admin')).toBeVisible()
+
+    // Focus table row directly and press Enter to open read-only sheet.
+    const superAdminRow = getByText('Super Admin').element().closest('tr')
+    expect(superAdminRow).not.toBeNull()
+    ;(superAdminRow as HTMLElement).focus()
+    await userEvent.keyboard('{Enter}')
+    await expect
+      .element(getByText(i18n.t('roles:sheet.viewSystemDesc')))
+      .toBeVisible()
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('roles:sheet.close') })
+    )
+    await expect.element(getByRole('dialog')).not.toBeInTheDocument()
+
+    // Pagination next page updates search.page to 2.
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('common:table.nextPage') })
+    )
+    await vi.waitFor(() => {
+      expect(searchSnapshots.some((s) => s.page === 2)).toBe(true)
+    })
+
+    // Create role invalidates dashboard summary query.
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('roles:createRole') })
+    )
+    await userEvent.fill(
+      getByLabelText(i18n.t('roles:sheet.codeLabel'), { exact: true }),
+      'qa_viewer'
+    )
+    await userEvent.fill(
+      getByLabelText(i18n.t('roles:sheet.nameLabel'), { exact: true }),
+      'QA Viewer'
+    )
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('roles:sheet.saveCreate') })
+    )
+    await vi.waitFor(() => {
+      expect(
+        queryClient.getQueryState(['dashboard', 'summary'])?.isInvalidated
+      ).toBe(true)
+    })
+
+    // Delete role also invalidates dashboard summary query.
+    queryClient.setQueryData(['dashboard', 'summary'], { total: 4 })
+    const menus = getByRole('button', {
+      name: i18n.t('roles:rowActions.openMenu'),
+    })
+    await userEvent.click(menus.nth(1))
+    await userEvent.click(
+      getByRole('menuitem', { name: i18n.t('roles:rowActions.delete') })
+    )
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('roles:deleteDialog.confirm') })
+    )
+    await vi.waitFor(() => {
+      expect(
+        queryClient.getQueryState(['dashboard', 'summary'])?.isInvalidated
+      ).toBe(true)
+    })
   })
 })
