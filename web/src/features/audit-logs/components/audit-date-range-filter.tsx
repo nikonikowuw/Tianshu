@@ -21,10 +21,15 @@ type AuditDateRangeFilterProps = {
   onChange: (next: { from?: string; to?: string }) => void
 }
 
-function formatDisplayDate(dateStr: string, locale: string): string {
+function formatDisplayDate(
+  dateStr: string,
+  locale: string,
+  includeYear: boolean
+): string {
   const parsed = parseDateOnly(dateStr)
   if (!parsed) return dateStr
   return new Intl.DateTimeFormat(locale, {
+    ...(includeYear ? { year: 'numeric' } : {}),
     month: 'short',
     day: 'numeric',
   }).format(parsed)
@@ -39,11 +44,20 @@ export function AuditDateRangeFilter({
   const [open, setOpen] = useState(false)
   const calendarLocale = i18n.language.startsWith('zh') ? zhCN : enUS
 
+  const fromDate = parseDateOnly(from)
+  const toDate = parseDateOnly(to)
+  const currentYear = new Date().getFullYear()
+  const includeYear = Boolean(
+    (fromDate && fromDate.getFullYear() !== currentYear) ||
+    (toDate && toDate.getFullYear() !== currentYear) ||
+    (fromDate && toDate && fromDate.getFullYear() !== toDate.getFullYear())
+  )
+
   const selected: DateRange | undefined =
     from || to
       ? {
-          from: parseDateOnly(from) ?? undefined,
-          to: parseDateOnly(to) ?? undefined,
+          from: fromDate ?? undefined,
+          to: toDate ?? undefined,
         }
       : undefined
 
@@ -62,6 +76,7 @@ export function AuditDateRangeFilter({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
+          type='button'
           variant='outline'
           size='sm'
           className={cn('h-8 border-dashed', (from || to) && 'border-solid')}
@@ -75,9 +90,11 @@ export function AuditDateRangeFilter({
                 variant='secondary'
                 className='rounded-sm px-1.5 font-normal'
               >
-                {from ? formatDisplayDate(from, i18n.language) : '...'}
+                {from
+                  ? formatDisplayDate(from, i18n.language, includeYear)
+                  : '...'}
                 {' - '}
-                {to ? formatDisplayDate(to, i18n.language) : '...'}
+                {to ? formatDisplayDate(to, i18n.language, includeYear) : '...'}
               </Badge>
             </>
           )}

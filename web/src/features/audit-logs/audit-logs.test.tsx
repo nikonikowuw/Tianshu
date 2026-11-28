@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { I18nextProvider } from 'react-i18next'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import '@/styles/index.css'
+import { toast } from 'sonner'
 import {
   afterAll,
   afterEach,
@@ -102,13 +103,16 @@ function AuditLogsHarness({
     auditLogsSearchSchema.parse(initialSearch ?? {})
   )
   const [selected, setSelected] = useState<AuditLogItem | null>(null)
+  const [lastReplace, setLastReplace] = useState<boolean | undefined>(undefined)
 
   const navigate = (opts: {
+    replace?: boolean
     search:
       | true
       | Record<string, unknown>
       | ((prev: Record<string, unknown>) => Record<string, unknown>)
   }) => {
+    setLastReplace(opts.replace)
     if (typeof opts.search === 'function') {
       setSearch((prev) =>
         auditLogsSearchSchema.parse(
@@ -126,7 +130,11 @@ function AuditLogsHarness({
 
   return (
     <>
-      <output data-testid='audit-search-state' className='sr-only'>
+      <output
+        data-testid='audit-search-state'
+        data-last-replace={String(lastReplace)}
+        className='sr-only'
+      >
         {JSON.stringify(search)}
       </output>
       <AuditLogsTable
@@ -172,12 +180,20 @@ describe('audit-logs feature', () => {
   })
 
   it('normalizes invalid URL search params and builds repeated query params', () => {
+    const validActorId = '01930000-0000-7000-8000-000000000099'
     const parsed = auditLogsSearchSchema.parse({
       page: '-3',
       pageSize: '999',
       q: 'x'.repeat(101),
       actor: 'a'.repeat(101),
-      status: ['success', 'invalid'],
+      actorId: '00000000-0000-0000-0000-000000000000',
+      status: ['success', 'success', 'invalid'],
+      action: [
+        'auth.login',
+        'auth.login',
+        'x'.repeat(65),
+        ...Array.from({ length: 25 }, (_, idx) => `custom.action_${idx}`),
+      ],
       from: '2026-02-30',
     })
     expect(parsed).toMatchObject({
@@ -187,6 +203,20 @@ describe('audit-logs feature', () => {
       from: undefined,
       q: undefined,
       actor: undefined,
+      actorId: undefined,
+    })
+    expect(parsed.action).toHaveLength(20)
+    expect(parsed.action?.[0]).toBe('auth.login')
+
+    const numericAndActorId = auditLogsSearchSchema.parse({
+      q: 12345,
+      actor: 67890,
+      actorId: validActorId,
+    })
+    expect(numericAndActorId).toMatchObject({
+      q: '12345',
+      actor: '67890',
+      actorId: validActorId,
     })
 
     const sp = buildAuditLogsQueryParams({
@@ -194,6 +224,7 @@ describe('audit-logs feature', () => {
       pageSize: 50,
       q: 'alice',
       actor: 'alice_admin',
+      actorId: validActorId,
       status: ['success', 'failure'],
       action: ['auth.login'],
       from: '2026-03-01',
@@ -204,6 +235,7 @@ describe('audit-logs feature', () => {
     expect(sp.get('page')).toBe('2')
     expect(sp.get('pageSize')).toBe('50')
     expect(sp.get('actor')).toBe('alice_admin')
+    expect(sp.get('actorId')).toBe(validActorId)
     expect(sp.getAll('status')).toEqual(['success', 'failure'])
     expect(sp.getAll('action')).toEqual(['auth.login'])
     expect(sp.get('from')).toBe(toBoundaryRFC3339('2026-03-01', false))
@@ -372,7 +404,7 @@ describe('audit-logs feature', () => {
     expect(searchState(screen).actor).toBe('alice_admin')
   })
 
-  it('repairs a reversed date range in the URL and request', async () => {
+  it('repairs a reversed date range in the URL with replace and request', async () => {
     getMock.mockResolvedValue({ data: makePage() })
 
     const screen = await renderAuditLogs({
@@ -385,6 +417,12 @@ describe('audit-logs feature', () => {
         from: '2026-11-20',
         to: '2026-11-26',
       })
+      expect(
+        screen
+          .getByTestId('audit-search-state')
+          .element()
+          .getAttribute('data-last-replace')
+      ).toBe('true')
       expect(lastRequestParams().get('from')).toBe(
         toBoundaryRFC3339('2026-11-20', false)
       )
@@ -401,12 +439,17 @@ describe('audit-logs feature', () => {
     await expect.element(screen.getByText('alice_admin')).toBeVisible()
 
     await screen.getByRole('button', { name: /时间范围|Date range/ }).click()
-    await screen.getByRole('button', { name: /^今天$|^Today$/ }).click()
+    const todayBtn = screen.getByRole('button', { name: /^今天$|^Today$/ })
+    await expect.element(todayBtn).toBeVisible()
+    await todayBtn.click()
 
     const today = formatDateOnly(new Date())
     await vi.waitFor(() => {
       expect(searchState(screen)).toMatchObject({ from: today, to: today })
     })
+    await expect
+      .element(screen.getByRole('button', { name: /^近 7 天$|^Last 7 days$/ }))
+      .not.toBeInTheDocument()
   })
 
   it('renders semantic badge variants for success and failure', async () => {
@@ -442,10 +485,14 @@ describe('audit-logs feature', () => {
       .toBeVisible()
   })
 
-  it('copies the request id from the row action menu', async () => {
+  it('copies the request id from the row action menu and surfaces clipboard errors', async () => {
     getMock.mockResolvedValue({ data: makePage() })
     const originalClipboard = navigator.clipboard
-    const writeText = vi.fn().mockResolvedValue(undefined)
+    const writeText = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Permission denied'))
+    const errorToastSpy = vi.spyOn(toast, 'error')
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
@@ -466,11 +513,132 @@ describe('audit-logs feature', () => {
       await vi.waitFor(() => {
         expect(writeText).toHaveBeenCalledWith('req_audit_alpha_01')
       })
+      await expect
+        .element(
+          screen.getByRole('menuitem', { name: /复制请求 ID|Copy request ID/ })
+        )
+        .not.toBeInTheDocument()
+
+      await screen
+        .getByRole('button', { name: /打开操作菜单|Open actions menu/ })
+        .nth(2)
+        .click()
+      await screen
+        .getByRole('menuitem', { name: /复制请求 ID|Copy request ID/ })
+        .click()
+
+      await vi.waitFor(() => {
+        expect(errorToastSpy).toHaveBeenCalledTimes(1)
+      })
+    } finally {
+      errorToastSpy.mockRestore()
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: originalClipboard,
+      })
+    }
+  })
+
+  it('supports keyboard row selection while isolating row action menu keyboard events', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
+    const originalClipboard = navigator.clipboard
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+
+    try {
+      const screen = await renderAuditLogs()
+      await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+      const rows = screen.getByRole('row')
+      const firstBodyRow = rows.nth(1).element() as HTMLElement
+      firstBodyRow.focus()
+      await userEvent.keyboard('{Enter}')
+      await expect.element(screen.getByRole('dialog')).toBeVisible()
+
+      await userEvent.keyboard('{Escape}')
+      await expect.element(screen.getByRole('dialog')).not.toBeInTheDocument()
+
+      const menuBtn = screen
+        .getByRole('button', { name: /打开操作菜单|Open actions menu/ })
+        .first()
+      ;(menuBtn.element() as HTMLElement).focus()
+      await userEvent.keyboard('{Enter}')
+
+      const copyItem = screen.getByRole('menuitem', {
+        name: /复制请求 ID|Copy request ID/,
+      })
+      await expect.element(copyItem).toBeVisible()
+      ;(copyItem.element() as HTMLElement).focus()
+      await userEvent.keyboard('{Enter}')
+
+      await vi.waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith('req_audit_alpha_01')
+      })
+      await expect.element(screen.getByRole('dialog')).not.toBeInTheDocument()
     } finally {
       Object.defineProperty(navigator, 'clipboard', {
         configurable: true,
         value: originalClipboard,
       })
     }
+  })
+
+  it('distinguishes empty no-data state and clears actorId deep-link filters', async () => {
+    const actorUuid = '01930000-0000-7000-8000-000000000099'
+    getMock.mockImplementation(
+      (_url: string, opts?: { params?: URLSearchParams }) => {
+        if (opts?.params?.get('actorId')) {
+          return Promise.resolve({
+            data: { items: [], total: 0, page: 1, pageSize: 20 },
+          })
+        }
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, pageSize: 20 },
+        })
+      }
+    )
+
+    const screen = await renderAuditLogs({ actorId: actorUuid })
+    await expect
+      .element(
+        screen.getByText(/没有符合筛选条件的记录|No matching audit logs/)
+      )
+      .toBeVisible()
+    expect(lastRequestParams().get('actorId')).toBe(actorUuid)
+
+    await screen.getByRole('button', { name: /清除筛选|Clear filters/ }).click()
+    await expect
+      .element(screen.getByText(/暂无审计日志|No audit logs yet/))
+      .toBeVisible()
+    expect(searchState(screen).actorId).toBeUndefined()
+  })
+
+  it('applies faceted status filter and debounced global search', async () => {
+    getMock.mockResolvedValue({ data: makePage() })
+
+    const screen = await renderAuditLogs()
+    await expect.element(screen.getByText('alice_admin')).toBeVisible()
+
+    await screen
+      .getByRole('button', { name: /^状态$|^Status$/ })
+      .first()
+      .click()
+    await screen.getByRole('option', { name: /^失败$|^Failure$/ }).click()
+
+    await vi.waitFor(() => {
+      expect(lastRequestParams().getAll('status')).toEqual(['failure'])
+    })
+
+    const searchInput = screen.getByPlaceholder(
+      /搜索操作人、动作、资源或请求 ID|Search actor/
+    )
+    await searchInput.fill('req_audit_beta_02')
+
+    await vi.waitFor(() => {
+      expect(lastRequestParams().get('q')).toBe('req_audit_beta_02')
+    })
   })
 })

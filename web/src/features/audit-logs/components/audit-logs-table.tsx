@@ -86,6 +86,7 @@ export function AuditLogsTable({
       pageSize: pagination.pageSize,
       q: globalFilter || undefined,
       actor: search.actor,
+      actorId: search.actorId,
       status:
         search.status && search.status.length > 0 ? search.status : undefined,
       action:
@@ -104,6 +105,7 @@ export function AuditLogsTable({
     pagination.pageSize,
     globalFilter,
     search.actor,
+    search.actorId,
     search.status,
     search.action,
     search.resource,
@@ -137,6 +139,7 @@ export function AuditLogsTable({
   useEffect(() => {
     if (!normalizedRange.reversed) return
     navigate({
+      replace: true,
       search: (prev) => ({
         ...prev,
         page: undefined,
@@ -188,6 +191,7 @@ export function AuditLogsTable({
   const hasAnyFilter =
     Boolean(globalFilter) ||
     Boolean(search.actor) ||
+    Boolean(search.actorId) ||
     columnFilters.length > 0 ||
     hasDateFilter
 
@@ -211,6 +215,7 @@ export function AuditLogsTable({
         page: undefined,
         q: undefined,
         actor: undefined,
+        actorId: undefined,
         status: undefined,
         action: undefined,
         resource: undefined,
@@ -281,8 +286,8 @@ export function AuditLogsTable({
               className='h-8 w-40 sm:w-48'
             />
             <AuditDateRangeFilter
-              from={search.from}
-              to={search.to}
+              from={normalizedRange.from}
+              to={normalizedRange.to}
               onChange={({ from, to }) => {
                 navigate({
                   search: (prev) => ({
@@ -400,6 +405,7 @@ export function AuditLogsTable({
                   className='group/row cursor-pointer focus-visible:bg-muted/60 focus-visible:outline-hidden'
                   onClick={() => onSelectEntry(row.original)}
                   onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
                       onSelectEntry(row.original)

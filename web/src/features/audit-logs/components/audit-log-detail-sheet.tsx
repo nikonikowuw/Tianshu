@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next'
 import { Copy } from 'lucide-react'
-import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -12,6 +11,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { copyAuditText } from '../clipboard'
 import type { AuditLogItem } from '../types'
 import {
   formatAuditActionLabel,
@@ -32,30 +32,20 @@ export function AuditLogDetailSheet({
 }: AuditLogDetailSheetProps) {
   const { t, i18n } = useTranslation('audit')
 
-  const copyText = async (value: string) => {
-    if (!value) return
-    try {
-      await navigator.clipboard.writeText(value)
-      toast.success(t('copied'))
-    } catch {
-      // Clipboard API may be unavailable in restricted contexts.
-    }
-  }
-
   const formattedMetadata = entry
     ? JSON.stringify(entry.metadata ?? {}, null, 2)
     : '{}'
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className='flex w-full flex-col gap-0 p-0 sm:max-w-lg'>
+      <SheetContent className='flex w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-lg'>
         <SheetHeader className='border-b px-6 py-4'>
           <SheetTitle>{t('detail.title')}</SheetTitle>
           <SheetDescription>{t('detail.description')}</SheetDescription>
         </SheetHeader>
 
         {entry && (
-          <ScrollArea className='flex-1 px-6 py-4'>
+          <ScrollArea className='min-h-0 flex-1 px-6 py-4'>
             <div className='space-y-5'>
               <div className='flex flex-wrap items-center justify-between gap-2'>
                 <Badge
@@ -118,7 +108,7 @@ export function AuditLogDetailSheet({
                         size='icon'
                         className='size-6 shrink-0'
                         aria-label={t('rowActions.copyRequestId')}
-                        onClick={() => void copyText(entry.requestId)}
+                        onClick={() => void copyAuditText(entry.requestId, t)}
                       >
                         <Copy className='size-3.5' />
                       </Button>
@@ -148,7 +138,7 @@ export function AuditLogDetailSheet({
                     variant='outline'
                     size='sm'
                     className='h-7 px-2 text-xs'
-                    onClick={() => void copyText(formattedMetadata)}
+                    onClick={() => void copyAuditText(formattedMetadata, t)}
                   >
                     <Copy className='me-1.5 size-3' />
                     {t('detail.copyJson')}
