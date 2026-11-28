@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -303,6 +304,12 @@ func errorHandlerMiddleware(log *slog.Logger, bundle *i18n.Bundle) gin.HandlerFu
 					"code", appErr.Code,
 					"error", appErr.Cause,
 				)
+			}
+			// Surface the retry window uniformly so handlers never hand-assemble Retry-After.
+			if appErr.Status == http.StatusTooManyRequests {
+				if retry, exists := appErr.Params["retry_after"]; exists {
+					c.Header("Retry-After", fmt.Sprint(retry))
+				}
 			}
 			var translatedFields []apperr.FieldError
 			if appErr.Status == http.StatusUnprocessableEntity && len(appErr.Fields) > 0 {

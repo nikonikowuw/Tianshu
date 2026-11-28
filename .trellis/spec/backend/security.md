@@ -31,7 +31,7 @@
 - 并发刷新：同一 session 用行锁/`pg_advisory_xact_lock` 串行化；在 `replaced_at + 30~60s` 幂等宽限期内识别多标签页并发，避免互相误杀。
 - 登出：吊销当前 session 并清 Cookie；清 Cookie 的 Path/属性必须与设置时一致。
 - 改密：校验旧密码，在行锁事务（`SELECT ... FOR UPDATE`）内二次核验账号活跃态、当前会话仍活跃且密码哈希未被并发修改，随后写入新哈希并按 `revokeOtherSessions` 开关（默认 `true`）吊销除当前 session 外的所有会话；可选择轮换当前 session。
-- 个人中心与活跃会话端点（`/api/v1/profile*`）：除 JWT 验签与用户活跃态检查外，每次请求校验调用者 `session_id` 在 `user_sessions` 中仍处于未吊销且未过期状态（写操作在行锁事务内 `FOR SHARE` 校验），防止已被踢下线的旧设备在 Access Token 剩余窗口内反踢合法会话或篡改资料/密码。
+- 个人中心与活跃会话端点（`/api/v1/profile*`）：除 JWT 验签与用户活跃态检查外，每次请求校验调用者 `session_id` 在 `user_sessions` 中仍处于未吊销且未过期状态（写操作在行锁事务内 `FOR SHARE` 校验），防止已被踢下线的旧设备在 Access Token 剩余窗口内反踢合法会话或篡改资料/密码。身份恢复端点 `GET /api/v1/auth/me` 同样校验 `session_id` 活跃态（不活跃返回 `401 AUTH_UNAUTHORIZED`），避免被踢下线设备在残余窗口内继续以登录态恢复会话。
 - 禁用/软删除用户/管理员重置他人密码：显式吊销该用户全部 session（软删除不触发外键 `ON DELETE CASCADE`）；若存在物理清理，再由外键级联清理 `user_sessions`。
 - **用户管理提权与自我保护**：只有当前持有 `super_admin` 角色的操作者可以授予/撤销 `super_admin` 角色，以及编辑、禁用或删除 `super_admin` 账号（否则返回 `403 USERS_SUPER_ADMIN_PROTECTED`）；操作者禁止删除自身、禁用自身或移除自身的 `super_admin` 角色（`409 USERS_SELF_OPERATION_FORBIDDEN`）。用户管理写端点（`POST /api/v1/users`、`PATCH /api/v1/users/:id`、`DELETE /api/v1/users/:id`）均在咨询锁（`usersSuperAdminGuardKey`）串行化事务内校验操作者账号未软删除（`401`）、处于 `active` 状态（`403 AUTH_ACCOUNT_DISABLED`）且当前 `session_id` 仍活跃（`FOR SHARE`，`401`），防止被禁用或被踢下线的管理员在 Access Token 残余窗口内自我解禁、创建后门 `super_admin` 或篡改他人账号，并消除 `POST /api/v1/users` 授予 `super_admin` 时的并发降权 TOCTOU 竞态。
 - 会话列表只返回当前用户自己的记录；`id`、IP、UA、最近使用时间、当前设备标记；不返回 token/hash。
@@ -95,6 +95,7 @@
 ## 8. 审计与日志
 
 - 审计记录登录成功/失败、登出、Setup、用户/角色写操作、改密、文件上传/删除等关键事件。
+- **`auth` 模块审计动作清单**（已发布，供审计检索/告警下游消费）：`auth.login`（成功与失败，失败 `status=failure` 且 `metadata.reason` 取值 `invalid_credentials`/`account_disabled`/`rate_limited`）、`auth.logout`（成功）、`auth.refresh`（仅在账号被禁用的刷新失败时写入，`metadata.reason=account_disabled`）、`auth.refresh_replay`（检测到超出宽限期的令牌重放并吊销会话时写入）。新增或改名须同轮次更新本清单。
 - 字段至少：`actor_id`、`actor_username`、`action`、`resource`、`resource_id`、`status`、`ip_address`、`user_agent`、`request_id`、`metadata`。
 - `actor_id` 不要用 `ON DELETE CASCADE`；用 `SET NULL` 或干脆不加 FK，保留 `actor_username` 快照。
 - 审计日志只读；不提供修改/删除 API。

@@ -121,9 +121,17 @@ func TestConfigValidateBranches(t *testing.T) {
 		}
 
 		cfg.Database.DSN = testProdDatabaseDSN
+		cfg.Auth.CookieSecure = true
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("expected valid production config, got %v", err)
 		}
+
+		// Production must reject a non-Secure refresh cookie.
+		cfg.Auth.CookieSecure = false
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected production validation error for auth.cookie_secure=false")
+		}
+		cfg.Auth.CookieSecure = true
 	})
 
 	t.Run("rejects weak/whitespace jwt_secret, prod default secrets, wildcard CORS, negative audit retention, and unknown cache driver", func(t *testing.T) {
@@ -212,6 +220,7 @@ func TestStorageValidation(t *testing.T) {
 
 		cfg.Storage.S3.AccessKey = "prod-access-key"
 		cfg.Storage.S3.SecretKey = "prod-secret-key"
+		cfg.Auth.CookieSecure = true
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("expected strong production s3 config to validate, got %v", err)
 		}

@@ -26,6 +26,9 @@ import (
 	"tianshu/internal/shared/apperr"
 )
 
+// testRefreshCookiePath mirrors the cookie Path injected by internal/app in production.
+const testRefreshCookiePath = "/api/v1/auth"
+
 func newTestAuthEngine(t *testing.T, svc *Service, allowedOrigins []string) *gin.Engine {
 	t.Helper()
 	bundle, err := i18n.NewBundle()
@@ -46,7 +49,7 @@ func newTestAuthEngine(t *testing.T, svc *Service, allowedOrigins []string) *gin
 	}
 
 	apiV1 := engine.Group("/api/v1")
-	h := NewHandler(svc, allowedOrigins)
+	h := NewHandler(svc, allowedOrigins, testRefreshCookiePath)
 	h.RegisterPublicRoutes(apiV1)
 	authed := apiV1.Group("")
 	authed.Use(RequireAuth(svc.jwt))
@@ -101,7 +104,7 @@ func assertRefreshCookieCleared(t *testing.T, rec *httptest.ResponseRecorder) {
 	if ck == nil {
 		t.Fatalf("expected clearing Set-Cookie for %s, got none", refreshCookieName)
 	}
-	if ck.Value != "" || ck.MaxAge >= 0 || ck.Path != refreshCookiePath || !ck.HttpOnly {
+	if ck.Value != "" || ck.MaxAge >= 0 || ck.Path != testRefreshCookiePath || !ck.HttpOnly {
 		t.Fatalf("invalid cleared refresh cookie: %+v", ck)
 	}
 }
@@ -139,7 +142,7 @@ func TestAuthHTTPRoutesContract(t *testing.T) {
 	}
 
 	refreshCookie := findRefreshCookie(recLogin)
-	if refreshCookie == nil || !refreshCookie.HttpOnly || refreshCookie.Path != refreshCookiePath || refreshCookie.MaxAge <= 0 {
+	if refreshCookie == nil || !refreshCookie.HttpOnly || refreshCookie.Path != testRefreshCookiePath || refreshCookie.MaxAge <= 0 {
 		t.Fatalf("invalid refresh cookie: %+v", refreshCookie)
 	}
 
@@ -271,7 +274,7 @@ func TestRequireSameOriginHTTPSProtection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	cookie := &http.Cookie{Name: refreshCookieName, Value: loginRes.RefreshToken, Path: refreshCookiePath}
+	cookie := &http.Cookie{Name: refreshCookieName, Value: loginRes.RefreshToken, Path: testRefreshCookiePath}
 
 	// Downgraded http Origin must be rejected when CookieSecure=true.
 	reqHTTP := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
@@ -443,7 +446,7 @@ func TestAuthHTTPValidationDisabledCookieAndEmptySlices(t *testing.T) {
 		reqRef := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 		reqRef.Host = "tianshu.local"
 		reqRef.Header.Set("Origin", "http://tianshu.local")
-		reqRef.AddCookie(&http.Cookie{Name: refreshCookieName, Value: loginRes.RefreshToken, Path: refreshCookiePath})
+		reqRef.AddCookie(&http.Cookie{Name: refreshCookieName, Value: loginRes.RefreshToken, Path: testRefreshCookiePath})
 		recRef := httptest.NewRecorder()
 		engine.ServeHTTP(recRef, reqRef)
 		assertErrorContract(t, recRef, http.StatusForbidden, ErrCodeAccountDisabled)
@@ -468,7 +471,7 @@ func TestAuthHTTPValidationDisabledCookieAndEmptySlices(t *testing.T) {
 		req500 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 		req500.Host = "tianshu.local"
 		req500.Header.Set("Origin", "http://tianshu.local")
-		req500.AddCookie(&http.Cookie{Name: refreshCookieName, Value: loginRes.RefreshToken, Path: refreshCookiePath})
+		req500.AddCookie(&http.Cookie{Name: refreshCookieName, Value: loginRes.RefreshToken, Path: testRefreshCookiePath})
 		rec500 := httptest.NewRecorder()
 		engine.ServeHTTP(rec500, req500)
 		assertErrorContract(t, rec500, http.StatusInternalServerError, apperr.CodeInternal)
@@ -481,7 +484,7 @@ func TestAuthHTTPValidationDisabledCookieAndEmptySlices(t *testing.T) {
 		req401 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 		req401.Host = "tianshu.local"
 		req401.Header.Set("Origin", "http://tianshu.local")
-		req401.AddCookie(&http.Cookie{Name: refreshCookieName, Value: "unknown-token", Path: refreshCookiePath})
+		req401.AddCookie(&http.Cookie{Name: refreshCookieName, Value: "unknown-token", Path: testRefreshCookiePath})
 		rec401 := httptest.NewRecorder()
 		engine.ServeHTTP(rec401, req401)
 		assertErrorContract(t, rec401, http.StatusUnauthorized, apperr.CodeUnauthorized)
@@ -547,7 +550,7 @@ func newLoginOnlyTestEngine(t *testing.T, svc *Service) *gin.Engine {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 
-	h := NewHandler(svc, nil)
+	h := NewHandler(svc, nil, testRefreshCookiePath)
 	engine.POST("/api/v1/auth/login", h.login)
 	return engine
 }

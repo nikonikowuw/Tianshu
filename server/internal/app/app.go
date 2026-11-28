@@ -32,6 +32,9 @@ import (
 	"tianshu/migrations"
 )
 
+// apiV1Prefix is the single source of truth for the public API version prefix.
+const apiV1Prefix = "/api/v1"
+
 // App is the single composition root wiring platform infrastructure, modules, and HTTP server.
 type App struct {
 	cfg              config.Config
@@ -242,7 +245,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		if cfg.CORS.Enabled {
 			authAllowedOrigins = cfg.CORS.AllowedOrigins
 		}
-		authHandler = auth.NewHandler(authSvc, authAllowedOrigins)
+		authHandler = auth.NewHandler(authSvc, authAllowedOrigins, apiV1Prefix+"/auth")
 
 		dashboardSvc := dashboard.NewService(pool)
 		dashboardHandler = dashboard.NewHandler(dashboardSvc)

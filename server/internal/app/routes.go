@@ -32,7 +32,7 @@ func (a *App) registerRoutes() {
 	}
 	httpserver.RegisterHealthRoutes(a.engine, checks)
 
-	apiV1 := a.engine.Group("/api/v1")
+	apiV1 := a.engine.Group(apiV1Prefix)
 	if a.cfg.Server.MaxRequestBodyBytes > 0 {
 		apiV1.Use(maxRequestBodyMiddleware(a.cfg.Server.MaxRequestBodyBytes))
 	}

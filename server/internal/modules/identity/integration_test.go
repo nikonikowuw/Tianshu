@@ -899,7 +899,7 @@ func TestProfileAvatarLockPasswordAndSessionInvalidationPostgres(t *testing.T) {
 	}
 
 	// /auth/me includes avatarUrl.
-	me, err := authSvc.Me(ctx, user.ID)
+	me, err := authSvc.Me(ctx, user.ID, claims1.SessionID)
 	if err != nil {
 		t.Fatalf("Me: %v", err)
 	}
