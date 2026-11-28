@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
 
@@ -57,7 +58,7 @@ func (s *Service) ListMenuTree(ctx context.Context) ([]Menu, error) {
 	if err != nil {
 		return nil, apperr.Internal(fmt.Errorf("list menus: %w", err))
 	}
-	return buildMenuTree(items), nil
+	return buildMenuTree(items, s.log), nil
 }
 
 // ListUserMenuTree returns the active, visible navigation tree filtered by userID's permissions.
@@ -75,7 +76,7 @@ func (s *Service) ListUserMenuTree(ctx context.Context, userID uuid.UUID) ([]Men
 	if err != nil {
 		return nil, apperr.Internal(fmt.Errorf("list menus for user: %w", err))
 	}
-	tree := buildMenuTree(items)
+	tree := buildMenuTree(items, s.log)
 	return filterUserMenuTree(tree, permSet), nil
 }
 
@@ -98,15 +99,18 @@ func (s *Service) CreateMenu(ctx context.Context, input CreateMenuInput) (Menu, 
 	if !isValidMenuType(input.Type) {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "type", Message: ErrCodeInvalidMenuType})
 	}
-	if n := utf8.RuneCountInString(title); n < 1 || n > maxMenuTitleRunes {
+	if n := utf8.RuneCountInString(title); !isValidText(title) || n < 1 || n > maxMenuTitleRunes {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "title", Message: ErrCodeInvalidMenuTitle})
 	}
-	if input.Type == MenuTypeMenu && (path == "" || !strings.HasPrefix(path, "/") || len(path) > maxMenuPathLen) {
+	switch {
+	case !isValidText(path):
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "path", Message: ErrCodeInvalidMenuPath})
-	} else if path != "" && (!strings.HasPrefix(path, "/") || len(path) > maxMenuPathLen) {
+	case input.Type == MenuTypeMenu && (path == "" || !strings.HasPrefix(path, "/") || len(path) > maxMenuPathLen):
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "path", Message: ErrCodeInvalidMenuPath})
+	case path != "" && (!strings.HasPrefix(path, "/") || len(path) > maxMenuPathLen):
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "path", Message: ErrCodeInvalidMenuPath})
 	}
-	if utf8.RuneCountInString(icon) > maxMenuIconLen {
+	if !isValidText(icon) || utf8.RuneCountInString(icon) > maxMenuIconLen {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "icon", Message: ErrCodeInvalidMenuIcon})
 	}
 	if status != MenuStatusActive && status != MenuStatusDisabled {
@@ -190,18 +194,22 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "type", Message: ErrCodeInvalidMenuType})
 	}
 	if input.Title != nil {
-		if utf8.RuneCountInString(strings.TrimSpace(*input.Title)) > maxMenuTitleRunes {
+		trimmed := strings.TrimSpace(*input.Title)
+		if !isValidText(trimmed) || utf8.RuneCountInString(trimmed) > maxMenuTitleRunes {
 			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "title", Message: ErrCodeInvalidMenuTitle})
 		}
 	}
 	if input.Path != nil {
 		p := strings.TrimSpace(*input.Path)
-		if p != "" && (!strings.HasPrefix(p, "/") || len(p) > maxMenuPathLen) {
+		if !isValidText(p) || (p != "" && (!strings.HasPrefix(p, "/") || len(p) > maxMenuPathLen)) {
 			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "path", Message: ErrCodeInvalidMenuPath})
 		}
 	}
-	if input.Icon != nil && utf8.RuneCountInString(strings.TrimSpace(*input.Icon)) > maxMenuIconLen {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "icon", Message: ErrCodeInvalidMenuIcon})
+	if input.Icon != nil {
+		ic := strings.TrimSpace(*input.Icon)
+		if !isValidText(ic) || utf8.RuneCountInString(ic) > maxMenuIconLen {
+			fieldErrs = append(fieldErrs, apperr.FieldError{Field: "icon", Message: ErrCodeInvalidMenuIcon})
+		}
 	}
 	if input.Status != nil && *input.Status != MenuStatusActive && *input.Status != MenuStatusDisabled {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "status", Message: ErrCodeInvalidMenuStatus})
@@ -330,7 +338,11 @@ func (s *Service) UpdateMenu(ctx context.Context, input UpdateMenuInput) (Menu, 
 					return menuCycleDetectedError()
 				}
 				if !isValidMenuPlacement(&parentNode.Type, finalType) {
-					return apperr.Validation([]apperr.FieldError{{Field: "parentId", Message: ErrCodeMenuInvalidParent}})
+					errField := "parentId"
+					if !input.ClearParent && input.ParentID == nil {
+						errField = "type"
+					}
+					return apperr.Validation([]apperr.FieldError{{Field: errField, Message: ErrCodeMenuInvalidParent}})
 				}
 			}
 		}
@@ -440,7 +452,7 @@ func (s *Service) ReorderMenus(ctx context.Context, input ReorderMenusInput) ([]
 		if err != nil {
 			return apperr.Internal(fmt.Errorf("reload menu tree: %w", err))
 		}
-		result = buildMenuTree(updatedAll)
+		result = buildMenuTree(updatedAll, s.log)
 		return nil
 	})
 	if err != nil {
@@ -496,7 +508,7 @@ func (s *Service) matchesDefaultMenuTitle(titleKey, candidate string) bool {
 	return false
 }
 
-func buildMenuTree(flat []Menu) []Menu {
+func buildMenuTree(flat []Menu, log *slog.Logger) []Menu {
 	byID := make(map[uuid.UUID]*Menu, len(flat))
 	order := make([]uuid.UUID, 0, len(flat))
 	for i := range flat {
@@ -519,11 +531,28 @@ func buildMenuTree(flat []Menu) []Menu {
 		roots = append(roots, *node)
 	}
 
+	visiting := make(map[uuid.UUID]struct{}, len(flat))
 	var populate func(n Menu) Menu
 	populate = func(n Menu) Menu {
+		if _, seen := visiting[n.ID]; seen {
+			if log != nil {
+				log.Error("cyclic menu hierarchy detected while building tree", "menu_id", n.ID)
+			}
+			n.Children = make([]Menu, 0)
+			return n
+		}
+		visiting[n.ID] = struct{}{}
+		defer delete(visiting, n.ID)
+
 		kids := childrenMap[n.ID]
 		outKids := make([]Menu, 0, len(kids))
 		for _, k := range kids {
+			if _, seen := visiting[k.ID]; seen {
+				if log != nil {
+					log.Error("cyclic menu edge skipped while building tree", "parent_id", n.ID, "child_id", k.ID)
+				}
+				continue
+			}
 			outKids = append(outKids, populate(k))
 		}
 		n.Children = outKids

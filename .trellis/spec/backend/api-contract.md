@@ -209,10 +209,10 @@
 
 - 查询参数：
   - `page`（默认 `1`）、`pageSize`（默认 `20`，范围 `10..100`）
-  - `q`（最大 100 字符）：大小写不敏感 `ILIKE` 匹配 `code`、`name`、`description`，并匹配系统内置角色的中英译名/译述
+  - `q`（最大 100 字符，拒绝 NUL 字节与非法 UTF-8）：大小写不敏感 `ILIKE` 匹配 `code`、`name`、`description`，并匹配系统内置角色的中英译名/译述
   - `isSystem`（严格布尔值 `true` / `false`，非法值返 `422`）
   - `sort`（白名单：`created_at` / `updated_at` / `code` / `name`）、`order`（`asc` / `desc`）；默认排序：`is_system DESC, created_at DESC, id DESC`（按 `name` 排序时系统内置角色按当前语言译名参与排序）
-- 响应 `200`：`Paginated<RoleDTO>`，`RoleDTO` 字段：`id`, `code`, `name`, `description`（系统角色按 `Accept-Language` 翻译）, `isSystem`, `userCount`, `permissionCount`, `permissions`（`string[]`，空为 `[]`）, `createdBy` / `updatedBy`（UUID 字符串或 `null`）, `createdAt`, `updatedAt`（RFC3339）。
+- 响应 `200`：`Paginated<RoleDTO>`，`RoleDTO` 字段：`id`, `code`, `name`, `description`（系统角色按 `Accept-Language` 翻译）, `isSystem`, `userCount`, `permissionCount`, `permissions`（`string[]`，已去重按字典序升序返回，空为 `[]`）, `createdBy` / `updatedBy`（UUID 字符串或 `null`）, `createdAt`, `updatedAt`（RFC3339）。
 
 ### `GET /api/v1/roles/:id`（`roles:read`）
 
@@ -269,12 +269,14 @@
 
 ## 12. Menus 端点契约
 
-- `GET /api/v1/menus/tree`（`menus:read` 或 `roles:read`）：返回完整菜单树 `{ "items": [MenuTreeNode...] }`（按 `sortOrder ASC, createdAt ASC` 排序）。
-- `GET /api/v1/menus/user`（已登录即可）：返回当前用户有权限且 `visible=true`、`status='active'` 的导航菜单树 `{ "items": [MenuTreeNode...] }`（自动裁剪无可见子项的空目录）。
+- `GET /api/v1/menus/tree`（`menus:read` 或 `roles:read`）：返回完整菜单树 `{ "items": [MenuNodeDTO...] }`（按 `sortOrder ASC, createdAt ASC, id ASC` 排序）。
+- `GET /api/v1/menus/user`（已登录即可）：返回当前用户有权限且 `visible=true`、`status='active'` 的导航菜单树 `{ "items": [MenuNodeDTO...] }`（自动裁剪无可见子项的空目录与 `button` 节点）。
 - `POST /api/v1/menus`（`menus:create`）：新增目录/菜单/按钮节点，返回 `201 MenuNodeDTO`。
-- `PATCH /api/v1/menus/:id`（`menus:update`）：编辑节点、调整 `parentId` 与 `sortOrder`，返回 `200 MenuNodeDTO`。
-- `PUT /api/v1/menus/reorder`（`menus:update`）：批量调整菜单节点父级与排序 `{ "items": [{ "id", "parentId", "sortOrder" }] }`，返回 `200 { "items": [MenuTreeNode...] }`。
+- `PATCH /api/v1/menus/:id`（`menus:update`）：编辑节点、调整 `parentId` 与 `sortOrder`，返回 `200 MenuNodeDTO`。系统菜单不可修改 `code`/`type`（`409 MENUS_SYSTEM_IMMUTABLE`），自定义菜单不可修改 `code`（`422 code: ACCESS_MENU_CODE_IMMUTABLE`）。
+- `PUT /api/v1/menus/reorder`（`menus:update`）：批量调整菜单节点父级与排序 `{ "items": [{ "id", "parentId", "sortOrder" }] }`（1–500 项），返回 `200 { "items": [MenuNodeDTO...] }`。
 - `DELETE /api/v1/menus/:id`（`menus:delete`）：删除自定义叶子菜单节点，返回 `204`。
+- `MenuNodeDTO` 字段：`id`、`parentId`（UUID 或 `null`）、`type`（`directory` / `menu` / `button`）、`code`、`title`（系统菜单优先按 `Accept-Language` 翻译）、`path`、`icon`、`permissionCode`、`sortOrder`、`visible`、`status`（`active` / `disabled`）、`isSystem`、`children`（`MenuNodeDTO[]`，空为 `[]`）、`createdBy` / `updatedBy`（UUID 或 `null`）、`createdAt` / `updatedAt`（RFC3339）。
+- `access` 模块字段级校验键（通过 `422 VALIDATION_FAILED` 的 `errors[].message` 翻译返回）：`ACCESS_INVALID_ROLE_CODE`、`ACCESS_INVALID_ROLE_NAME`、`ACCESS_INVALID_ROLE_DESCRIPTION`、`ACCESS_INVALID_PERMISSION_CODE`、`ACCESS_INVALID_NUMBER`、`ACCESS_INVALID_BOOL`、`ACCESS_INVALID_MENU_CODE`、`ACCESS_MENU_CODE_IMMUTABLE`、`ACCESS_INVALID_MENU_TYPE`、`ACCESS_INVALID_MENU_TITLE`、`ACCESS_INVALID_MENU_PATH`、`ACCESS_INVALID_MENU_ICON`、`ACCESS_INVALID_MENU_STATUS`、`ACCESS_DUPLICATE_MENU_ID`、`MENUS_INVALID_PARENT`。
 
 ## 13. Files 端点契约
 

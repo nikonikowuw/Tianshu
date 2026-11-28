@@ -199,9 +199,10 @@ flowchart TD
   - `GET /api/v1/permissions`（`roles:read`）：返回全部声明式权限码目录（按模块分组，名称与描述根据 `Accept-Language` 实时翻译）。
   - `GET /api/v1/roles`（`roles:read`）：分页查询角色列表（含关联用户数、权限数、是否系统角色及审计字段）。
   - `POST /api/v1/roles`（`roles:create`）：新建自定义角色并勾选权限码集合。
-  - `PATCH /api/v1/roles/:id`（`roles:update`）：修改角色信息与权限码集合（`super_admin` 禁止修改 code 或剥夺全量权限），变更后失效相关用户权限缓存。
+  - `PATCH /api/v1/roles/:id`（`roles:update`）：修改自定义角色信息与权限码集合（系统内置角色 `super_admin` 完全禁止修改或删除，返回 `409 ROLES_SYSTEM_IMMUTABLE`），权限变更后在事务提交后失效相关用户权限缓存。
   - `DELETE /api/v1/roles/:id`（`roles:delete`）：删除自定义角色（系统角色或仍绑定用户的角色按规则拒绝删除并返回清晰提示）。
-  - 前端 `/roles` 页面：DataTable 列表 + 按模块分组的权限矩阵勾选弹窗。
+  - `GET /api/v1/menus/user` & `/api/v1/menus/*`（`menus:read` / `menus:create` / `menus:update` / `menus:delete`）：动态菜单树管理与按用户权限裁剪的侧边栏菜单树（防成环、批量排序、系统菜单保护）。
+  - 前端 `/roles` 与 `/menus` 页面：DataTable 列表 + 按模块分组的权限矩阵勾选弹窗，以及动态菜单树配置与拖拽/排序页面。
 - **验收标准**：
   - 切换前端语言（中 ↔ 英）后，权限矩阵中的权限名称与描述同步切换语言；
   - 为普通角色勾选或取消 `users:delete` / `users:update` 等细粒度权限后，该角色下用户的接口鉴权立即生效。

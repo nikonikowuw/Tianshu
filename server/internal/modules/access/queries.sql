@@ -32,24 +32,23 @@ INSERT INTO user_roles (user_id, role_id)
 VALUES ($1, $2)
 ON CONFLICT (user_id, role_id) DO NOTHING;
 
--- name: ListUserRoleCodes :many
-SELECT r.code
-FROM roles r
-INNER JOIN user_roles ur ON ur.role_id = r.id
+-- name: ListUserRolesAndPermissions :many
+SELECT
+    r.code AS role_code,
+    COALESCE(rp.permission_code, '')::text AS permission_code
+FROM user_roles ur
+INNER JOIN roles r ON r.id = ur.role_id
+LEFT JOIN role_permissions rp ON rp.role_id = r.id
 WHERE ur.user_id = $1
-ORDER BY r.code ASC;
+ORDER BY r.code ASC, permission_code ASC;
 
--- name: ListUserPermissions :many
-SELECT DISTINCT rp.permission_code
-FROM role_permissions rp
-INNER JOIN user_roles ur ON ur.role_id = rp.role_id
-WHERE ur.user_id = $1
-ORDER BY rp.permission_code ASC;
-
--- name: ListRoleUserIDs :many
+-- name: ListRoleUserIDsBatch :many
 SELECT user_id
 FROM user_roles
-WHERE role_id = $1;
+WHERE role_id = @role_id::uuid
+  AND (@after_user_id::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR user_id > @after_user_id::uuid)
+ORDER BY user_id ASC
+LIMIT @batch_limit;
 
 -- name: CountRoles :one
 SELECT count(*)::bigint
@@ -75,8 +74,7 @@ SELECT
     r.updated_by,
     r.created_at,
     r.updated_at,
-    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count,
-    (SELECT count(*)::bigint FROM role_permissions rp WHERE rp.role_id = r.id) AS permission_count
+    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count
 FROM roles r
 WHERE (@q::text = '' OR (
         r.code ILIKE '%' || @q::text || '%' ESCAPE '\' OR
@@ -113,8 +111,7 @@ SELECT
     r.updated_by,
     r.created_at,
     r.updated_at,
-    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count,
-    (SELECT count(*)::bigint FROM role_permissions rp WHERE rp.role_id = r.id) AS permission_count
+    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count
 FROM roles r
 WHERE r.id = $1;
 
@@ -205,7 +202,8 @@ WHERE id = $1;
 -- name: ListRoleOptions :many
 SELECT id, code, name, name_key, is_system
 FROM roles
-ORDER BY is_system DESC, code ASC;
+ORDER BY is_system DESC, code ASC
+LIMIT 1000;
 
 -- name: ListRolesByIDs :many
 SELECT id, code, name, name_key, is_system
@@ -226,13 +224,17 @@ WHERE user_id = $1;
 -- name: ListUserIDsByRoleIDs :many
 SELECT DISTINCT user_id
 FROM user_roles
-WHERE role_id = ANY(@role_ids::uuid[]);
+WHERE role_id = ANY(@role_ids::uuid[])
+ORDER BY user_id ASC
+LIMIT 10000;
 
 -- name: ListUserIDsByRoleCode :many
 SELECT ur.user_id
 FROM user_roles ur
 INNER JOIN roles r ON r.id = ur.role_id
-WHERE r.code = $1;
+WHERE r.code = $1
+ORDER BY ur.user_id ASC
+LIMIT 1000;
 
 -- name: EnsureSystemMenu :one
 INSERT INTO menus (
@@ -279,7 +281,8 @@ SELECT
     created_at,
     updated_at
 FROM menus
-ORDER BY sort_order ASC, created_at ASC, id ASC;
+ORDER BY sort_order ASC, created_at ASC, id ASC
+LIMIT 2000;
 
 -- name: GetMenuByID :one
 SELECT

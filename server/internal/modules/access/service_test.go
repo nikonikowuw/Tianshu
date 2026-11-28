@@ -120,8 +120,12 @@ func (f *fakeStore) AssignUserRole(_ context.Context, userID, roleID uuid.UUID) 
 	return nil
 }
 
-func (f *fakeStore) ListUserRoleCodes(_ context.Context, userID uuid.UUID) ([]string, error) {
+func (f *fakeStore) GetUserAccessData(_ context.Context, userID uuid.UUID) (UserAccess, error) {
 	f.listRolesCalls++
+	f.listPermsCalls++
+	if f.onListPerms != nil {
+		f.onListPerms()
+	}
 	var codes []string
 	for code, roleID := range f.rolesByCode {
 		if _, ok := f.userRoles[userID][roleID]; ok {
@@ -129,14 +133,7 @@ func (f *fakeStore) ListUserRoleCodes(_ context.Context, userID uuid.UUID) ([]st
 		}
 	}
 	slices.Sort(codes)
-	return codes, nil
-}
 
-func (f *fakeStore) ListUserPermissions(_ context.Context, userID uuid.UUID) ([]string, error) {
-	f.listPermsCalls++
-	if f.onListPerms != nil {
-		f.onListPerms()
-	}
 	seen := make(map[string]struct{})
 	for roleID := range f.userRoles[userID] {
 		for code := range f.rolePerms[roleID] {
@@ -148,7 +145,10 @@ func (f *fakeStore) ListUserPermissions(_ context.Context, userID uuid.UUID) ([]
 		perms = append(perms, code)
 	}
 	slices.Sort(perms)
-	return perms, nil
+	return UserAccess{
+		Roles:       nonNilStrings(codes),
+		Permissions: perms,
+	}, nil
 }
 
 func (f *fakeStore) ListRoleUserIDs(_ context.Context, roleID uuid.UUID) ([]uuid.UUID, error) {
@@ -419,12 +419,12 @@ func (f *fakeStore) ListUserIDsByRoleIDs(_ context.Context, roleIDs []uuid.UUID)
 	return out, nil
 }
 
-func (f *fakeStore) ListUserIDsByRoleCode(_ context.Context, code string) ([]uuid.UUID, error) {
+func (f *fakeStore) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error) {
 	roleID, ok := f.rolesByCode[code]
 	if !ok {
-		return nil, nil
+		return make([]uuid.UUID, 0), nil
 	}
-	return f.ListRoleUserIDs(context.Background(), roleID)
+	return f.ListRoleUserIDs(ctx, roleID)
 }
 
 func (f *fakeStore) EnsureSystemMenu(_ context.Context, id uuid.UUID, parentID *uuid.UUID, def SystemMenuDef) (uuid.UUID, error) {
@@ -774,7 +774,7 @@ func TestRoleCRUDInvariantsAndCacheInvalidation(t *testing.T) {
 	// Localized search matches super_admin by translated Chinese name.
 	res, err := svc.ListRoles(t.Context(), RoleListFilter{
 		Pagination: pagination.Normalize(1, 20),
-		Q:          "超级管理员",
+		Q:          bundle.Translate(i18n.LangZhCN, "ACCESS_ROLE_SUPER_ADMIN_NAME", nil),
 	})
 	if err != nil {
 		t.Fatalf("ListRoles() error = %v", err)
@@ -978,6 +978,59 @@ func TestListRolesSortByNameUsesLocalizedSystemRoleName(t *testing.T) {
 	wantCodes := []string{"alpha", RoleCodeSuperAdmin, "zeta"}
 	if !slices.Equal(gotCodes, wantCodes) {
 		t.Fatalf("sort=name asc codes = %v, want %v", gotCodes, wantCodes)
+	}
+}
+
+func TestRoleValidationRejectsNulAndInvalidUTF8AndNonNilEmptySlices(t *testing.T) {
+	s := newFakeStore()
+	svc := newServiceWithStore(s, ServiceDeps{
+		Tx:  fakeTxRunner{},
+		Log: logger.New("test", "error", io.Discard),
+	})
+	if err := svc.SyncCatalog(t.Context()); err != nil {
+		t.Fatalf("SyncCatalog() error = %v", err)
+	}
+
+	if _, err := svc.ListRoles(t.Context(), RoleListFilter{Q: "bad\x00query"}); err == nil {
+		t.Fatal("expected 422 for NUL byte in ListRoles.Q")
+	} else {
+		assertAppErrCode(t, err, apperr.CodeValidationFailed)
+	}
+
+	if _, err := svc.CreateRole(t.Context(), CreateRoleInput{
+		Code:        "valid_code",
+		Name:        "Bad\x00Name",
+		Description: "Bad\xffDesc",
+	}); err == nil {
+		t.Fatal("expected 422 for NUL/invalid UTF-8 in CreateRole")
+	} else {
+		assertAppErrCode(t, err, apperr.CodeValidationFailed)
+	}
+
+	created, err := svc.CreateRole(t.Context(), CreateRoleInput{
+		Code: "clean_role",
+		Name: "Clean Role",
+	})
+	if err != nil {
+		t.Fatalf("CreateRole(clean_role) error = %v", err)
+	}
+	badDesc := "bad\x00desc"
+	if _, err := svc.UpdateRole(t.Context(), UpdateRoleInput{
+		RoleID:      created.ID,
+		Description: &badDesc,
+	}); err == nil {
+		t.Fatal("expected 422 for NUL in UpdateRole description")
+	} else {
+		assertAppErrCode(t, err, apperr.CodeValidationFailed)
+	}
+
+	idsByIDs, err := svc.ListUserIDsByRoleIDs(t.Context(), []uuid.UUID{created.ID})
+	if err != nil || idsByIDs == nil || len(idsByIDs) != 0 {
+		t.Fatalf("ListUserIDsByRoleIDs empty = (%#v, %v), want non-nil empty slice", idsByIDs, err)
+	}
+	idsByCode, err := svc.ListUserIDsByRoleCode(t.Context(), created.Code)
+	if err != nil || idsByCode == nil || len(idsByCode) != 0 {
+		t.Fatalf("ListUserIDsByRoleCode empty = (%#v, %v), want non-nil empty slice", idsByCode, err)
 	}
 }
 

@@ -38,6 +38,7 @@ const (
 // Internal store sentinels translated by Service into apperr.Error.
 var (
 	errRoleNotFound      = errors.New("role not found")
+	errUserNotFound      = errors.New("user not found")
 	errRoleCodeConflict  = errors.New("role code already exists")
 	errMenuNotFound      = errors.New("menu not found")
 	errMenuCodeConflict  = errors.New("menu code already exists")

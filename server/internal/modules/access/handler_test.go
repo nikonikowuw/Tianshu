@@ -116,22 +116,13 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 
 	t.Run("unauthenticated and forbidden requests are rejected", func(t *testing.T) {
 		rec := doJSONReq(engine, http.MethodGet, "/api/v1/permissions", "", "", "")
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401", rec.Code)
-		}
-		if rec.Header().Get("X-Request-Id") == "" {
-			t.Fatal("missing X-Request-Id header")
-		}
+		assertErrorContract(t, rec, http.StatusUnauthorized, apperr.CodeUnauthorized)
 
 		rec = doJSONReq(engine, http.MethodGet, "/api/v1/permissions", "noperm", "", "")
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("status = %d, want 403", rec.Code)
-		}
+		assertErrorContract(t, rec, http.StatusForbidden, apperr.CodeForbidden)
 
 		rec = doJSONReq(engine, http.MethodPost, "/api/v1/roles", "viewer", "en-US", `{"code":"blocked","name":"Blocked"}`)
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("viewer POST /roles status = %d, want 403", rec.Code)
-		}
+		assertErrorContract(t, rec, http.StatusForbidden, apperr.CodeForbidden)
 	})
 
 	t.Run("GET /permissions localizes group labels and permission copy by Accept-Language", func(t *testing.T) {
@@ -157,7 +148,9 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 		if err := json.Unmarshal(recEn.Body.Bytes(), &enResp); err != nil {
 			t.Fatalf("decode en-US response: %v", err)
 		}
-		if enResp.Groups[0].Label != "Dashboard" || enResp.Groups[0].Permissions[0].Name != "View Dashboard" {
+		wantEnLabel := bundle.Translate(i18n.LangEnUS, "ACCESS_MODULE_DASHBOARD", nil)
+		wantEnPerm := bundle.Translate(i18n.LangEnUS, "ACCESS_PERM_DASHBOARD_READ_NAME", nil)
+		if enResp.Groups[0].Label != wantEnLabel || enResp.Groups[0].Permissions[0].Name != wantEnPerm {
 			t.Fatalf("unexpected en-US permission catalog: %+v", enResp)
 		}
 	})
@@ -182,7 +175,8 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 		if err := json.Unmarshal(recEn.Body.Bytes(), &enOpts); err != nil {
 			t.Fatalf("decode en-US options: %v", err)
 		}
-		if len(enOpts.Items) < 3 || !enOpts.Items[0].IsSystem || enOpts.Items[0].Code != RoleCodeSuperAdmin || enOpts.Items[0].Name != "Super Administrator" {
+		wantEnSuper := bundle.Translate(i18n.LangEnUS, "ACCESS_ROLE_SUPER_ADMIN_NAME", nil)
+		if len(enOpts.Items) < 3 || !enOpts.Items[0].IsSystem || enOpts.Items[0].Code != RoleCodeSuperAdmin || enOpts.Items[0].Name != wantEnSuper {
 			t.Fatalf("unexpected en-US role options: %+v", enOpts)
 		}
 
@@ -201,7 +195,7 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 	})
 
 	t.Run("GET /roles returns paginated roles with localized system role name", func(t *testing.T) {
-		rec := doJSONReq(engine, http.MethodGet, "/api/v1/roles?page=1&pageSize=10&isSystem=true", "viewer", "en-US", "")
+		rec := doJSONReq(engine, http.MethodGet, "/api/v1/roles?page=%201&pageSize=10&isSystem=true", "viewer", "en-US", "")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 		}
@@ -214,7 +208,8 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("decode roles list: %v", err)
 		}
-		if body.Total != 1 || len(body.Items) != 1 || body.Items[0].Name != "Super Administrator" {
+		wantEnSuper := bundle.Translate(i18n.LangEnUS, "ACCESS_ROLE_SUPER_ADMIN_NAME", nil)
+		if body.Total != 1 || len(body.Items) != 1 || body.Items[0].Name != wantEnSuper {
 			t.Fatalf("unexpected system role list: %+v", body)
 		}
 	})
@@ -222,9 +217,7 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 	t.Run("POST, GET, PATCH, DELETE /roles full lifecycle and error contracts", func(t *testing.T) {
 		// Malformed JSON -> 400 BAD_REQUEST (not 422)
 		badJSONRec := doJSONReq(engine, http.MethodPost, "/api/v1/roles", "admin", "en-US", `{"code":`)
-		if badJSONRec.Code != http.StatusBadRequest || !strings.Contains(badJSONRec.Body.String(), `"code":"BAD_REQUEST"`) {
-			t.Fatalf("malformed JSON POST /roles status = %d, body = %s", badJSONRec.Code, badJSONRec.Body.String())
-		}
+		assertErrorContract(t, badJSONRec, http.StatusBadRequest, apperr.CodeBadRequest)
 
 		// Create role -> 201
 		rec := doJSONReq(engine, http.MethodPost, "/api/v1/roles", "admin", "en-US", `{
@@ -246,38 +239,45 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 
 		// Duplicate code -> 409 ROLES_CODE_CONFLICT with localized message by Accept-Language
 		dupRecZh := doJSONReq(engine, http.MethodPost, "/api/v1/roles", "admin", "zh-CN", `{"code":"content_editor","name":"Dup"}`)
-		if dupRecZh.Code != http.StatusConflict || !strings.Contains(dupRecZh.Body.String(), `"code":"ROLES_CODE_CONFLICT"`) {
-			t.Fatalf("duplicate zh status = %d, body = %s", dupRecZh.Code, dupRecZh.Body.String())
-		}
+		dupBodyZh := assertErrorContract(t, dupRecZh, http.StatusConflict, ErrCodeRoleCodeConflict)
 		dupRecEn := doJSONReq(engine, http.MethodPost, "/api/v1/roles", "admin", "en-US", `{"code":"content_editor","name":"Dup"}`)
-		if dupRecEn.Code != http.StatusConflict || !strings.Contains(dupRecEn.Body.String(), `"code":"ROLES_CODE_CONFLICT"`) {
-			t.Fatalf("duplicate en status = %d, body = %s", dupRecEn.Code, dupRecEn.Body.String())
-		}
-		var dupMsgZh, dupMsgEn struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(dupRecZh.Body.Bytes(), &dupMsgZh); err != nil {
-			t.Fatalf("decode zh conflict body: %v", err)
-		}
-		if err := json.Unmarshal(dupRecEn.Body.Bytes(), &dupMsgEn); err != nil {
-			t.Fatalf("decode en conflict body: %v", err)
-		}
-		if dupMsgZh.Message == "" || dupMsgEn.Message == "" || dupMsgZh.Message == dupMsgEn.Message {
-			t.Fatalf("expected localized conflict messages to differ, zh=%q en=%q", dupMsgZh.Message, dupMsgEn.Message)
+		dupBodyEn := assertErrorContract(t, dupRecEn, http.StatusConflict, ErrCodeRoleCodeConflict)
+		if dupBodyZh["message"] == dupBodyEn["message"] {
+			t.Fatalf("expected localized conflict messages to differ, zh=%q en=%q", dupBodyZh["message"], dupBodyEn["message"])
 		}
 
 		// Empty search result serializes items as [] (not null)
 		emptyRec := doJSONReq(engine, http.MethodGet, "/api/v1/roles?q=definitely-no-match", "viewer", "en-US", "")
-		if emptyRec.Code != http.StatusOK || !strings.Contains(emptyRec.Body.String(), `"items":[]`) {
+		if emptyRec.Code != http.StatusOK {
 			t.Fatalf("empty list status = %d, body = %s", emptyRec.Code, emptyRec.Body.String())
 		}
-
-		// Invalid permission code -> 422 VALIDATION_FAILED
-		badPermRec := doJSONReq(engine, http.MethodPost, "/api/v1/roles", "admin", "en-US", `{"code":"bad_role","name":"Bad","permissions":["bogus:write"]}`)
-		if badPermRec.Code != http.StatusUnprocessableEntity || !strings.Contains(badPermRec.Body.String(), `"field":"permissions"`) {
-			t.Fatalf("invalid permission status = %d, body = %s", badPermRec.Code, badPermRec.Body.String())
+		var rawList map[string]json.RawMessage
+		if err := json.Unmarshal(emptyRec.Body.Bytes(), &rawList); err != nil {
+			t.Fatalf("decode empty list: %v", err)
 		}
+		if string(rawList["items"]) != "[]" {
+			t.Fatalf("expected items=[], got %s", string(rawList["items"]))
+		}
+
+		// Invalid permission code -> 422 VALIDATION_FAILED with localized field error
+		badPermRec := doJSONReq(engine, http.MethodPost, "/api/v1/roles", "admin", "en-US", `{"code":"bad_role","name":"Bad","permissions":["bogus:write"]}`)
+		assertValidationFields(t, badPermRec, "permissions")
+
+		// NUL byte in role name & search query -> 422 VALIDATION_FAILED
+		nulNameRec := doJSONReq(engine, http.MethodPost, "/api/v1/roles", "admin", "en-US", `{"code":"nul_role","name":"Bad\u0000Name"}`)
+		assertValidationFields(t, nulNameRec, "name")
+		nulQueryRec := doJSONReq(engine, http.MethodGet, "/api/v1/roles?q=abc%00def", "viewer", "en-US", "")
+		assertValidationFields(t, nulQueryRec, "q")
+
+		// Combined query errors return all failing fields together
+		multiQueryRec := doJSONReq(engine, http.MethodGet, "/api/v1/roles?page=abc&sort=invalid", "viewer", "en-US", "")
+		assertValidationFields(t, multiQueryRec, "page", "sort")
+
+		// Malformed or Nil UUID path params -> 422 VALIDATION_FAILED (id)
+		badUUIDRec := doJSONReq(engine, http.MethodGet, "/api/v1/roles/not-a-uuid", "viewer", "en-US", "")
+		assertValidationFields(t, badUUIDRec, "id")
+		nilUUIDRec := doJSONReq(engine, http.MethodGet, "/api/v1/roles/"+uuid.Nil.String(), "viewer", "en-US", "")
+		assertValidationFields(t, nilUUIDRec, "id")
 
 		// GET /roles/:id -> 200
 		getRec := doJSONReq(engine, http.MethodGet, "/api/v1/roles/"+created.ID, "viewer", "en-US", "")
@@ -301,15 +301,11 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 		// PATCH system role -> 409 ROLES_SYSTEM_IMMUTABLE
 		superAdminID := st.rolesByCode[RoleCodeSuperAdmin]
 		sysPatchRec := doJSONReq(engine, http.MethodPatch, "/api/v1/roles/"+superAdminID.String(), "admin", "en-US", `{"name":"Hacked"}`)
-		if sysPatchRec.Code != http.StatusConflict || !strings.Contains(sysPatchRec.Body.String(), `"code":"ROLES_SYSTEM_IMMUTABLE"`) {
-			t.Fatalf("system role patch status = %d, body = %s", sysPatchRec.Code, sysPatchRec.Body.String())
-		}
+		assertErrorContract(t, sysPatchRec, http.StatusConflict, ErrCodeRoleSystemImmutable)
 
 		// DELETE bound role -> 409 ROLES_IN_USE
 		inUseRec := doJSONReq(engine, http.MethodDelete, "/api/v1/roles/"+viewerRole.ID.String(), "admin", "en-US", "")
-		if inUseRec.Code != http.StatusConflict || !strings.Contains(inUseRec.Body.String(), `"code":"ROLES_IN_USE"`) {
-			t.Fatalf("in-use delete status = %d, body = %s", inUseRec.Code, inUseRec.Body.String())
-		}
+		assertErrorContract(t, inUseRec, http.StatusConflict, ErrCodeRoleInUse)
 
 		// DELETE unused role -> 204 with empty body
 		delRec := doJSONReq(engine, http.MethodDelete, "/api/v1/roles/"+created.ID, "admin", "en-US", "")
@@ -319,9 +315,7 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 
 		// Invalid query parameter -> 422
 		badQueryRec := doJSONReq(engine, http.MethodGet, "/api/v1/roles?isSystem=maybe", "viewer", "en-US", "")
-		if badQueryRec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("bad isSystem query status = %d, body = %s", badQueryRec.Code, badQueryRec.Body.String())
-		}
+		assertValidationFields(t, badQueryRec, "isSystem")
 
 		// Missing role ID -> 404 ACCESS_ROLE_NOT_FOUND across GET/PATCH/DELETE
 		missingID := uuid.Must(uuid.NewV7()).String()
@@ -334,11 +328,99 @@ func TestAccessHTTPRoutesContract(t *testing.T) {
 			{http.MethodDelete, ""},
 		} {
 			notFoundRec := doJSONReq(engine, tc.method, "/api/v1/roles/"+missingID, "admin", "en-US", tc.body)
-			if notFoundRec.Code != http.StatusNotFound || !strings.Contains(notFoundRec.Body.String(), `"code":"ACCESS_ROLE_NOT_FOUND"`) {
-				t.Fatalf("%s missing role status = %d, body = %s", tc.method, notFoundRec.Code, notFoundRec.Body.String())
-			}
+			assertErrorContract(t, notFoundRec, http.StatusNotFound, ErrCodeRoleNotFound)
 		}
 	})
+}
+
+func TestRegisterRoutesNilGuardFailsClosed(t *testing.T) {
+	bundle, err := i18n.NewBundle()
+	if err != nil {
+		t.Fatalf("NewBundle() error = %v", err)
+	}
+	if err := bundle.RegisterFS("access", LocalesFS, "locales"); err != nil {
+		t.Fatalf("RegisterFS(access) error = %v", err)
+	}
+	engine, err := httpserver.NewEngine(httpserver.Options{
+		Env:    "test",
+		Logger: logger.New("test", "error", io.Discard),
+		I18n:   bundle,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	svc := newServiceWithStore(newFakeStore(), ServiceDeps{
+		Tx:   fakeTxRunner{},
+		I18n: bundle,
+		Log:  logger.New("test", "error", io.Discard),
+	})
+	NewHandler(svc, bundle).RegisterRoutes(engine.Group("/api/v1"), RoutePermissions{})
+
+	rec := doJSONReq(engine, http.MethodGet, "/api/v1/roles", "", "en-US", "")
+	assertErrorContract(t, rec, http.StatusForbidden, apperr.CodeForbidden)
+}
+
+func assertErrorContract(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode string) map[string]any {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status = %d, want %d (body=%s)", rec.Code, wantStatus, rec.Body.String())
+	}
+	if rec.Header().Get("X-Request-Id") == "" {
+		t.Fatalf("missing X-Request-Id header on status %d", wantStatus)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error body: %v (body=%s)", err, rec.Body.String())
+	}
+	if _, hasReqID := payload["request_id"]; hasReqID {
+		t.Fatalf("error body must not duplicate request_id: %v", payload)
+	}
+	if _, hasReqID := payload["requestId"]; hasReqID {
+		t.Fatalf("error body must not duplicate requestId: %v", payload)
+	}
+	if gotCode, _ := payload["code"].(string); gotCode != wantCode {
+		t.Fatalf("error code = %q, want %q (body=%s)", gotCode, wantCode, rec.Body.String())
+	}
+	msg, _ := payload["message"].(string)
+	if msg == "" || msg == wantCode {
+		t.Fatalf("expected localized error message, got %q", msg)
+	}
+	if wantStatus != http.StatusUnprocessableEntity {
+		if _, hasErrors := payload["errors"]; hasErrors {
+			t.Fatalf("non-422 error body must not contain errors field: %v", payload)
+		}
+	}
+	return payload
+}
+
+func assertValidationFields(t *testing.T, rec *httptest.ResponseRecorder, wantFields ...string) {
+	t.Helper()
+	payload := assertErrorContract(t, rec, http.StatusUnprocessableEntity, apperr.CodeValidationFailed)
+	rawErrs, ok := payload["errors"].([]any)
+	if !ok || len(rawErrs) == 0 {
+		t.Fatalf("expected non-empty 422 errors array, got %v", payload["errors"])
+	}
+	gotFields := make(map[string]string, len(rawErrs))
+	for _, item := range rawErrs {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected field error item: %#v", item)
+		}
+		field, _ := entry["field"].(string)
+		msg, _ := entry["message"].(string)
+		if field == "" || msg == "" {
+			t.Fatalf("field error missing field or message: %#v", entry)
+		}
+		if strings.HasPrefix(msg, "VALIDATION_") || strings.HasPrefix(msg, "ACCESS_") || strings.HasPrefix(msg, "MENUS_") {
+			t.Fatalf("field %q message was not translated: %q", field, msg)
+		}
+		gotFields[field] = msg
+	}
+	for _, want := range wantFields {
+		if _, exists := gotFields[want]; !exists {
+			t.Fatalf("expected validation error for field %q, got fields %v", want, gotFields)
+		}
+	}
 }
 
 func doJSONReq(engine *gin.Engine, method, path, testUser, acceptLang, rawBody string) *httptest.ResponseRecorder {

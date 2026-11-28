@@ -258,6 +258,51 @@ func TestAccessRolesPostgresIntegration(t *testing.T) {
 		}
 	}
 
+	// Concurrent ReplaceUserRoles calls for the same user must serialize via per-user advisory lock
+	// so the final role assignment is one complete role set rather than a merged union.
+	roleAlpha, err := svc.CreateRole(t.Context(), access.CreateRoleInput{
+		Code:        "replace_alpha",
+		Name:        "Replace Alpha",
+		Permissions: []string{access.PermDashboardRead},
+	})
+	if err != nil {
+		t.Fatalf("CreateRole(replace_alpha) error = %v", err)
+	}
+	roleBeta, err := svc.CreateRole(t.Context(), access.CreateRoleInput{
+		Code:        "replace_beta",
+		Name:        "Replace Beta",
+		Permissions: []string{access.PermFilesRead},
+	})
+	if err != nil {
+		t.Fatalf("CreateRole(replace_beta) error = %v", err)
+	}
+	replaceBarrier := make(chan struct{})
+	var replaceWG sync.WaitGroup
+	replaceErrs := make([]error, 2)
+	replaceWG.Add(2)
+	go func() {
+		defer replaceWG.Done()
+		<-replaceBarrier
+		replaceErrs[0] = svc.ReplaceUserRoles(t.Context(), userTwoID, []uuid.UUID{roleAlpha.ID})
+	}()
+	go func() {
+		defer replaceWG.Done()
+		<-replaceBarrier
+		replaceErrs[1] = svc.ReplaceUserRoles(t.Context(), userTwoID, []uuid.UUID{roleBeta.ID})
+	}()
+	close(replaceBarrier)
+	replaceWG.Wait()
+	if replaceErrs[0] != nil || replaceErrs[1] != nil {
+		t.Fatalf("concurrent ReplaceUserRoles errors = %v", replaceErrs)
+	}
+	uaAfterReplace, err := svc.GetUserAccess(t.Context(), userTwoID)
+	if err != nil {
+		t.Fatalf("GetUserAccess(userTwoID) error = %v", err)
+	}
+	if !slices.Equal(uaAfterReplace.Roles, []string{roleAlpha.Code}) && !slices.Equal(uaAfterReplace.Roles, []string{roleBeta.Code}) {
+		t.Fatalf("concurrent ReplaceUserRoles produced merged/corrupted roles = %v", uaAfterReplace.Roles)
+	}
+
 	// Deleting role while assigned to userID must fail with ROLES_IN_USE.
 	err = svc.DeleteRole(t.Context(), access.DeleteRoleInput{RoleID: role.ID, ActorID: &userID})
 	if appErr, ok := apperr.As(err); !ok || appErr.Code != access.ErrCodeRoleInUse {
@@ -265,9 +310,10 @@ func TestAccessRolesPostgresIntegration(t *testing.T) {
 	}
 
 	// Search with Chinese system role name.
+	zhSuper := bundle.Translate(i18n.LangZhCN, "ACCESS_ROLE_SUPER_ADMIN_NAME", nil)
 	listZh, err := svc.ListRoles(t.Context(), access.RoleListFilter{
 		Pagination: pagination.Normalize(1, 20),
-		Q:          "超级",
+		Q:          zhSuper,
 	})
 	if err != nil {
 		t.Fatalf("ListRoles(zh query) error = %v", err)
@@ -463,5 +509,141 @@ func TestAccessMenusPostgresIntegration(t *testing.T) {
 	}
 	if successCount != 1 || cycleCount != 1 {
 		t.Fatalf("concurrent mutual reparent results: success=%d cycle=%d (errs=%v); want 1 and 1", successCount, cycleCount, errs)
+	}
+
+	// End-to-end ListUserMenuTree over real PostgreSQL: verifies SQL sort_order, disabled/hidden/button filtering,
+	// empty directory pruning, and immediate cache invalidation after role permission update.
+	var menuUserID uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+		INSERT INTO users (id, username, email, password_hash, display_name, status)
+		VALUES ($1, 'menu_user', 'menu_user@example.com', 'hash', 'Menu User', 'active')
+		RETURNING id
+	`, uuid.Must(uuid.NewV7())).Scan(&menuUserID); err != nil {
+		t.Fatalf("insert menu_user: %v", err)
+	}
+	menuRole, err := svc.CreateRole(t.Context(), access.CreateRoleInput{
+		Code:        "menu_viewer",
+		Name:        "Menu Viewer",
+		Permissions: []string{access.PermUsersRead},
+	})
+	if err != nil {
+		t.Fatalf("CreateRole(menu_viewer): %v", err)
+	}
+	if err := svc.AssignRoleByCode(t.Context(), menuUserID, menuRole.Code); err != nil {
+		t.Fatalf("AssignRoleByCode(menu_viewer): %v", err)
+	}
+
+	customDir, err := svc.CreateMenu(t.Context(), access.CreateMenuInput{
+		Type:      access.MenuTypeDirectory,
+		Code:      "it_nav_dir",
+		Title:     "Nav Dir",
+		SortOrder: 5,
+		Visible:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMenu(customDir): %v", err)
+	}
+	emptyDir, err := svc.CreateMenu(t.Context(), access.CreateMenuInput{
+		Type:      access.MenuTypeDirectory,
+		Code:      "it_empty_dir",
+		Title:     "Empty Dir",
+		SortOrder: 6,
+		Visible:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMenu(emptyDir): %v", err)
+	}
+	if _, err := svc.CreateMenu(t.Context(), access.CreateMenuInput{
+		ParentID:       &emptyDir.ID,
+		Type:           access.MenuTypeMenu,
+		Code:           "it_hidden_leaf",
+		Title:          "Hidden Leaf",
+		Path:           "/hidden",
+		PermissionCode: access.PermUsersRead,
+		SortOrder:      1,
+		Visible:        false,
+	}); err != nil {
+		t.Fatalf("CreateMenu(hidden): %v", err)
+	}
+	if _, err := svc.CreateMenu(t.Context(), access.CreateMenuInput{
+		ParentID:       &customDir.ID,
+		Type:           access.MenuTypeMenu,
+		Code:           "it_disabled_leaf",
+		Title:          "Disabled Leaf",
+		Path:           "/disabled",
+		PermissionCode: access.PermUsersRead,
+		SortOrder:      1,
+		Visible:        true,
+		Status:         access.MenuStatusDisabled,
+	}); err != nil {
+		t.Fatalf("CreateMenu(disabled): %v", err)
+	}
+	activeLeaf, err := svc.CreateMenu(t.Context(), access.CreateMenuInput{
+		ParentID:       &customDir.ID,
+		Type:           access.MenuTypeMenu,
+		Code:           "it_active_leaf",
+		Title:          "Active Leaf",
+		Path:           "/active",
+		PermissionCode: access.PermUsersRead,
+		SortOrder:      2,
+		Visible:        true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMenu(activeLeaf): %v", err)
+	}
+	if _, err := svc.CreateMenu(t.Context(), access.CreateMenuInput{
+		ParentID:       &activeLeaf.ID,
+		Type:           access.MenuTypeButton,
+		Code:           "it_active_btn",
+		Title:          "Active Btn",
+		PermissionCode: access.PermUsersRead,
+		Visible:        true,
+	}); err != nil {
+		t.Fatalf("CreateMenu(button): %v", err)
+	}
+	if _, err := svc.CreateMenu(t.Context(), access.CreateMenuInput{
+		ParentID:       &customDir.ID,
+		Type:           access.MenuTypeMenu,
+		Code:           "it_audit_leaf",
+		Title:          "Audit Leaf",
+		Path:           "/audit-custom",
+		PermissionCode: access.PermAuditRead,
+		SortOrder:      1,
+		Visible:        true,
+	}); err != nil {
+		t.Fatalf("CreateMenu(auditLeaf): %v", err)
+	}
+
+	userTree, err := svc.ListUserMenuTree(t.Context(), menuUserID)
+	if err != nil {
+		t.Fatalf("ListUserMenuTree() error = %v", err)
+	}
+	// First root should be customDir (sortOrder=5); emptyDir (only hidden child) must be pruned.
+	if len(userTree) == 0 || userTree[0].Code != customDir.Code {
+		t.Fatalf("unexpected first user menu root: %+v", userTree)
+	}
+	if len(userTree[0].Children) != 1 || userTree[0].Children[0].Code != activeLeaf.Code || len(userTree[0].Children[0].Children) != 0 {
+		t.Fatalf("expected only activeLeaf with button pruned, got %+v", userTree[0].Children)
+	}
+	for _, root := range userTree {
+		if root.Code == emptyDir.Code {
+			t.Fatalf("empty directory %s should have been pruned", emptyDir.Code)
+		}
+	}
+
+	// Grant audit:read to menuRole and verify ListUserMenuTree immediately reflects the newly permitted node sorted ahead (sortOrder=1 < 2).
+	expandedPerms := []string{access.PermUsersRead, access.PermAuditRead}
+	if _, err := svc.UpdateRole(t.Context(), access.UpdateRoleInput{
+		RoleID:      menuRole.ID,
+		Permissions: &expandedPerms,
+	}); err != nil {
+		t.Fatalf("UpdateRole(expand perms): %v", err)
+	}
+	updatedUserTree, err := svc.ListUserMenuTree(t.Context(), menuUserID)
+	if err != nil {
+		t.Fatalf("ListUserMenuTree() after UpdateRole error = %v", err)
+	}
+	if len(updatedUserTree[0].Children) != 2 || updatedUserTree[0].Children[0].Code != "it_audit_leaf" || updatedUserTree[0].Children[1].Code != activeLeaf.Code {
+		t.Fatalf("unexpected user menu children after permission expansion: %+v", updatedUserTree[0].Children)
 	}
 }
