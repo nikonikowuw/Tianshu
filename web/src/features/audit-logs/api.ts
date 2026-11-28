@@ -15,6 +15,9 @@ export function buildAuditLogsQueryParams(
   if (params.actor) {
     sp.set('actor', params.actor)
   }
+  if (params.actorId) {
+    sp.set('actorId', params.actorId)
+  }
   for (const st of params.status ?? []) {
     sp.append('status', st)
   }

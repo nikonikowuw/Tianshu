@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next'
 import { Copy, Eye, MoreHorizontal } from 'lucide-react'
-import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -9,6 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { copyAuditText } from '../clipboard'
 import type { AuditLogItem } from '../types'
 
 type AuditLogRowActionsProps = {
@@ -22,20 +22,11 @@ export function AuditLogRowActions({
 }: AuditLogRowActionsProps) {
   const { t } = useTranslation('audit')
 
-  const handleCopyRequestId = async () => {
-    if (!entry.requestId) return
-    try {
-      await navigator.clipboard.writeText(entry.requestId)
-      toast.success(t('copied'))
-    } catch {
-      // Clipboard API may be unavailable in restricted contexts.
-    }
-  }
-
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button
+          type='button'
           variant='ghost'
           size='icon'
           className='size-7 rounded-md align-middle text-muted-foreground hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground data-[state=open]:bg-foreground/10 data-[state=open]:text-foreground dark:hover:bg-foreground/15 dark:focus-visible:bg-foreground/15 dark:data-[state=open]:bg-foreground/15'
@@ -51,6 +42,7 @@ export function AuditLogRowActions({
         align='end'
         className='w-44'
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
       >
         <DropdownMenuItem onSelect={() => onViewDetails(entry)}>
           <Eye className='size-4' />
@@ -59,7 +51,9 @@ export function AuditLogRowActions({
         {entry.requestId && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => void handleCopyRequestId()}>
+            <DropdownMenuItem
+              onSelect={() => void copyAuditText(entry.requestId, t)}
+            >
               <Copy className='size-4' />
               <span>{t('rowActions.copyRequestId')}</span>
             </DropdownMenuItem>

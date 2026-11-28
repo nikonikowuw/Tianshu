@@ -65,6 +65,7 @@
     "copyRequestId": "复制请求 ID"
   },
   "copied": "已复制到剪贴板",
+  "copyFailed": "复制失败，请检查剪贴板权限",
   "detail": {
     "title": "审计日志详情",
     "description": "只读事件记录与脱敏后的结构化元数据快照",
@@ -74,10 +75,8 @@
     "action": "动作",
     "resource": "资源类型",
     "resourceId": "资源 ID",
-    "status": "结果状态",
     "ipAddress": "来源 IP",
     "requestId": "请求 ID",
-    "createdAt": "发生时间",
     "userAgent": "User-Agent",
     "metadata": "元数据 (Metadata)",
     "copyJson": "复制 JSON",

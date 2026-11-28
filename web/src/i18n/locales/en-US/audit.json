@@ -65,6 +65,7 @@
     "copyRequestId": "Copy request ID"
   },
   "copied": "Copied to clipboard",
+  "copyFailed": "Failed to copy to clipboard",
   "detail": {
     "title": "Audit Log Details",
     "description": "Immutable event record and redacted structured metadata snapshot",
@@ -74,10 +75,8 @@
     "action": "Action",
     "resource": "Resource",
     "resourceId": "Resource ID",
-    "status": "Status",
     "ipAddress": "IP Address",
     "requestId": "Request ID",
-    "createdAt": "Timestamp",
     "userAgent": "User-Agent",
     "metadata": "Metadata",
     "copyJson": "Copy JSON",
