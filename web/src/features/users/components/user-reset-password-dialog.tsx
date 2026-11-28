@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { normalizeApiError } from '@/lib/api/error'
+import { formatServerErrorMessage } from '@/lib/handle-server-error'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -97,7 +98,7 @@ export function UserResetPasswordDialog({
         form.setError('password', { message: apiErr.fieldErrors.password })
         return
       }
-      setBannerError(apiErr.message)
+      setBannerError(formatServerErrorMessage(apiErr))
     }
   }
 
@@ -117,6 +118,7 @@ export function UserResetPasswordDialog({
 
         <Form {...form}>
           <form
+            noValidate
             onSubmit={form.handleSubmit((v) => void onSubmit(v))}
             onChange={() => {
               if (bannerError) setBannerError(null)

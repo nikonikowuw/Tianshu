@@ -9,8 +9,8 @@ import {
 } from '@tanstack/react-table'
 import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
-import { normalizeApiError } from '@/lib/api/error'
 import { useCurrentUser, useIsSuperAdmin } from '@/lib/auth/use-permission'
+import { formatServerErrorMessage } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -228,7 +228,9 @@ export function UsersTable({
       <DataTableToolbar
         table={table}
         searchPlaceholder={t('searchPlaceholder')}
+        searchMaxLength={100}
         filters={filters}
+        hasActiveFilters={hasActiveFilter || sorting.length > 0}
         onReset={handleResetFilters}
       />
 
@@ -237,7 +239,7 @@ export function UsersTable({
           <AlertCircle className='size-4' />
           <AlertTitle>{t('error.loadTitle')}</AlertTitle>
           <AlertDescription className='flex items-center justify-between gap-4'>
-            <span>{normalizeApiError(error).message}</span>
+            <span>{formatServerErrorMessage(error)}</span>
             <Button
               type='button'
               variant='outline'
@@ -303,7 +305,7 @@ export function UsersTable({
                   ))}
                 </TableRow>
               ))
-            ) : table.getRowModel().rows.length === 0 ? (
+            ) : isError ? null : table.getRowModel().rows.length === 0 ? (
               <TableRow>
                 <TableCell
                   colSpan={table.getVisibleLeafColumns().length}

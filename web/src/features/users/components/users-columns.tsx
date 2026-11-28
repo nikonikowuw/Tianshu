@@ -98,6 +98,7 @@ export function createUserColumns(params: {
     },
     {
       id: 'roles',
+      accessorKey: 'roles',
       enableSorting: false,
       meta: { label: t('columns.roles') },
       header: ({ column }) => (

@@ -4,6 +4,7 @@ import {
   useMutation,
   useQueryClient,
 } from '@tanstack/react-query'
+import { syncCurrentProfileIfUserId } from '@/lib/auth/gateway'
 import {
   createUser,
   deleteUser,
@@ -50,6 +51,7 @@ export function useCreateUserMutation() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: usersKeys.all })
       void queryClient.invalidateQueries({ queryKey: ['roles'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     },
   })
 }
@@ -60,9 +62,20 @@ export function useUpdateUserMutation() {
     mutationFn: ({ id, payload }: { id: string; payload: UpdateUserPayload }) =>
       updateUser(id, payload),
     meta: { silent: true },
-    onSuccess: () => {
+    onSuccess: (updated) => {
       void queryClient.invalidateQueries({ queryKey: usersKeys.all })
       void queryClient.invalidateQueries({ queryKey: ['roles'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      void syncCurrentProfileIfUserId(updated.id)
+        .then((synced) => {
+          if (synced) {
+            void queryClient.invalidateQueries({ queryKey: ['profile', 'me'] })
+            void queryClient.invalidateQueries({ queryKey: ['menus', 'user'] })
+          }
+        })
+        .catch(() => {
+          // Non-fatal: subsequent protected requests or 403 refresh will still converge.
+        })
     },
   })
 }
@@ -75,6 +88,7 @@ export function useDeleteUserMutation() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: usersKeys.all })
       void queryClient.invalidateQueries({ queryKey: ['roles'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     },
   })
 }

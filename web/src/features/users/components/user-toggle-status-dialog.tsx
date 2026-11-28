@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { normalizeApiError } from '@/lib/api/error'
+import { formatServerErrorMessage } from '@/lib/handle-server-error'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { useUpdateUserMutation } from '../queries'
 import type { UserItem } from '../types'
@@ -33,8 +33,7 @@ export function UserToggleStatusDialog({
       toast.success(isDisabling ? t('toast.disabled') : t('toast.enabled'))
       onOpenChange(false)
     } catch (err) {
-      const apiErr = normalizeApiError(err)
-      toast.error(apiErr.message)
+      toast.error(formatServerErrorMessage(err))
     }
   }
 

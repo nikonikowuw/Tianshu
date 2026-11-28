@@ -100,6 +100,15 @@ export async function syncCurrentProfileIfHasRole(
   await syncCurrentProfile()
 }
 
+export async function syncCurrentProfileIfUserId(
+  userId: string
+): Promise<boolean> {
+  const { accessToken, user } = useAuthStore.getState()
+  if (!accessToken || !user || user.id !== userId) return false
+  await syncCurrentProfile()
+  return true
+}
+
 export function createAuthGateway(onSessionCleared: () => void): AuthGateway {
   return {
     getStatus: () => useAuthStore.getState().status,
