@@ -22,12 +22,16 @@ import (
 type fakeStore struct {
 	entries        []Entry
 	deletedBatches []int
+	insertErr      error
 	countErr       error
 	listErr        error
 	deleteErr      error
 }
 
 func (f *fakeStore) InsertAuditLog(_ context.Context, entry Entry) error {
+	if f.insertErr != nil {
+		return f.insertErr
+	}
 	entry.CreatedAt = time.Now().UTC()
 	f.entries = append(f.entries, entry)
 	return nil
@@ -76,6 +80,9 @@ func (f *fakeStore) filterEntries(filter ListFilter) []Entry {
 				continue
 			}
 		}
+		if filter.Actor != "" && !strings.Contains(strings.ToLower(e.ActorUsername), strings.ToLower(filter.Actor)) {
+			continue
+		}
 		if len(filter.Statuses) > 0 && !slices.Contains(filter.Statuses, e.Status) {
 			continue
 		}
@@ -85,11 +92,20 @@ func (f *fakeStore) filterEntries(filter ListFilter) []Entry {
 		if len(filter.Resources) > 0 && !slices.Contains(filter.Resources, e.Resource) {
 			continue
 		}
+		if filter.From != nil && e.CreatedAt.Before(*filter.From) {
+			continue
+		}
+		if filter.To != nil && e.CreatedAt.After(*filter.To) {
+			continue
+		}
 		if filter.Q != "" {
 			q := strings.ToLower(filter.Q)
 			if !strings.Contains(strings.ToLower(e.ActorUsername), q) &&
 				!strings.Contains(strings.ToLower(e.Action), q) &&
-				!strings.Contains(strings.ToLower(e.RequestID), q) {
+				!strings.Contains(strings.ToLower(e.Resource), q) &&
+				!strings.Contains(strings.ToLower(e.ResourceID), q) &&
+				!strings.Contains(strings.ToLower(e.RequestID), q) &&
+				!strings.Contains(strings.ToLower(e.IPAddress), q) {
 				continue
 			}
 		}
@@ -158,6 +174,18 @@ func TestRedactMetadataAndRecord(t *testing.T) {
 		"structPtr":  &payload,
 		"mapSlice":   []map[string]string{{"token": "tok-slice", "label": "ok"}},
 		"rawJson":    json.RawMessage(`{"password":"raw-secret","nested":[{"cookie":"c=1","keep":"yes"}]}`),
+		"dotKeys": map[string]any{
+			"api.key":     "dot-secret",
+			"access.key":  "dot-access",
+			"private key": "space-secret",
+			"safe\x00key": "val\x00\xff",
+		},
+		"stringMap": map[string]string{
+			"api.key": "secret-val",
+			"note":    "hello\x00world\xff",
+		},
+		"tags":  []string{"tag\x00one", "tag\xfftwo"},
+		"badCh": make(chan int),
 	}
 
 	ctx := logger.WithRequestID(t.Context(), "req_audit_001")
@@ -263,6 +291,48 @@ func TestRedactMetadataAndRecord(t *testing.T) {
 	if rawNested["cookie"] != redactedPlaceholder || rawNested["keep"] != "yes" {
 		t.Fatalf("json.RawMessage nested object not redacted: %+v", rawNested)
 	}
+
+	gotDotKeys := got.Metadata["dotKeys"].(map[string]any)
+	for _, k := range []string{"api.key", "access.key", "private key"} {
+		if gotDotKeys[k] != redactedPlaceholder {
+			t.Fatalf("dot/space sensitive key %q not redacted: %+v", k, gotDotKeys)
+		}
+	}
+	if gotDotKeys["safekey"] != "val" {
+		t.Fatalf("dotKeys safekey = %v, want sanitized 'val'", gotDotKeys["safekey"])
+	}
+
+	gotStringMap := got.Metadata["stringMap"].(map[string]any)
+	if gotStringMap["api.key"] != redactedPlaceholder || gotStringMap["note"] != "helloworld" {
+		t.Fatalf("stringMap sanitization/redaction mismatch: %+v", gotStringMap)
+	}
+
+	gotTags := got.Metadata["tags"].([]string)
+	if !slices.Equal(gotTags, []string{"tagone", "tagtwo"}) {
+		t.Fatalf("tags = %v, want [tagone tagtwo]", gotTags)
+	}
+
+	badChVal, ok := got.Metadata["badCh"].(string)
+	if !ok || !strings.HasPrefix(badChVal, "<unserializable:") {
+		t.Fatalf("unserializable value = %v, want placeholder string", got.Metadata["badCh"])
+	}
+
+	if _, err := json.Marshal(got.Metadata); err != nil {
+		t.Fatalf("sanitized metadata failed json.Marshal: %v", err)
+	}
+
+	// Store insert failure must wrap as *apperr.Error 500.
+	st.insertErr = errors.New("db connection refused")
+	t.Cleanup(func() { st.insertErr = nil })
+	if err := svc.Record(t.Context(), RecordInput{
+		Action:   "auth.login",
+		Resource: "session",
+		Status:   StatusSuccess,
+	}); err == nil {
+		t.Fatal("expected insert error")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 500 {
+		t.Fatalf("Record(insertErr) expected *apperr.Error 500, got %v", err)
+	}
 }
 
 func TestRedactMetadataDepthLimitAndTruncateUAChinese(t *testing.T) {
@@ -318,6 +388,9 @@ func TestRecordValidationAndPurgeExpired(t *testing.T) {
 	if deleted, err := svc.PurgeExpired(t.Context(), 0); err != nil || deleted != 0 {
 		t.Fatalf("PurgeExpired(0) = (%d, %v), want (0, nil)", deleted, err)
 	}
+	if deleted, err := svc.PurgeExpired(t.Context(), -1); err != nil || deleted != 0 {
+		t.Fatalf("PurgeExpired(-1) = (%d, %v), want (0, nil)", deleted, err)
+	}
 
 	deleted, err := svc.PurgeExpired(t.Context(), 180)
 	if err != nil {
@@ -328,6 +401,22 @@ func TestRecordValidationAndPurgeExpired(t *testing.T) {
 	}
 	if !slices.Equal(st.deletedBatches, []int{2, 1}) {
 		t.Fatalf("deletedBatches = %v, want [2 1]", st.deletedBatches)
+	}
+
+	// Exact-multiple batch purge must exit cleanly after a 0-row terminating batch ([2, 2, 0]).
+	st.deletedBatches = nil
+	st.entries = []Entry{
+		{ID: uuid.Must(uuid.NewV7()), CreatedAt: now.AddDate(0, 0, -200)},
+		{ID: uuid.Must(uuid.NewV7()), CreatedAt: now.AddDate(0, 0, -201)},
+		{ID: uuid.Must(uuid.NewV7()), CreatedAt: now.AddDate(0, 0, -202)},
+		{ID: uuid.Must(uuid.NewV7()), CreatedAt: now.AddDate(0, 0, -203)},
+	}
+	deletedExact, err := svc.PurgeExpired(t.Context(), 180)
+	if err != nil {
+		t.Fatalf("PurgeExpired(exact multiple) error = %v", err)
+	}
+	if deletedExact != 4 || !slices.Equal(st.deletedBatches, []int{2, 2, 0}) {
+		t.Fatalf("exact multiple purge = (%d, batches=%v), want (4, [2 2 0])", deletedExact, st.deletedBatches)
 	}
 
 	// Canceled context must preserve context.Canceled via apperr.Error.Unwrap().
@@ -370,12 +459,12 @@ func TestListFilterNormalization(t *testing.T) {
 		t.Fatalf("unexpected nil actorId error: %v", err)
 	}
 
-	// Blank and padded entries in filter slices must be cleaned without mutating caller slices.
-	rawActions := []string{" auth.login ", "", "   "}
+	// Blank, padded, and duplicate entries in filter slices must be cleaned/deduped without mutating caller slices.
+	rawActions := []string{" auth.login ", "", "auth.login", "   "}
 	normalized, err := normalizeFilter(ListFilter{
 		Actions:   rawActions,
-		Resources: []string{" session ", " "},
-		Statuses:  []string{" success ", ""},
+		Resources: []string{" session ", "session", " "},
+		Statuses:  []string{" success ", "success", ""},
 	})
 	if err != nil {
 		t.Fatalf("normalizeFilter() error = %v", err)
@@ -400,6 +489,32 @@ func TestListFilterNormalization(t *testing.T) {
 	to := from.Add(-time.Hour)
 	if _, err := svc.List(t.Context(), ListFilter{From: &from, To: &to}); err == nil {
 		t.Fatal("expected time range validation error")
+	}
+
+	// Service layer must reject NUL bytes, invalid UTF-8, and length/item limits in a single pass.
+	_, err = svc.List(t.Context(), ListFilter{
+		Q:         "bad\x00",
+		Actor:     "\xff",
+		ActorID:   &nilID,
+		Actions:   []string{"ok", "bad\x00"},
+		Resources: []string{strings.Repeat("r", maxFilterTokenRunes+1)},
+		Statuses:  []string{"bogus"},
+		From:      &from,
+		To:        &to,
+		Sort:      "bad",
+		Order:     "bad",
+	})
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Status != 422 {
+		t.Fatalf("expected 422 validation error from Service.List, got %v", err)
+	}
+	gotErrFields := make([]string, 0, len(appErr.Fields))
+	for _, fe := range appErr.Fields {
+		gotErrFields = append(gotErrFields, fe.Field)
+	}
+	wantErrFields := []string{"action", "actor", "actorId", "from", "order", "q", "resource", "sort", "status"}
+	if !slices.Equal(gotErrFields, wantErrFields) {
+		t.Fatalf("Service.List multi-field errors = %v, want %v", gotErrFields, wantErrFields)
 	}
 }
 

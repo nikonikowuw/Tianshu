@@ -183,6 +183,23 @@ func TestAuditHTTPRoutesContract(t *testing.T) {
 	if body.Items[0].ActorUsername != "intruder" || body.Items[0].ActorID != nil {
 		t.Fatalf("unexpected audit item: %+v", body.Items[0])
 	}
+	if !strings.Contains(recOK.Body.String(), `"metadata":{}`) {
+		t.Fatalf("expected empty metadata object {}, got %s", recOK.Body.String())
+	}
+
+	// 3b. Uppercase order=ASC and 100-rune CJK boundary for q/actor are accepted.
+	cjkBoundary := strings.Repeat("天", maxSearchQueryLen)
+	reqBoundary := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/audit-logs?order=ASC&q="+cjkBoundary+"&actor="+cjkBoundary,
+		nil,
+	)
+	reqBoundary.Header.Set("X-Test-User", "allowed")
+	recBoundary := httptest.NewRecorder()
+	engine.ServeHTTP(recBoundary, reqBoundary)
+	if recBoundary.Code != http.StatusOK {
+		t.Fatalf("boundary list status = %d, want 200 (body=%s)", recBoundary.Code, recBoundary.Body.String())
+	}
 
 	// 4. Empty numeric query params fall back cleanly to pagination defaults.
 	for _, query := range []string{"page=&pageSize=", "page=%20&pageSize=%20"} {
@@ -218,7 +235,7 @@ func TestAuditHTTPRoutesContract(t *testing.T) {
 	}
 
 	// 6. Write methods must NOT be exposed (audit logs are strictly read-only).
-	for _, method := range []string{http.MethodPost, http.MethodPatch, http.MethodDelete} {
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		reqWrite := httptest.NewRequest(method, "/api/v1/audit-logs", nil)
 		reqWrite.Header.Set("X-Test-User", "allowed")
 		recWrite := httptest.NewRecorder()
@@ -230,8 +247,10 @@ func TestAuditHTTPRoutesContract(t *testing.T) {
 
 	// 7. Invalid query parameters return 422 VALIDATION_FAILED with translated zh-CN / en-US messages.
 	tooManyActions := make([]string, 0, maxMultiFilterItems+1)
+	tooManyResources := make([]string, 0, maxMultiFilterItems+1)
 	for i := range maxMultiFilterItems + 1 {
 		tooManyActions = append(tooManyActions, fmt.Sprintf("act.%d", i))
+		tooManyResources = append(tooManyResources, fmt.Sprintf("res.%d", i))
 	}
 	for _, tc := range []struct {
 		name      string
@@ -244,14 +263,28 @@ func TestAuditHTTPRoutesContract(t *testing.T) {
 		{"pageSize out of range", "pageSize=5", "pageSize", ErrCodeInvalidPageSize},
 		{"pageSize above max", "pageSize=101", "pageSize", ErrCodeInvalidPageSize},
 		{"query too long", "q=" + strings.Repeat("a", 101), "q", ErrCodeQueryTooLong},
+		{"query contains NUL", "q=abc%00", "q", "VALIDATION_DEFAULT"},
+		{"query invalid UTF-8", "q=%ff", "q", "VALIDATION_DEFAULT"},
 		{"actor too long", "actor=" + strings.Repeat("a", 101), "actor", ErrCodeActorTooLong},
+		{"actor contains NUL", "actor=%00", "actor", "VALIDATION_DEFAULT"},
+		{"actor invalid UTF-8", "actor=%ff", "actor", "VALIDATION_DEFAULT"},
 		{"invalid actorId format", "actorId=not-a-uuid", "actorId", "VALIDATION_UUID"},
 		{"nil actorId uuid", "actorId=" + uuid.Nil.String(), "actorId", "VALIDATION_UUID"},
 		{"too many actions", "action=" + strings.Join(tooManyActions, ","), "action", ErrCodeInvalidAction},
+		{"action token too long", "action=" + strings.Repeat("a", maxFilterTokenRunes+1), "action", ErrCodeInvalidAction},
+		{"action contains NUL", "action=auth.login%00", "action", ErrCodeInvalidAction},
+		{"action invalid UTF-8", "action=%ff", "action", ErrCodeInvalidAction},
+		{"too many raw action segments", "action=" + strings.Repeat(",", maxMultiFilterRawItems), "action", ErrCodeInvalidAction},
+		{"too many resources", "resource=" + strings.Join(tooManyResources, ","), "resource", ErrCodeInvalidResource},
+		{"resource token too long", "resource=" + strings.Repeat("r", maxFilterTokenRunes+1), "resource", ErrCodeInvalidResource},
+		{"resource contains NUL", "resource=user%00", "resource", ErrCodeInvalidResource},
+		{"resource invalid UTF-8", "resource=%ff", "resource", ErrCodeInvalidResource},
 		{"invalid status", "status=unknown", "status", ErrCodeInvalidStatus},
 		{"invalid from timestamp", "from=not-a-timestamp", "from", ErrCodeInvalidTimeFormat},
+		{"invalid to timestamp", "to=not-a-timestamp", "to", ErrCodeInvalidTimeFormat},
 		{"inverted time range", "from=2026-11-26T12:00:00Z&to=2026-11-26T11:00:00Z", "from", ErrCodeInvalidTimeRange},
 		{"invalid sort field", "sort=password", "sort", "VALIDATION_ONE_OF"},
+		{"invalid order", "order=sideways", "order", "VALIDATION_ONE_OF"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runLocale := func(lang string) (string, string) {

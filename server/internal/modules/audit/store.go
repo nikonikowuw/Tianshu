@@ -64,14 +64,18 @@ func (s *pgStore) InsertAuditLog(ctx context.Context, entry Entry) error {
 func (s *pgStore) CountAuditLogs(ctx context.Context, filter ListFilter) (int64, error) {
 	q := s.queries(ctx)
 	if !hasSecondaryFilters(filter) {
-		if filter.From == nil && filter.To == nil {
+		switch {
+		case filter.From == nil && filter.To == nil:
 			return q.CountAuditLogsAll(ctx)
-		}
-		if filter.From != nil && filter.To != nil {
+		case filter.From != nil && filter.To != nil:
 			return q.CountAuditLogsByTimeRange(ctx, dbgen.CountAuditLogsByTimeRangeParams{
 				FromAt: pgtype.Timestamptz{Time: filter.From.UTC(), Valid: true},
 				ToAt:   pgtype.Timestamptz{Time: filter.To.UTC(), Valid: true},
 			})
+		case filter.From != nil:
+			return q.CountAuditLogsFrom(ctx, pgtype.Timestamptz{Time: filter.From.UTC(), Valid: true})
+		default:
+			return q.CountAuditLogsTo(ctx, pgtype.Timestamptz{Time: filter.To.UTC(), Valid: true})
 		}
 	}
 
@@ -174,7 +178,39 @@ func listAuditLogsHotPath(ctx context.Context, q *dbgen.Queries, filter ListFilt
 		return rows, true, err
 	}
 
-	return nil, false, nil
+	if filter.From != nil {
+		fromTS := pgtype.Timestamptz{Time: filter.From.UTC(), Valid: true}
+		if filter.Order == OrderAsc {
+			rows, err := q.ListAuditLogsFromOldest(ctx, dbgen.ListAuditLogsFromOldestParams{
+				FromAt:     fromTS,
+				PageLimit:  limit,
+				PageOffset: offset,
+			})
+			return rows, true, err
+		}
+		rows, err := q.ListAuditLogsFromRecent(ctx, dbgen.ListAuditLogsFromRecentParams{
+			FromAt:     fromTS,
+			PageLimit:  limit,
+			PageOffset: offset,
+		})
+		return rows, true, err
+	}
+
+	toTS := pgtype.Timestamptz{Time: filter.To.UTC(), Valid: true}
+	if filter.Order == OrderAsc {
+		rows, err := q.ListAuditLogsToOldest(ctx, dbgen.ListAuditLogsToOldestParams{
+			ToAt:       toTS,
+			PageLimit:  limit,
+			PageOffset: offset,
+		})
+		return rows, true, err
+	}
+	rows, err := q.ListAuditLogsToRecent(ctx, dbgen.ListAuditLogsToRecentParams{
+		ToAt:       toTS,
+		PageLimit:  limit,
+		PageOffset: offset,
+	})
+	return rows, true, err
 }
 
 func hasSecondaryFilters(filter ListFilter) bool {

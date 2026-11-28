@@ -3,8 +3,8 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -118,11 +118,15 @@ func redactMap(src map[string]any, depth int) map[string]any {
 	}
 	out := make(map[string]any, len(src))
 	for k, v := range src {
-		if isSensitiveKey(k) {
-			out[k] = redactedPlaceholder
+		cleanKey := sanitizeJSONText(k)
+		if isSensitiveKey(k) || isSensitiveKey(cleanKey) {
+			out[cleanKey] = redactedPlaceholder
 			continue
 		}
-		out[k] = redactValue(v, depth+1)
+		if out[cleanKey] == redactedPlaceholder {
+			continue
+		}
+		out[cleanKey] = redactValue(v, depth+1)
 	}
 	return out
 }
@@ -132,7 +136,9 @@ func redactValue(v any, depth int) any {
 		return nil
 	}
 	switch typed := v.(type) {
-	case string, bool,
+	case string:
+		return sanitizeJSONText(typed)
+	case bool,
 		int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
 		float32, float64,
@@ -149,10 +155,11 @@ func redactValue(v any, depth int) any {
 		}
 		out := make(map[string]any, len(typed))
 		for k, val := range typed {
-			if isSensitiveKey(k) {
-				out[k] = redactedPlaceholder
-			} else {
-				out[k] = val
+			cleanKey := sanitizeJSONText(k)
+			if isSensitiveKey(k) || isSensitiveKey(cleanKey) {
+				out[cleanKey] = redactedPlaceholder
+			} else if out[cleanKey] != redactedPlaceholder {
+				out[cleanKey] = sanitizeJSONText(val)
 			}
 		}
 		return out
@@ -178,7 +185,11 @@ func redactValue(v any, depth int) any {
 		}
 		return out
 	case []string:
-		return slices.Clone(typed)
+		out := make([]string, len(typed))
+		for i, item := range typed {
+			out[i] = sanitizeJSONText(item)
+		}
+		return out
 	default:
 		if depth >= maxRedactDepth {
 			return redactedPlaceholder
@@ -190,21 +201,22 @@ func redactValue(v any, depth int) any {
 func redactViaJSON(v any, depth int) any {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return v
+		return fmt.Sprintf("<unserializable:%T>", v)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var decoded any
 	if err := dec.Decode(&decoded); err != nil {
-		return v
+		return fmt.Sprintf("<unserializable:%T>", v)
 	}
 	return redactValue(decoded, depth)
 }
 
+var sensitiveKeyReplacer = strings.NewReplacer("_", "", "-", "", ".", "", " ", "", "\t", "")
+
 func isSensitiveKey(key string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(key))
-	normalized = strings.ReplaceAll(normalized, "_", "")
-	normalized = strings.ReplaceAll(normalized, "-", "")
+	normalized = sensitiveKeyReplacer.Replace(normalized)
 	if normalized == "" {
 		return false
 	}
@@ -259,7 +271,7 @@ func cloneMetadata(src map[string]any) map[string]any {
 	return maps.Clone(src)
 }
 
-func sanitizeUTF8(raw string) string {
+func sanitizeJSONText(raw string) string {
 	if raw == "" {
 		return ""
 	}
@@ -267,7 +279,11 @@ func sanitizeUTF8(raw string) string {
 	if !utf8.ValidString(cleaned) {
 		cleaned = strings.ToValidUTF8(cleaned, "")
 	}
-	return strings.TrimSpace(cleaned)
+	return cleaned
+}
+
+func sanitizeUTF8(raw string) string {
+	return strings.TrimSpace(sanitizeJSONText(raw))
 }
 
 func truncateUA(ua string) string {
