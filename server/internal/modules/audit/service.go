@@ -3,7 +3,6 @@ package audit
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -143,83 +142,9 @@ func (s *Service) PurgeExpired(ctx context.Context, retentionDays int) (int64, e
 }
 
 func normalizeFilter(filter ListFilter) (ListFilter, error) {
-	out := filter
-	out.Pagination = pagination.Normalize(filter.Pagination.Page, filter.Pagination.PageSize)
-	out.Q = strings.TrimSpace(filter.Q)
-	out.Actor = strings.TrimSpace(filter.Actor)
-	out.Actions = cleanStringSlice(filter.Actions)
-	out.Resources = cleanStringSlice(filter.Resources)
-	out.Statuses = cleanStringSlice(filter.Statuses)
-
-	if out.ActorID != nil {
-		if *out.ActorID == uuid.Nil {
-			return ListFilter{}, apperr.Validation([]apperr.FieldError{{
-				Field:   "actorId",
-				Message: "VALIDATION_UUID",
-			}})
-		}
-		copied := *out.ActorID
-		out.ActorID = &copied
+	normalized, fieldErrs := validateAndNormalizeFilterFields(filter)
+	if len(fieldErrs) > 0 {
+		return ListFilter{}, apperr.Validation(fieldErrs)
 	}
-
-	sortCol := strings.TrimSpace(filter.Sort)
-	if sortCol == "" {
-		sortCol = SortCreatedAt
-	}
-	switch sortCol {
-	case SortCreatedAt, SortAction, SortResource, SortStatus:
-		out.Sort = sortCol
-	default:
-		return ListFilter{}, apperr.Validation([]apperr.FieldError{{
-			Field:   "sort",
-			Message: "VALIDATION_ONE_OF",
-		}})
-	}
-
-	sortOrder := strings.ToLower(strings.TrimSpace(filter.Order))
-	if sortOrder == "" {
-		sortOrder = OrderDesc
-	}
-	switch sortOrder {
-	case OrderAsc, OrderDesc:
-		out.Order = sortOrder
-	default:
-		return ListFilter{}, apperr.Validation([]apperr.FieldError{{
-			Field:   "order",
-			Message: "VALIDATION_ONE_OF",
-		}})
-	}
-
-	for _, st := range out.Statuses {
-		if st != StatusSuccess && st != StatusFailure {
-			return ListFilter{}, apperr.Validation([]apperr.FieldError{{
-				Field:   "status",
-				Message: ErrCodeInvalidStatus,
-			}})
-		}
-	}
-
-	if out.From != nil && out.To != nil && out.From.After(*out.To) {
-		return ListFilter{}, apperr.Validation([]apperr.FieldError{{
-			Field:   "from",
-			Message: ErrCodeInvalidTimeRange,
-		}})
-	}
-
-	return out, nil
-}
-
-func cleanStringSlice(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(in))
-	for _, item := range in {
-		trimmed := strings.TrimSpace(item)
-		if trimmed == "" {
-			continue
-		}
-		out = append(out, trimmed)
-	}
-	return out
+	return normalized, nil
 }

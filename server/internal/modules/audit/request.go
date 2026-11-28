@@ -39,16 +39,6 @@ func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
 		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "pageSize", Message: ErrCodeInvalidPageSize})
 	}
 
-	q := strings.TrimSpace(c.Query("q"))
-	if utf8.RuneCountInString(q) > maxSearchQueryLen {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "q", Message: ErrCodeQueryTooLong})
-	}
-
-	actor := strings.TrimSpace(c.Query("actor"))
-	if utf8.RuneCountInString(actor) > maxActorQueryLen {
-		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "actor", Message: ErrCodeActorTooLong})
-	}
-
 	var actorUUID *uuid.UUID
 	if trimmedID := strings.TrimSpace(c.Query("actorId")); trimmedID != "" {
 		parsed, err := uuid.Parse(trimmedID)
@@ -62,38 +52,28 @@ func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
 		}
 	}
 
-	actions, okAction := normalizeMultiValues(c.QueryArray("action"), maxFilterTokenRunes, maxMultiFilterItems)
-	if !okAction {
+	rawActions, actionRawOK := splitMultiValuesWithGuard(c.QueryArray("action"))
+	if !actionRawOK {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "action",
 			Message: ErrCodeInvalidAction,
 		})
 	}
 
-	resources, okResource := normalizeMultiValues(c.QueryArray("resource"), maxFilterTokenRunes, maxMultiFilterItems)
-	if !okResource {
+	rawResources, resourceRawOK := splitMultiValuesWithGuard(c.QueryArray("resource"))
+	if !resourceRawOK {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "resource",
 			Message: ErrCodeInvalidResource,
 		})
 	}
 
-	statuses, okStatus := normalizeMultiValues(c.QueryArray("status"), maxStatusTokenRunes, maxMultiFilterItems)
-	if !okStatus {
+	rawStatuses, statusRawOK := splitMultiValuesWithGuard(c.QueryArray("status"))
+	if !statusRawOK {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "status",
 			Message: ErrCodeInvalidStatus,
 		})
-	} else {
-		for _, st := range statuses {
-			if st != StatusSuccess && st != StatusFailure {
-				fieldErrs = append(fieldErrs, apperr.FieldError{
-					Field:   "status",
-					Message: ErrCodeInvalidStatus,
-				})
-				break
-			}
-		}
 	}
 
 	fromTime, fromOK := parseOptionalRFC3339(c.Query("from"))
@@ -112,46 +92,143 @@ func bindListAuditLogsRequest(c *gin.Context) (ListFilter, error) {
 		})
 	}
 
-	if fromTime != nil && toTime != nil && fromTime.After(*toTime) {
+	normalized, filterErrs := validateAndNormalizeFilterFields(ListFilter{
+		Pagination: pagination.Normalize(page, pageSize),
+		Q:          c.Query("q"),
+		Actor:      c.Query("actor"),
+		ActorID:    actorUUID,
+		Actions:    rawActions,
+		Resources:  rawResources,
+		Statuses:   rawStatuses,
+		From:       fromTime,
+		To:         toTime,
+		Sort:       c.Query("sort"),
+		Order:      c.Query("order"),
+	})
+	fieldErrs = append(fieldErrs, filterErrs...)
+
+	if len(fieldErrs) > 0 {
+		return ListFilter{}, apperr.Validation(fieldErrs)
+	}
+	return normalized, nil
+}
+
+func validateAndNormalizeFilterFields(filter ListFilter) (ListFilter, []apperr.FieldError) {
+	var fieldErrs []apperr.FieldError
+	out := filter
+	out.Pagination = pagination.Normalize(filter.Pagination.Page, filter.Pagination.PageSize)
+
+	out.Q = strings.TrimSpace(filter.Q)
+	if !isValidFilterText(out.Q) {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "q", Message: "VALIDATION_DEFAULT"})
+	} else if utf8.RuneCountInString(out.Q) > maxSearchQueryLen {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "q", Message: ErrCodeQueryTooLong})
+	}
+
+	out.Actor = strings.TrimSpace(filter.Actor)
+	if !isValidFilterText(out.Actor) {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "actor", Message: "VALIDATION_DEFAULT"})
+	} else if utf8.RuneCountInString(out.Actor) > maxActorQueryLen {
+		fieldErrs = append(fieldErrs, apperr.FieldError{Field: "actor", Message: ErrCodeActorTooLong})
+	}
+
+	if out.ActorID != nil {
+		if *out.ActorID == uuid.Nil {
+			fieldErrs = append(fieldErrs, apperr.FieldError{
+				Field:   "actorId",
+				Message: "VALIDATION_UUID",
+			})
+		} else {
+			copied := *out.ActorID
+			out.ActorID = &copied
+		}
+	}
+
+	actions, okAction := cleanAndValidateTokens(filter.Actions, maxFilterTokenRunes, maxMultiFilterItems)
+	if !okAction {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "action",
+			Message: ErrCodeInvalidAction,
+		})
+	}
+	out.Actions = actions
+
+	resources, okResource := cleanAndValidateTokens(filter.Resources, maxFilterTokenRunes, maxMultiFilterItems)
+	if !okResource {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "resource",
+			Message: ErrCodeInvalidResource,
+		})
+	}
+	out.Resources = resources
+
+	statuses, okStatus := cleanAndValidateTokens(filter.Statuses, maxStatusTokenRunes, maxMultiFilterItems)
+	if !okStatus {
+		fieldErrs = append(fieldErrs, apperr.FieldError{
+			Field:   "status",
+			Message: ErrCodeInvalidStatus,
+		})
+	} else {
+		for _, st := range statuses {
+			if st != StatusSuccess && st != StatusFailure {
+				fieldErrs = append(fieldErrs, apperr.FieldError{
+					Field:   "status",
+					Message: ErrCodeInvalidStatus,
+				})
+				break
+			}
+		}
+	}
+	out.Statuses = statuses
+
+	if out.From != nil {
+		utc := out.From.UTC()
+		out.From = &utc
+	}
+	if out.To != nil {
+		utc := out.To.UTC()
+		out.To = &utc
+	}
+	if out.From != nil && out.To != nil && out.From.After(*out.To) {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "from",
 			Message: ErrCodeInvalidTimeRange,
 		})
 	}
 
-	sortBy := strings.TrimSpace(c.Query("sort"))
-	if sortBy != "" && sortBy != SortCreatedAt && sortBy != SortAction && sortBy != SortResource && sortBy != SortStatus {
+	sortBy := strings.TrimSpace(filter.Sort)
+	if sortBy == "" {
+		sortBy = SortCreatedAt
+	}
+	switch sortBy {
+	case SortCreatedAt, SortAction, SortResource, SortStatus:
+		out.Sort = sortBy
+	default:
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "sort",
 			Message: "VALIDATION_ONE_OF",
 		})
 	}
 
-	order := strings.ToLower(strings.TrimSpace(c.Query("order")))
-	if order != "" && order != OrderAsc && order != OrderDesc {
+	order := strings.ToLower(strings.TrimSpace(filter.Order))
+	if order == "" {
+		order = OrderDesc
+	}
+	switch order {
+	case OrderAsc, OrderDesc:
+		out.Order = order
+	default:
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "order",
 			Message: "VALIDATION_ONE_OF",
 		})
 	}
 
-	if len(fieldErrs) > 0 {
-		return ListFilter{}, apperr.Validation(fieldErrs)
-	}
+	return out, fieldErrs
+}
 
-	return ListFilter{
-		Pagination: pagination.Normalize(page, pageSize),
-		Q:          q,
-		Actor:      actor,
-		ActorID:    actorUUID,
-		Actions:    actions,
-		Resources:  resources,
-		Statuses:   statuses,
-		From:       fromTime,
-		To:         toTime,
-		Sort:       sortBy,
-		Order:      order,
-	}, nil
+func isValidFilterText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, 0)
 }
 
 func parseOptionalInt(raw string, fallback int) (int, bool) {
@@ -166,35 +243,44 @@ func parseOptionalInt(raw string, fallback int) (int, bool) {
 	return v, true
 }
 
-func normalizeMultiValues(raw []string, maxItemRunes, maxItems int) ([]string, bool) {
+func splitMultiValuesWithGuard(raw []string) ([]string, bool) {
+	if len(raw) == 0 {
+		return nil, true
+	}
+	out := make([]string, 0, len(raw))
+	for _, part := range raw {
+		for item := range strings.SplitSeq(part, ",") {
+			if len(out) >= maxMultiFilterRawItems {
+				return nil, false
+			}
+			out = append(out, item)
+		}
+	}
+	return out, true
+}
+
+func cleanAndValidateTokens(raw []string, maxItemRunes, maxItems int) ([]string, bool) {
 	if len(raw) == 0 {
 		return nil, true
 	}
 	seen := make(map[string]struct{}, min(len(raw), maxItems))
 	out := make([]string, 0, min(len(raw), maxItems))
-	rawScanned := 0
-	for _, part := range raw {
-		for item := range strings.SplitSeq(part, ",") {
-			rawScanned++
-			if rawScanned > maxMultiFilterRawItems {
-				return nil, false
-			}
-			trimmed := strings.TrimSpace(item)
-			if trimmed == "" {
-				continue
-			}
-			if utf8.RuneCountInString(trimmed) > maxItemRunes {
-				return nil, false
-			}
-			if _, exists := seen[trimmed]; exists {
-				continue
-			}
-			if len(out) >= maxItems {
-				return nil, false
-			}
-			seen[trimmed] = struct{}{}
-			out = append(out, trimmed)
+	for _, item := range raw {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
 		}
+		if !isValidFilterText(trimmed) || utf8.RuneCountInString(trimmed) > maxItemRunes {
+			return nil, false
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		if len(out) >= maxItems {
+			return nil, false
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
 	}
 	return out, true
 }

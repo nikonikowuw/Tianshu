@@ -25,6 +25,16 @@ FROM audit_logs
 WHERE created_at >= @from_at::timestamptz
   AND created_at <= @to_at::timestamptz;
 
+-- name: CountAuditLogsFrom :one
+SELECT count(*)::bigint
+FROM audit_logs
+WHERE created_at >= @from_at::timestamptz;
+
+-- name: CountAuditLogsTo :one
+SELECT count(*)::bigint
+FROM audit_logs
+WHERE created_at <= @to_at::timestamptz;
+
 -- name: CountAuditLogs :one
 SELECT count(*)::bigint
 FROM audit_logs
@@ -120,6 +130,82 @@ WHERE created_at >= @from_at::timestamptz
 ORDER BY created_at ASC, id ASC
 LIMIT @page_limit OFFSET @page_offset;
 
+-- name: ListAuditLogsFromRecent :many
+SELECT
+    id,
+    actor_id,
+    actor_username,
+    action,
+    resource,
+    resource_id,
+    status,
+    ip_address,
+    user_agent,
+    request_id,
+    metadata,
+    created_at
+FROM audit_logs
+WHERE created_at >= @from_at::timestamptz
+ORDER BY created_at DESC, id DESC
+LIMIT @page_limit OFFSET @page_offset;
+
+-- name: ListAuditLogsFromOldest :many
+SELECT
+    id,
+    actor_id,
+    actor_username,
+    action,
+    resource,
+    resource_id,
+    status,
+    ip_address,
+    user_agent,
+    request_id,
+    metadata,
+    created_at
+FROM audit_logs
+WHERE created_at >= @from_at::timestamptz
+ORDER BY created_at ASC, id ASC
+LIMIT @page_limit OFFSET @page_offset;
+
+-- name: ListAuditLogsToRecent :many
+SELECT
+    id,
+    actor_id,
+    actor_username,
+    action,
+    resource,
+    resource_id,
+    status,
+    ip_address,
+    user_agent,
+    request_id,
+    metadata,
+    created_at
+FROM audit_logs
+WHERE created_at <= @to_at::timestamptz
+ORDER BY created_at DESC, id DESC
+LIMIT @page_limit OFFSET @page_offset;
+
+-- name: ListAuditLogsToOldest :many
+SELECT
+    id,
+    actor_id,
+    actor_username,
+    action,
+    resource,
+    resource_id,
+    status,
+    ip_address,
+    user_agent,
+    request_id,
+    metadata,
+    created_at
+FROM audit_logs
+WHERE created_at <= @to_at::timestamptz
+ORDER BY created_at ASC, id ASC
+LIMIT @page_limit OFFSET @page_offset;
+
 -- name: ListAuditLogs :many
 SELECT
     id,
@@ -152,7 +238,6 @@ WHERE (@q::text = '' OR (
   AND (@has_to::boolean = false OR created_at <= @to_at::timestamptz)
 ORDER BY
     CASE WHEN @sort_by::text = 'created_at' AND @sort_order::text = 'asc' THEN created_at END ASC,
-    CASE WHEN @sort_by::text = 'created_at' AND @sort_order::text = 'desc' THEN created_at END DESC,
     CASE WHEN @sort_by::text = 'action' AND @sort_order::text = 'asc' THEN action END ASC,
     CASE WHEN @sort_by::text = 'action' AND @sort_order::text = 'desc' THEN action END DESC,
     CASE WHEN @sort_by::text = 'resource' AND @sort_order::text = 'asc' THEN resource END ASC,

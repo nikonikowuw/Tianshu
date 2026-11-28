@@ -16,6 +16,7 @@ import (
 	"tianshu/internal/platform/config"
 	"tianshu/internal/platform/database"
 	"tianshu/internal/platform/logger"
+	"tianshu/internal/shared/apperr"
 	"tianshu/internal/shared/pagination"
 	"tianshu/migrations"
 )
@@ -103,8 +104,13 @@ func TestAuditPostgresIntegration(t *testing.T) {
 			IPAddress:     "10.1.2.3",
 			UserAgent:     "TestBrowser/1.0 " + strings.Repeat("中文🚀", 100) + "\x00\xff",
 			Metadata: map[string]any{
-				"password": "should-be-redacted",
-				"method":   "password",
+				"password":   "should-be-redacted",
+				"method":     "password",
+				"note":       "clean\x00value\xff",
+				"bad\x00key": "v\x00",
+				"tags":       []string{"t\x001", "t\xff2"},
+				"strMap":     map[string]string{"api.key": "k", "msg": "hi\x00"},
+				"badCh":      make(chan int),
 			},
 		}); err != nil {
 			return err
@@ -148,6 +154,34 @@ func TestAuditPostgresIntegration(t *testing.T) {
 		}
 		if resEsc.Total != 1 || len(resEsc.Items) != 1 || resEsc.Items[0].ActorUsername != `bob_100%\wild` {
 			t.Fatalf("escaped ILIKE(%q) result = %+v, want only bob_100%%\\wild", needle, resEsc)
+		}
+	}
+
+	// 3b. Verify q matches resource_id, request_id, and ip_address, and NUL/UTF-8 queries return 422 before hitting Postgres.
+	for _, tc := range []struct {
+		needle    string
+		wantTotal int64
+	}{
+		{"sess-100", 1},
+		{"req_pg_integration_01", 2},
+		{"10.1.2.3", 1},
+	} {
+		resCol, err := svc.List(t.Context(), audit.ListFilter{
+			Pagination: pagination.Params{Page: 1, PageSize: 20},
+			Q:          tc.needle,
+		})
+		if err != nil {
+			t.Fatalf("List(%q) error = %v", tc.needle, err)
+		}
+		if resCol.Total != tc.wantTotal || int64(len(resCol.Items)) != tc.wantTotal {
+			t.Fatalf("q=%q result = %+v, want total=%d", tc.needle, resCol, tc.wantTotal)
+		}
+	}
+	for _, bad := range []string{"abc\x00", "\xff"} {
+		if _, err := svc.List(t.Context(), audit.ListFilter{Q: bad}); err == nil {
+			t.Fatalf("List(Q=%q) expected 422 error", bad)
+		} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 422 {
+			t.Fatalf("List(Q=%q) err = %v, want 422", bad, err)
 		}
 	}
 
@@ -274,26 +308,32 @@ func TestAuditHotPathTieBreakerAndSkipLockedPurge(t *testing.T) {
 	if _, err := explainTx.Exec(t.Context(), "SET LOCAL enable_seqscan = off"); err != nil {
 		t.Fatalf("disable seqscan for explain: %v", err)
 	}
-	planRows, err := explainTx.Query(t.Context(), "EXPLAIN SELECT id FROM audit_logs ORDER BY created_at DESC, id DESC LIMIT 20 OFFSET 0")
-	if err != nil {
-		t.Fatalf("explain hot-path query: %v", err)
-	}
-	var planLines []string
-	for planRows.Next() {
-		var line string
-		if err := planRows.Scan(&line); err != nil {
-			planRows.Close()
-			t.Fatalf("scan explain line: %v", err)
+	for _, q := range []string{
+		"EXPLAIN SELECT id FROM audit_logs ORDER BY created_at DESC, id DESC LIMIT 20 OFFSET 0",
+		"EXPLAIN SELECT id FROM audit_logs WHERE created_at >= now() - interval '1 day' ORDER BY created_at DESC, id DESC LIMIT 20 OFFSET 0",
+		"EXPLAIN SELECT id FROM audit_logs WHERE created_at <= now() ORDER BY created_at ASC, id ASC LIMIT 20 OFFSET 0",
+	} {
+		planRows, err := explainTx.Query(t.Context(), q)
+		if err != nil {
+			t.Fatalf("explain hot-path query %q: %v", q, err)
 		}
-		planLines = append(planLines, line)
-	}
-	planRows.Close()
-	if err := planRows.Err(); err != nil {
-		t.Fatalf("explain rows err: %v", err)
-	}
-	plan := strings.Join(planLines, "\n")
-	if !strings.Contains(plan, "idx_audit_logs_created_at_id") || strings.Contains(plan, "Sort") {
-		t.Fatalf("expected zero-sort index scan on idx_audit_logs_created_at_id, got plan:\n%s", plan)
+		var planLines []string
+		for planRows.Next() {
+			var line string
+			if err := planRows.Scan(&line); err != nil {
+				planRows.Close()
+				t.Fatalf("scan explain line: %v", err)
+			}
+			planLines = append(planLines, line)
+		}
+		planRows.Close()
+		if err := planRows.Err(); err != nil {
+			t.Fatalf("explain rows err: %v", err)
+		}
+		plan := strings.Join(planLines, "\n")
+		if !strings.Contains(plan, "idx_audit_logs_created_at_id") || strings.Contains(plan, "Sort") {
+			t.Fatalf("expected zero-sort index scan on idx_audit_logs_created_at_id for %q, got plan:\n%s", q, plan)
+		}
 	}
 	_ = explainTx.Rollback(t.Context())
 
@@ -402,8 +442,38 @@ func TestAuditHotPathTieBreakerAndSkipLockedPurge(t *testing.T) {
 	}
 	assertAuditIDs(t, "from-only DESC", fromOnlyRes, []uuid.UUID{idNewest, idTieHigh, idTieLow})
 
+	fromOnlyAsc, err := svc.List(t.Context(), audit.ListFilter{
+		Pagination: pagination.Params{Page: 1, PageSize: 20},
+		From:       &fromWindow,
+		Order:      audit.OrderAsc,
+	})
+	if err != nil {
+		t.Fatalf("List(from-only ASC) error = %v", err)
+	}
+	assertAuditIDs(t, "from-only ASC", fromOnlyAsc, []uuid.UUID{idTieLow, idTieHigh, idNewest})
+
+	toOnlyWindow := tOld2.Add(time.Minute)
+	toOnlyDesc, err := svc.List(t.Context(), audit.ListFilter{
+		Pagination: pagination.Params{Page: 1, PageSize: 20},
+		To:         &toOnlyWindow,
+	})
+	if err != nil {
+		t.Fatalf("List(to-only DESC) error = %v", err)
+	}
+	assertAuditIDs(t, "to-only DESC", toOnlyDesc, []uuid.UUID{idOld2, idOld1})
+
+	toOnlyAsc, err := svc.List(t.Context(), audit.ListFilter{
+		Pagination: pagination.Params{Page: 1, PageSize: 20},
+		To:         &toOnlyWindow,
+		Order:      audit.OrderAsc,
+	})
+	if err != nil {
+		t.Fatalf("List(to-only ASC) error = %v", err)
+	}
+	assertAuditIDs(t, "to-only ASC", toOnlyAsc, []uuid.UUID{idOld1, idOld2})
+
 	// 5. Verify general ListAuditLogs tie-breaker for BOTH created_at ASC (id ASC) and
-	//    non-created_at sorts (action ASC / action DESC -> created_at DESC, id DESC).
+	//    non-created_at sorts (action / resource / status -> created_at DESC, id DESC).
 	generalCreatedAsc, err := svc.List(t.Context(), audit.ListFilter{
 		Pagination: pagination.Params{Page: 1, PageSize: 20},
 		Actions:    []string{"role.update"},
@@ -415,17 +485,19 @@ func TestAuditHotPathTieBreakerAndSkipLockedPurge(t *testing.T) {
 	}
 	assertAuditIDs(t, "general created_at ASC", generalCreatedAsc, []uuid.UUID{idTieLow, idTieHigh})
 
-	for _, order := range []string{audit.OrderAsc, audit.OrderDesc} {
-		byAction, err := svc.List(t.Context(), audit.ListFilter{
-			Pagination: pagination.Params{Page: 1, PageSize: 20},
-			Actions:    []string{"role.update"},
-			Sort:       audit.SortAction,
-			Order:      order,
-		})
-		if err != nil {
-			t.Fatalf("List(action %s) error = %v", order, err)
+	for _, sortCol := range []string{audit.SortAction, audit.SortResource, audit.SortStatus} {
+		for _, order := range []string{audit.OrderAsc, audit.OrderDesc} {
+			byCol, err := svc.List(t.Context(), audit.ListFilter{
+				Pagination: pagination.Params{Page: 1, PageSize: 20},
+				Actions:    []string{"role.update"},
+				Sort:       sortCol,
+				Order:      order,
+			})
+			if err != nil {
+				t.Fatalf("List(%s %s) error = %v", sortCol, order, err)
+			}
+			assertAuditIDs(t, "general "+sortCol+" "+order, byCol, []uuid.UUID{idTieHigh, idTieLow})
 		}
-		assertAuditIDs(t, "general action "+order, byAction, []uuid.UUID{idTieHigh, idTieLow})
 	}
 
 	// 6. Verify FOR UPDATE SKIP LOCKED skips rows locked by another transaction instead of blocking.
