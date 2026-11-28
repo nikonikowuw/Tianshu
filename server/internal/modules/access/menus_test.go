@@ -99,16 +99,13 @@ func TestMenuTreeLifecycleAndGuards(t *testing.T) {
 	}
 
 	// Duplicate code returns 409 MENUS_CODE_CONFLICT.
-	if _, err := svc.CreateMenu(t.Context(), CreateMenuInput{
+	_, err = svc.CreateMenu(t.Context(), CreateMenuInput{
 		Type:    MenuTypeDirectory,
 		Code:    "custom_dir",
 		Title:   "Dup",
 		Visible: true,
-	}); err == nil {
-		t.Fatalf("expected MENUS_CODE_CONFLICT")
-	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrCodeMenuCodeConflict {
-		t.Fatalf("expected %s, got %v", ErrCodeMenuCodeConflict, err)
-	}
+	})
+	assertAppErrCode(t, err, ErrCodeMenuCodeConflict)
 
 	page, err := svc.CreateMenu(t.Context(), CreateMenuInput{
 		ParentID:       &dir.ID,
@@ -171,11 +168,8 @@ func TestMenuTreeLifecycleAndGuards(t *testing.T) {
 	// System menu code modification returns 409 MENUS_SYSTEM_IMMUTABLE.
 	sysMenu := tree[0]
 	hackedCode := "hacked_dir"
-	if _, err := svc.UpdateMenu(t.Context(), UpdateMenuInput{MenuID: sysMenu.ID, Code: &hackedCode}); err == nil {
-		t.Fatal("expected 409 MENUS_SYSTEM_IMMUTABLE when modifying system menu code")
-	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrCodeMenuSystemImmutable {
-		t.Fatalf("expected %s, got %v", ErrCodeMenuSystemImmutable, err)
-	}
+	_, err = svc.UpdateMenu(t.Context(), UpdateMenuInput{MenuID: sysMenu.ID, Code: &hackedCode})
+	assertAppErrCode(t, err, ErrCodeMenuSystemImmutable)
 
 	// Editing a system menu while passing its default translated title keeps Title="" (bilingual preserved),
 	// while explicit custom title overrides and empty string resets back to Title="".
@@ -211,27 +205,27 @@ func TestMenuTreeLifecycleAndGuards(t *testing.T) {
 	}
 
 	// Cannot delete directory while it still has children.
-	if err := svc.DeleteMenu(t.Context(), dir.ID, nil, RequestMeta{}); err == nil {
-		t.Fatalf("expected MENUS_HAS_CHILDREN")
-	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrCodeMenuHasChildren {
-		t.Fatalf("expected %s, got %v", ErrCodeMenuHasChildren, err)
-	}
+	assertAppErrCode(t, svc.DeleteMenu(t.Context(), dir.ID, nil, RequestMeta{}), ErrCodeMenuHasChildren)
 
 	// Cannot delete system menu.
-	if err := svc.DeleteMenu(t.Context(), tree[0].ID, nil, RequestMeta{}); err == nil {
-		t.Fatalf("expected MENUS_SYSTEM_IMMUTABLE")
-	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrCodeMenuSystemImmutable {
-		t.Fatalf("expected %s, got %v", ErrCodeMenuSystemImmutable, err)
-	}
+	assertAppErrCode(t, svc.DeleteMenu(t.Context(), tree[0].ID, nil, RequestMeta{}), ErrCodeMenuSystemImmutable)
 
 	// Cannot reparent dir under its own child (cycle).
-	if _, err := svc.UpdateMenu(t.Context(), UpdateMenuInput{
+	_, err = svc.UpdateMenu(t.Context(), UpdateMenuInput{
 		MenuID:   dir.ID,
 		ParentID: &page.ID,
+	})
+	assertAppErrCode(t, err, ErrCodeMenuCycleDetected)
+
+	// Changing button type to directory under a menu parent attributes error to "type".
+	dirType := MenuTypeDirectory
+	if _, err := svc.UpdateMenu(t.Context(), UpdateMenuInput{
+		MenuID: btn.ID,
+		Type:   &dirType,
 	}); err == nil {
-		t.Fatalf("expected MENUS_CYCLE_DETECTED")
-	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrCodeMenuCycleDetected {
-		t.Fatalf("expected %s, got %v", ErrCodeMenuCycleDetected, err)
+		t.Fatal("expected 422 when changing button under menu to directory")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != http.StatusUnprocessableEntity || appErr.Fields[0].Field != "type" || appErr.Fields[0].Message != ErrCodeMenuInvalidParent {
+		t.Fatalf("unexpected error changing button type under menu: %+v", err)
 	}
 
 	// ReorderMenus rejects duplicate IDs with ACCESS_DUPLICATE_MENU_ID.
@@ -399,15 +393,11 @@ func TestMenuHTTPRoutesContract(t *testing.T) {
 
 	// 401 when unauthenticated.
 	currentUser = uuid.Nil
-	if rec := doReq(http.MethodGet, "/api/v1/menus/tree", nil, "en-US"); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated GET /menus/tree = %d, want 401", rec.Code)
-	}
+	assertErrorContract(t, doReq(http.MethodGet, "/api/v1/menus/tree", nil, "en-US"), http.StatusUnauthorized, apperr.CodeUnauthorized)
 
 	// 403 when lacking both menus:read and roles:read.
 	currentUser = noPermUser
-	if rec := doReq(http.MethodGet, "/api/v1/menus/tree", nil, "en-US"); rec.Code != http.StatusForbidden {
-		t.Fatalf("forbidden GET /menus/tree = %d, want 403", rec.Code)
-	}
+	assertErrorContract(t, doReq(http.MethodGet, "/api/v1/menus/tree", nil, "en-US"), http.StatusForbidden, apperr.CodeForbidden)
 	if rec := doReq(http.MethodGet, "/api/v1/menus/user", nil, "zh-CN"); rec.Code != http.StatusOK {
 		t.Fatalf("authenticated GET /menus/user = %d, want 200", rec.Code)
 	}
@@ -417,15 +407,11 @@ func TestMenuHTTPRoutesContract(t *testing.T) {
 	if rec := doReq(http.MethodGet, "/api/v1/menus/tree", nil, "en-US"); rec.Code != http.StatusOK {
 		t.Fatalf("roles:read GET /menus/tree = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
-	if rec := doReq(http.MethodPost, "/api/v1/menus", map[string]any{"type": "directory", "code": "denied", "title": "Denied"}, "en-US"); rec.Code != http.StatusForbidden {
-		t.Fatalf("roles:read POST /menus = %d, want 403", rec.Code)
-	}
+	assertErrorContract(t, doReq(http.MethodPost, "/api/v1/menus", map[string]any{"type": "directory", "code": "denied", "title": "Denied"}, "en-US"), http.StatusForbidden, apperr.CodeForbidden)
 
 	currentUser = adminUser
 	// Malformed JSON -> 400 BAD_REQUEST.
-	if rec := doReq(http.MethodPost, "/api/v1/menus", `{"type":`, "en-US"); rec.Code != http.StatusBadRequest {
-		t.Fatalf("malformed POST /menus = %d, want 400", rec.Code)
-	}
+	assertErrorContract(t, doReq(http.MethodPost, "/api/v1/menus", `{"type":`, "en-US"), http.StatusBadRequest, apperr.CodeBadRequest)
 
 	rec := doReq(http.MethodGet, "/api/v1/menus/tree", nil, "zh-CN")
 	if rec.Code != http.StatusOK || rec.Header().Get("X-Request-Id") == "" {
@@ -472,7 +458,8 @@ func TestMenuHTTPRoutesContract(t *testing.T) {
 	if err := json.Unmarshal(recEnTree.Body.Bytes(), &enTreeBody); err != nil {
 		t.Fatalf("decode en-US menu tree: %v", err)
 	}
-	if enTreeBody.Items[0].Title != "General" || enTreeBody.Items[0].Icon != "Compass" {
+	wantEnGeneral := bundle.Translate(i18n.LangEnUS, "ACCESS_MENU_DIR_GENERAL", nil)
+	if enTreeBody.Items[0].Title != wantEnGeneral || enTreeBody.Items[0].Icon != "Compass" {
 		t.Fatalf("system menu lost en-US translation after zh-CN edit: %+v", enTreeBody.Items[0])
 	}
 
@@ -480,19 +467,35 @@ func TestMenuHTTPRoutesContract(t *testing.T) {
 	sysCodeRec := doReq(http.MethodPatch, "/api/v1/menus/"+sysDirID, map[string]any{
 		"code": "tampered_code",
 	}, "en-US")
-	if sysCodeRec.Code != http.StatusConflict || !strings.Contains(sysCodeRec.Body.String(), `"code":"MENUS_SYSTEM_IMMUTABLE"`) {
-		t.Fatalf("PATCH system menu code = %d, body = %s; want 409 MENUS_SYSTEM_IMMUTABLE", sysCodeRec.Code, sysCodeRec.Body.String())
-	}
+	assertErrorContract(t, sysCodeRec, http.StatusConflict, ErrCodeMenuSystemImmutable)
 
-	// Root button via HTTP POST returns 422.
+	// Root button via HTTP POST returns 422 with localized field error.
 	rootBtnRec := doReq(http.MethodPost, "/api/v1/menus", map[string]any{
 		"type":  "button",
 		"code":  "orphan_btn",
 		"title": "Orphan",
 	}, "en-US")
-	if rootBtnRec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("POST root button = %d, body = %s; want 422", rootBtnRec.Code, rootBtnRec.Body.String())
-	}
+	assertValidationFields(t, rootBtnRec, "parentId")
+
+	// Malformed or Nil UUID on PATCH /menus/:id -> 422 VALIDATION_FAILED (id)
+	assertValidationFields(t, doReq(http.MethodPatch, "/api/v1/menus/bad-uuid", map[string]any{"title": "X"}, "en-US"), "id")
+	assertValidationFields(t, doReq(http.MethodPatch, "/api/v1/menus/"+uuid.Nil.String(), map[string]any{"title": "X"}, "en-US"), "id")
+
+	// NUL byte in POST /menus title -> 422 VALIDATION_FAILED
+	assertValidationFields(t, doReq(http.MethodPost, "/api/v1/menus", map[string]any{
+		"type":  "directory",
+		"code":  "nul_dir",
+		"title": "Bad\x00Title",
+	}, "en-US"), "title")
+
+	// Empty reorder items -> 422; multiple invalid reorder items report indexed paths.
+	assertValidationFields(t, doReq(http.MethodPut, "/api/v1/menus/reorder", map[string]any{"items": []any{}}, "en-US"), "items")
+	assertValidationFields(t, doReq(http.MethodPut, "/api/v1/menus/reorder", map[string]any{
+		"items": []map[string]any{
+			{"id": "bad-uuid", "parentId": nil, "sortOrder": 1},
+			{"id": sysDirID, "parentId": "not-a-uuid", "sortOrder": 2},
+		},
+	}, "en-US"), "items[0].id", "items[1].parentId")
 
 	// POST /menus creates 201 under first directory.
 	parentID := treeBody.Items[0].ID
@@ -549,5 +552,28 @@ func TestMenuHTTPRoutesContract(t *testing.T) {
 	rec = doReq(http.MethodDelete, "/api/v1/menus/"+created.ID, nil, "en-US")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE /menus/:id = %d, want 204", rec.Code)
+	}
+}
+
+func TestBuildMenuTreeBreaksCyclicDatabaseRows(t *testing.T) {
+	rootID := uuid.Must(uuid.NewV7())
+	childID := uuid.Must(uuid.NewV7())
+	log := logger.New("test", "error", io.Discard)
+
+	// Pure cycle with no root (a <-> b) terminates cleanly with empty tree.
+	pureCycle := []Menu{
+		{ID: rootID, ParentID: &childID, Type: MenuTypeDirectory, Code: "a"},
+		{ID: childID, ParentID: &rootID, Type: MenuTypeDirectory, Code: "b"},
+	}
+	if tree := buildMenuTree(pureCycle, log); len(tree) != 0 {
+		t.Fatalf("expected 0 roots for pure cyclic rows, got %d", len(tree))
+	}
+
+	// Self-referencing row (a -> a) also terminates cleanly without recursion overflow.
+	selfCycle := []Menu{
+		{ID: rootID, ParentID: &rootID, Type: MenuTypeDirectory, Code: "self"},
+	}
+	if tree := buildMenuTree(selfCycle, log); len(tree) != 0 {
+		t.Fatalf("expected 0 roots for self-cyclic row, got %d", len(tree))
 	}
 }

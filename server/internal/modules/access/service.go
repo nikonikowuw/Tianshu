@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"regexp"
 	"slices"
@@ -24,7 +25,10 @@ import (
 )
 
 const (
-	userAccessCacheTTL = 5 * time.Minute
+	userAccessCacheTTL   = 5 * time.Minute
+	cacheShardCount      = 64
+	maxShardGenEntries   = 256
+	cacheDeleteChunkSize = 500
 
 	auditResourceRole   = "role"
 	auditActionCreate   = "role.create"
@@ -40,17 +44,27 @@ const (
 
 var roleCodePattern = regexp.MustCompile(roleCodeRegexSource)
 
+type userCacheToken struct {
+	epoch uint64
+	gen   uint64
+}
+
+type userCacheShard struct {
+	mu    sync.Mutex
+	epoch uint64
+	gens  map[uuid.UUID]uint64
+}
+
 // Service coordinates RBAC catalog seeding, role CRUD, role assignment, and cached permission checks.
 type Service struct {
-	store    store
-	tx       TxRunner
-	cache    cache.Cache
-	i18n     *i18n.Bundle
-	audit    AuditRecorder
-	actors   ActorResolver
-	log      *slog.Logger
-	cacheMu  sync.Mutex
-	cacheGen map[uuid.UUID]uint64
+	store       store
+	tx          TxRunner
+	cache       cache.Cache
+	i18n        *i18n.Bundle
+	audit       AuditRecorder
+	actors      ActorResolver
+	log         *slog.Logger
+	cacheShards [cacheShardCount]userCacheShard
 }
 
 // ServiceDeps holds optional cross-cutting dependencies for access.Service.
@@ -69,6 +83,9 @@ func NewService(pool *pgxpool.Pool, deps ...ServiceDeps) *Service {
 	if len(deps) > 0 {
 		d = deps[0]
 	}
+	if d.Tx == nil && pool != nil {
+		d.Tx = database.NewTxManager(pool)
+	}
 	return newServiceWithStore(newStore(pool), d)
 }
 
@@ -77,16 +94,19 @@ func newServiceWithStore(s store, d ServiceDeps) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{
-		store:    s,
-		tx:       d.Tx,
-		cache:    d.Cache,
-		i18n:     d.I18n,
-		audit:    d.Audit,
-		actors:   d.Actors,
-		log:      log,
-		cacheGen: make(map[uuid.UUID]uint64),
+	svc := &Service{
+		store:  s,
+		tx:     d.Tx,
+		cache:  d.Cache,
+		i18n:   d.I18n,
+		audit:  d.Audit,
+		actors: d.Actors,
+		log:    log,
 	}
+	for i := range svc.cacheShards {
+		svc.cacheShards[i].gens = make(map[uuid.UUID]uint64)
+	}
+	return svc
 }
 
 // SyncCatalog idempotently upserts all declarative permissions and built-in system roles in one transaction.
@@ -130,6 +150,12 @@ func (s *Service) ListPermissionGroups() []PermissionGroupDef {
 func (s *Service) ListRoles(ctx context.Context, filter RoleListFilter) (pagination.Result[Role], error) {
 	pageParams := pagination.Normalize(filter.Pagination.Page, filter.Pagination.PageSize)
 	q := strings.TrimSpace(filter.Q)
+	if !isValidText(q) {
+		return pagination.Result[Role]{}, apperr.Validation([]apperr.FieldError{{
+			Field:   "q",
+			Message: "VALIDATION_DEFAULT",
+		}})
+	}
 	query := listRolesQuery{
 		Q:                  q,
 		MatchedSystemCodes: s.matchSystemRoleCodes(q),
@@ -192,13 +218,13 @@ func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (Role, 
 			Message: ErrCodeInvalidRoleCode,
 		})
 	}
-	if nameLen := utf8.RuneCountInString(name); nameLen < 1 || nameLen > maxRoleNameRunes {
+	if !isValidText(name) || utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > maxRoleNameRunes {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "name",
 			Message: ErrCodeInvalidRoleName,
 		})
 	}
-	if utf8.RuneCountInString(desc) > maxRoleDescRunes {
+	if !isValidText(desc) || utf8.RuneCountInString(desc) > maxRoleDescRunes {
 		fieldErrs = append(fieldErrs, apperr.FieldError{
 			Field:   "description",
 			Message: ErrCodeInvalidRoleDesc,
@@ -268,7 +294,7 @@ func (s *Service) UpdateRole(ctx context.Context, input UpdateRoleInput) (Role, 
 	var nextName *string
 	if input.Name != nil {
 		trimmed := strings.TrimSpace(*input.Name)
-		if nameLen := utf8.RuneCountInString(trimmed); nameLen < 1 || nameLen > maxRoleNameRunes {
+		if !isValidText(trimmed) || utf8.RuneCountInString(trimmed) < 1 || utf8.RuneCountInString(trimmed) > maxRoleNameRunes {
 			fieldErrs = append(fieldErrs, apperr.FieldError{
 				Field:   "name",
 				Message: ErrCodeInvalidRoleName,
@@ -281,7 +307,7 @@ func (s *Service) UpdateRole(ctx context.Context, input UpdateRoleInput) (Role, 
 	var nextDesc *string
 	if input.Description != nil {
 		trimmed := strings.TrimSpace(*input.Description)
-		if utf8.RuneCountInString(trimmed) > maxRoleDescRunes {
+		if !isValidText(trimmed) || utf8.RuneCountInString(trimmed) > maxRoleDescRunes {
 			fieldErrs = append(fieldErrs, apperr.FieldError{
 				Field:   "description",
 				Message: ErrCodeInvalidRoleDesc,
@@ -439,6 +465,9 @@ func (s *Service) DeleteRole(ctx context.Context, input DeleteRoleInput) error {
 // AssignRoleByCode assigns a role to userID and schedules cache invalidation after transaction commit.
 func (s *Service) AssignRoleByCode(ctx context.Context, userID uuid.UUID, roleCode string) error {
 	return s.withinTx(ctx, func(txCtx context.Context) error {
+		if lockErr := database.AcquireAdvisoryXactLock(txCtx, userRoleAdvisoryLockKey(userID)); lockErr != nil {
+			return apperr.Internal(lockErr)
+		}
 		roleID, err := s.store.GetRoleIDByCode(txCtx, roleCode)
 		if errors.Is(err, errRoleNotFound) {
 			return roleNotFoundError()
@@ -449,6 +478,9 @@ func (s *Service) AssignRoleByCode(ctx context.Context, userID uuid.UUID, roleCo
 		if err := s.store.AssignUserRole(txCtx, userID, roleID); err != nil {
 			if errors.Is(err, errRoleNotFound) {
 				return roleNotFoundError()
+			}
+			if errors.Is(err, errUserNotFound) {
+				return apperr.NotFound(apperr.CodeNotFound)
 			}
 			return apperr.Internal(fmt.Errorf("assign role %s to user %s: %w", roleCode, userID, err))
 		}
@@ -503,7 +535,7 @@ func (s *Service) ListUserIDsByRoleIDs(ctx context.Context, roleIDs []uuid.UUID)
 	if err != nil {
 		return nil, apperr.Internal(fmt.Errorf("list user ids by role ids: %w", err))
 	}
-	return ids, nil
+	return nonNilUUIDs(ids), nil
 }
 
 // ListUserIDsByRoleCode returns user IDs holding the specified role code.
@@ -512,19 +544,26 @@ func (s *Service) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uui
 	if err != nil {
 		return nil, apperr.Internal(fmt.Errorf("list user ids by role code %s: %w", code, err))
 	}
-	return ids, nil
+	return nonNilUUIDs(ids), nil
 }
 
 // ReplaceUserRoles replaces all role assignments for userID and invalidates the user's permission cache after commit.
 func (s *Service) ReplaceUserRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
+	uniqueRoleIDs := dedupeUUIDs(roleIDs)
 	return s.withinTx(ctx, func(txCtx context.Context) error {
+		if lockErr := database.AcquireAdvisoryXactLock(txCtx, userRoleAdvisoryLockKey(userID)); lockErr != nil {
+			return apperr.Internal(lockErr)
+		}
 		if err := s.store.DeleteUserRoles(txCtx, userID); err != nil {
 			return apperr.Internal(fmt.Errorf("clear roles for user %s: %w", userID, err))
 		}
-		for _, roleID := range roleIDs {
+		for _, roleID := range uniqueRoleIDs {
 			if err := s.store.AssignUserRole(txCtx, userID, roleID); err != nil {
 				if errors.Is(err, errRoleNotFound) {
 					return roleNotFoundError()
+				}
+				if errors.Is(err, errUserNotFound) {
+					return apperr.NotFound(apperr.CodeNotFound)
 				}
 				return apperr.Internal(fmt.Errorf("assign role %s to user %s: %w", roleID, userID, err))
 			}
@@ -552,37 +591,17 @@ func (s *Service) GetUserAccess(ctx context.Context, userID uuid.UUID) (UserAcce
 		}
 	}
 
-	genBefore := s.readCacheGen(userID)
+	tokBefore := s.readCacheToken(userID)
 
-	var (
-		roles []string
-		perms []string
-	)
-	err := s.withinTx(ctx, func(txCtx context.Context) error {
-		var rErr error
-		roles, rErr = s.store.ListUserRoleCodes(txCtx, userID)
-		if rErr != nil {
-			return apperr.Internal(fmt.Errorf("list user roles: %w", rErr))
-		}
-		var pErr error
-		perms, pErr = s.store.ListUserPermissions(txCtx, userID)
-		if pErr != nil {
-			return apperr.Internal(fmt.Errorf("list user permissions: %w", pErr))
-		}
-		return nil
-	})
+	ua, err := s.store.GetUserAccessData(ctx, userID)
 	if err != nil {
-		return UserAccess{}, err
+		return UserAccess{}, apperr.Internal(fmt.Errorf("load user access %s: %w", userID, err))
 	}
-
-	result := ensureNonNilSlices(UserAccess{
-		Roles:       roles,
-		Permissions: perms,
-	})
+	result := ensureNonNilSlices(ua)
 
 	if s.cache != nil && !inTx {
 		if encoded, marshalErr := json.Marshal(result); marshalErr == nil {
-			s.writeCacheIfUnchanged(ctx, userID, key, genBefore, encoded)
+			s.writeCacheIfUnchanged(ctx, userID, key, tokBefore, encoded)
 		}
 	}
 	return result, nil
@@ -602,46 +621,104 @@ func (s *Service) InvalidateUserCache(ctx context.Context, userIDs ...uuid.UUID)
 	if s.cache == nil || len(userIDs) == 0 {
 		return
 	}
-	keys := make([]string, 0, len(userIDs))
-	validIDs := make([]uuid.UUID, 0, len(userIDs))
+	var byShard [cacheShardCount][]uuid.UUID
+	seen := make(map[uuid.UUID]struct{}, len(userIDs))
 	for _, id := range userIDs {
-		if id != uuid.Nil {
-			validIDs = append(validIDs, id)
-			keys = append(keys, userCacheKey(id))
+		if id == uuid.Nil {
+			continue
 		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		idx := cacheShardIndex(id)
+		byShard[idx] = append(byShard[idx], id)
 	}
-	if len(keys) == 0 {
+	if len(seen) == 0 {
 		return
 	}
 
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
-	if s.cacheGen == nil {
-		s.cacheGen = make(map[uuid.UUID]uint64, len(validIDs))
-	}
-	for _, id := range validIDs {
-		s.cacheGen[id]++
-	}
-	if err := s.cache.Delete(ctx, keys...); err != nil {
-		s.log.Warn("access cache invalidate failed", "count", len(keys), "error", err)
+	for idx := range byShard {
+		ids := byShard[idx]
+		if len(ids) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(ids))
+		for _, id := range ids {
+			keys = append(keys, userCacheKey(id))
+		}
+
+		sh := &s.cacheShards[idx]
+		sh.mu.Lock()
+		if sh.gens == nil {
+			sh.gens = make(map[uuid.UUID]uint64, len(ids))
+		}
+		for _, id := range ids {
+			sh.gens[id]++
+		}
+		if len(sh.gens) > maxShardGenEntries {
+			// Rotate the shard epoch and clear per-user counters so cache generation state stays bounded.
+			sh.epoch++
+			clear(sh.gens)
+		}
+		for start := 0; start < len(keys); start += cacheDeleteChunkSize {
+			end := min(start+cacheDeleteChunkSize, len(keys))
+			if err := s.cache.Delete(ctx, keys[start:end]...); err != nil {
+				s.log.Warn("access cache invalidate failed", "count", end-start, "error", err)
+			}
+		}
+		sh.mu.Unlock()
 	}
 }
 
-func (s *Service) readCacheGen(userID uuid.UUID) uint64 {
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
-	return s.cacheGen[userID]
+func (s *Service) readCacheToken(userID uuid.UUID) userCacheToken {
+	sh := &s.cacheShards[cacheShardIndex(userID)]
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	return userCacheToken{
+		epoch: sh.epoch,
+		gen:   sh.gens[userID],
+	}
 }
 
-func (s *Service) writeCacheIfUnchanged(ctx context.Context, userID uuid.UUID, key string, expectedGen uint64, encoded []byte) {
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
-	if s.cacheGen[userID] != expectedGen {
+func (s *Service) writeCacheIfUnchanged(ctx context.Context, userID uuid.UUID, key string, expected userCacheToken, encoded []byte) {
+	sh := &s.cacheShards[cacheShardIndex(userID)]
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if sh.epoch != expected.epoch || sh.gens[userID] != expected.gen {
 		return
 	}
 	if setErr := s.cache.Set(ctx, key, encoded, userAccessCacheTTL); setErr != nil {
 		s.log.Warn("access cache set failed", "user_id", userID, "error", setErr)
 	}
+}
+
+func cacheShardIndex(userID uuid.UUID) int {
+	return int(userID[15]) & (cacheShardCount - 1)
+}
+
+func userRoleAdvisoryLockKey(userID uuid.UUID) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("tianshu:user_roles:"))
+	_, _ = h.Write(userID[:])
+	// Force MSB=1 so per-user lock keys live in negative int64 space and never collide with static keys.
+	return int64(h.Sum64() | (uint64(1) << 63))
+}
+
+func dedupeUUIDs(ids []uuid.UUID) []uuid.UUID {
+	if len(ids) <= 1 {
+		return ids
+	}
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (s *Service) attachRolePermissions(ctx context.Context, roles []Role) error {
@@ -741,6 +818,7 @@ func (s *Service) recordAudit(
 
 func (s *Service) withinTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	if s.tx == nil {
+		s.log.Warn("access.Service running without TxRunner; transaction guarantees are disabled")
 		return fn(ctx)
 	}
 	return s.tx.WithinTx(ctx, fn)

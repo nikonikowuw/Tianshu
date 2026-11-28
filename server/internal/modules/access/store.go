@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -18,6 +19,7 @@ import (
 const (
 	pgCodeForeignKeyViolation = "23503"
 	pgCodeUniqueViolation     = "23505"
+	roleUserBatchLimit        = int32(1000)
 )
 
 type listRolesQuery struct {
@@ -82,8 +84,7 @@ type store interface {
 	GrantRolePermission(ctx context.Context, roleID uuid.UUID, permCode string) error
 	GetRoleIDByCode(ctx context.Context, code string) (uuid.UUID, error)
 	AssignUserRole(ctx context.Context, userID, roleID uuid.UUID) error
-	ListUserRoleCodes(ctx context.Context, userID uuid.UUID) ([]string, error)
-	ListUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error)
+	GetUserAccessData(ctx context.Context, userID uuid.UUID) (UserAccess, error)
 	ListRoleUserIDs(ctx context.Context, roleID uuid.UUID) ([]uuid.UUID, error)
 
 	CountRoles(ctx context.Context, q listRolesQuery) (int64, error)
@@ -182,19 +183,64 @@ func (s *pgStore) AssignUserRole(ctx context.Context, userID, roleID uuid.UUID) 
 	if isForeignKeyViolation(err, "user_roles_role_id_fkey") {
 		return errRoleNotFound
 	}
+	if isForeignKeyViolation(err, "user_roles_user_id_fkey") {
+		return errUserNotFound
+	}
 	return err
 }
 
-func (s *pgStore) ListUserRoleCodes(ctx context.Context, userID uuid.UUID) ([]string, error) {
-	return s.queries(ctx).ListUserRoleCodes(ctx, userID)
-}
+func (s *pgStore) GetUserAccessData(ctx context.Context, userID uuid.UUID) (UserAccess, error) {
+	rows, err := s.queries(ctx).ListUserRolesAndPermissions(ctx, userID)
+	if err != nil {
+		return UserAccess{}, err
+	}
+	roleSet := make(map[string]struct{})
+	permSet := make(map[string]struct{})
+	for _, row := range rows {
+		if row.RoleCode != "" {
+			roleSet[row.RoleCode] = struct{}{}
+		}
+		if row.PermissionCode != "" {
+			permSet[row.PermissionCode] = struct{}{}
+		}
+	}
+	roles := make([]string, 0, len(roleSet))
+	for code := range roleSet {
+		roles = append(roles, code)
+	}
+	slices.Sort(roles)
 
-func (s *pgStore) ListUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error) {
-	return s.queries(ctx).ListUserPermissions(ctx, userID)
+	perms := make([]string, 0, len(permSet))
+	for code := range permSet {
+		perms = append(perms, code)
+	}
+	slices.Sort(perms)
+
+	return UserAccess{
+		Roles:       roles,
+		Permissions: perms,
+	}, nil
 }
 
 func (s *pgStore) ListRoleUserIDs(ctx context.Context, roleID uuid.UUID) ([]uuid.UUID, error) {
-	return s.queries(ctx).ListRoleUserIDs(ctx, roleID)
+	out := make([]uuid.UUID, 0)
+	afterID := uuid.Nil
+	for {
+		batch, err := s.queries(ctx).ListRoleUserIDsBatch(ctx, dbgen.ListRoleUserIDsBatchParams{
+			RoleID:      roleID,
+			AfterUserID: afterID,
+			BatchLimit:  roleUserBatchLimit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if int32(len(batch)) < roleUserBatchLimit {
+			break
+		}
+		afterID = batch[len(batch)-1]
+	}
+	return out, nil
 }
 
 func (s *pgStore) CountRoles(ctx context.Context, q listRolesQuery) (int64, error) {
@@ -226,20 +272,19 @@ func (s *pgStore) ListRoles(ctx context.Context, q listRolesQuery) ([]Role, erro
 	roles := make([]Role, 0, len(rows))
 	for _, row := range rows {
 		roles = append(roles, Role{
-			ID:              row.ID,
-			Code:            row.Code,
-			Name:            row.Name,
-			Description:     row.Description,
-			NameKey:         row.NameKey.String,
-			DescriptionKey:  row.DescriptionKey.String,
-			IsSystem:        row.IsSystem,
-			UserCount:       row.UserCount,
-			PermissionCount: row.PermissionCount,
-			Permissions:     make([]string, 0),
-			CreatedBy:       nullUUIDToPtr(row.CreatedBy),
-			UpdatedBy:       nullUUIDToPtr(row.UpdatedBy),
-			CreatedAt:       row.CreatedAt.Time.UTC(),
-			UpdatedAt:       row.UpdatedAt.Time.UTC(),
+			ID:             row.ID,
+			Code:           row.Code,
+			Name:           row.Name,
+			Description:    row.Description,
+			NameKey:        row.NameKey.String,
+			DescriptionKey: row.DescriptionKey.String,
+			IsSystem:       row.IsSystem,
+			UserCount:      row.UserCount,
+			Permissions:    make([]string, 0),
+			CreatedBy:      nullUUIDToPtr(row.CreatedBy),
+			UpdatedBy:      nullUUIDToPtr(row.UpdatedBy),
+			CreatedAt:      row.CreatedAt.Time.UTC(),
+			UpdatedAt:      row.UpdatedAt.Time.UTC(),
 		})
 	}
 	return roles, nil
@@ -254,20 +299,19 @@ func (s *pgStore) GetRoleByID(ctx context.Context, id uuid.UUID) (Role, error) {
 		return Role{}, err
 	}
 	return Role{
-		ID:              row.ID,
-		Code:            row.Code,
-		Name:            row.Name,
-		Description:     row.Description,
-		NameKey:         row.NameKey.String,
-		DescriptionKey:  row.DescriptionKey.String,
-		IsSystem:        row.IsSystem,
-		UserCount:       row.UserCount,
-		PermissionCount: row.PermissionCount,
-		Permissions:     make([]string, 0),
-		CreatedBy:       nullUUIDToPtr(row.CreatedBy),
-		UpdatedBy:       nullUUIDToPtr(row.UpdatedBy),
-		CreatedAt:       row.CreatedAt.Time.UTC(),
-		UpdatedAt:       row.UpdatedAt.Time.UTC(),
+		ID:             row.ID,
+		Code:           row.Code,
+		Name:           row.Name,
+		Description:    row.Description,
+		NameKey:        row.NameKey.String,
+		DescriptionKey: row.DescriptionKey.String,
+		IsSystem:       row.IsSystem,
+		UserCount:      row.UserCount,
+		Permissions:    make([]string, 0),
+		CreatedBy:      nullUUIDToPtr(row.CreatedBy),
+		UpdatedBy:      nullUUIDToPtr(row.UpdatedBy),
+		CreatedAt:      row.CreatedAt.Time.UTC(),
+		UpdatedAt:      row.UpdatedAt.Time.UTC(),
 	}, nil
 }
 
@@ -307,7 +351,7 @@ func (s *pgStore) CreateRole(ctx context.Context, rec createRoleRecord) (Role, e
 		UpdatedBy:   ptrToNullUUID(rec.ActorID),
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if isUniqueViolation(err, "roles_code_key") {
 			return Role{}, errRoleCodeConflict
 		}
 		return Role{}, err
@@ -411,11 +455,19 @@ func (s *pgStore) ListUserIDsByRoleIDs(ctx context.Context, roleIDs []uuid.UUID)
 	if len(roleIDs) == 0 {
 		return make([]uuid.UUID, 0), nil
 	}
-	return s.queries(ctx).ListUserIDsByRoleIDs(ctx, roleIDs)
+	ids, err := s.queries(ctx).ListUserIDsByRoleIDs(ctx, roleIDs)
+	if err != nil {
+		return nil, err
+	}
+	return nonNilUUIDs(ids), nil
 }
 
 func (s *pgStore) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error) {
-	return s.queries(ctx).ListUserIDsByRoleCode(ctx, code)
+	ids, err := s.queries(ctx).ListUserIDsByRoleCode(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	return nonNilUUIDs(ids), nil
 }
 
 func (s *pgStore) EnsureSystemMenu(ctx context.Context, id uuid.UUID, parentID *uuid.UUID, def SystemMenuDef) (uuid.UUID, error) {
@@ -483,7 +535,7 @@ func (s *pgStore) CreateMenu(ctx context.Context, rec createMenuRecord) (Menu, e
 		UpdatedBy:      ptrToNullUUID(rec.ActorID),
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if isUniqueViolation(err, "menus_code_key") {
 			return Menu{}, errMenuCodeConflict
 		}
 		if isForeignKeyViolation(err, "menus_parent_id_fkey") {
@@ -620,6 +672,13 @@ func nonNilStrings(in []string) []string {
 	return in
 }
 
+func nonNilUUIDs(in []uuid.UUID) []uuid.UUID {
+	if in == nil {
+		return make([]uuid.UUID, 0)
+	}
+	return in
+}
+
 func escapeLikePattern(s string) string {
 	if s == "" {
 		return ""
@@ -628,9 +687,9 @@ func escapeLikePattern(s string) string {
 	return r.Replace(s)
 }
 
-func isUniqueViolation(err error) bool {
+func isUniqueViolation(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgCodeUniqueViolation
+	return errors.As(err, &pgErr) && pgErr.Code == pgCodeUniqueViolation && pgErr.ConstraintName == constraint
 }
 
 func isForeignKeyViolation(err error, constraint string) bool {

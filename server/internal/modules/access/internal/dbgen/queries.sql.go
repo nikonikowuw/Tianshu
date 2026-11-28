@@ -480,26 +480,24 @@ SELECT
     r.updated_by,
     r.created_at,
     r.updated_at,
-    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count,
-    (SELECT count(*)::bigint FROM role_permissions rp WHERE rp.role_id = r.id) AS permission_count
+    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count
 FROM roles r
 WHERE r.id = $1
 `
 
 type GetRoleByIDRow struct {
-	ID              uuid.UUID
-	Code            string
-	Name            string
-	Description     string
-	NameKey         pgtype.Text
-	DescriptionKey  pgtype.Text
-	IsSystem        bool
-	CreatedBy       uuid.NullUUID
-	UpdatedBy       uuid.NullUUID
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
-	UserCount       int64
-	PermissionCount int64
+	ID             uuid.UUID
+	Code           string
+	Name           string
+	Description    string
+	NameKey        pgtype.Text
+	DescriptionKey pgtype.Text
+	IsSystem       bool
+	CreatedBy      uuid.NullUUID
+	UpdatedBy      uuid.NullUUID
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	UserCount      int64
 }
 
 func (q *Queries) GetRoleByID(ctx context.Context, id uuid.UUID) (GetRoleByIDRow, error) {
@@ -518,7 +516,6 @@ func (q *Queries) GetRoleByID(ctx context.Context, id uuid.UUID) (GetRoleByIDRow
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.UserCount,
-		&i.PermissionCount,
 	)
 	return i, err
 }
@@ -610,6 +607,7 @@ SELECT
     updated_at
 FROM menus
 ORDER BY sort_order ASC, created_at ASC, id ASC
+LIMIT 2000
 `
 
 func (q *Queries) ListMenus(ctx context.Context) ([]Menu, error) {
@@ -681,6 +679,7 @@ const listRoleOptions = `-- name: ListRoleOptions :many
 SELECT id, code, name, name_key, is_system
 FROM roles
 ORDER BY is_system DESC, code ASC
+LIMIT 1000
 `
 
 type ListRoleOptionsRow struct {
@@ -717,14 +716,23 @@ func (q *Queries) ListRoleOptions(ctx context.Context) ([]ListRoleOptionsRow, er
 	return items, nil
 }
 
-const listRoleUserIDs = `-- name: ListRoleUserIDs :many
+const listRoleUserIDsBatch = `-- name: ListRoleUserIDsBatch :many
 SELECT user_id
 FROM user_roles
-WHERE role_id = $1
+WHERE role_id = $1::uuid
+  AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR user_id > $2::uuid)
+ORDER BY user_id ASC
+LIMIT $3
 `
 
-func (q *Queries) ListRoleUserIDs(ctx context.Context, roleID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listRoleUserIDs, roleID)
+type ListRoleUserIDsBatchParams struct {
+	RoleID      uuid.UUID
+	AfterUserID uuid.UUID
+	BatchLimit  int32
+}
+
+func (q *Queries) ListRoleUserIDsBatch(ctx context.Context, arg ListRoleUserIDsBatchParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listRoleUserIDsBatch, arg.RoleID, arg.AfterUserID, arg.BatchLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -756,8 +764,7 @@ SELECT
     r.updated_by,
     r.created_at,
     r.updated_at,
-    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count,
-    (SELECT count(*)::bigint FROM role_permissions rp WHERE rp.role_id = r.id) AS permission_count
+    (SELECT count(*)::bigint FROM user_roles ur WHERE ur.role_id = r.id) AS user_count
 FROM roles r
 WHERE ($1::text = '' OR (
         r.code ILIKE '%' || $1::text || '%' ESCAPE '\' OR
@@ -795,19 +802,18 @@ type ListRolesParams struct {
 }
 
 type ListRolesRow struct {
-	ID              uuid.UUID
-	Code            string
-	Name            string
-	Description     string
-	NameKey         pgtype.Text
-	DescriptionKey  pgtype.Text
-	IsSystem        bool
-	CreatedBy       uuid.NullUUID
-	UpdatedBy       uuid.NullUUID
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
-	UserCount       int64
-	PermissionCount int64
+	ID             uuid.UUID
+	Code           string
+	Name           string
+	Description    string
+	NameKey        pgtype.Text
+	DescriptionKey pgtype.Text
+	IsSystem       bool
+	CreatedBy      uuid.NullUUID
+	UpdatedBy      uuid.NullUUID
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	UserCount      int64
 }
 
 func (q *Queries) ListRoles(ctx context.Context, arg ListRolesParams) ([]ListRolesRow, error) {
@@ -842,7 +848,6 @@ func (q *Queries) ListRoles(ctx context.Context, arg ListRolesParams) ([]ListRol
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.UserCount,
-			&i.PermissionCount,
 		); err != nil {
 			return nil, err
 		}
@@ -943,6 +948,8 @@ SELECT ur.user_id
 FROM user_roles ur
 INNER JOIN roles r ON r.id = ur.role_id
 WHERE r.code = $1
+ORDER BY ur.user_id ASC
+LIMIT 1000
 `
 
 func (q *Queries) ListUserIDsByRoleCode(ctx context.Context, code string) ([]uuid.UUID, error) {
@@ -969,6 +976,8 @@ const listUserIDsByRoleIDs = `-- name: ListUserIDsByRoleIDs :many
 SELECT DISTINCT user_id
 FROM user_roles
 WHERE role_id = ANY($1::uuid[])
+ORDER BY user_id ASC
+LIMIT 10000
 `
 
 func (q *Queries) ListUserIDsByRoleIDs(ctx context.Context, roleIds []uuid.UUID) ([]uuid.UUID, error) {
@@ -991,55 +1000,35 @@ func (q *Queries) ListUserIDsByRoleIDs(ctx context.Context, roleIds []uuid.UUID)
 	return items, nil
 }
 
-const listUserPermissions = `-- name: ListUserPermissions :many
-SELECT DISTINCT rp.permission_code
-FROM role_permissions rp
-INNER JOIN user_roles ur ON ur.role_id = rp.role_id
+const listUserRolesAndPermissions = `-- name: ListUserRolesAndPermissions :many
+SELECT
+    r.code AS role_code,
+    COALESCE(rp.permission_code, '')::text AS permission_code
+FROM user_roles ur
+INNER JOIN roles r ON r.id = ur.role_id
+LEFT JOIN role_permissions rp ON rp.role_id = r.id
 WHERE ur.user_id = $1
-ORDER BY rp.permission_code ASC
+ORDER BY r.code ASC, permission_code ASC
 `
 
-func (q *Queries) ListUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error) {
-	rows, err := q.db.Query(ctx, listUserPermissions, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var permission_code string
-		if err := rows.Scan(&permission_code); err != nil {
-			return nil, err
-		}
-		items = append(items, permission_code)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+type ListUserRolesAndPermissionsRow struct {
+	RoleCode       string
+	PermissionCode string
 }
 
-const listUserRoleCodes = `-- name: ListUserRoleCodes :many
-SELECT r.code
-FROM roles r
-INNER JOIN user_roles ur ON ur.role_id = r.id
-WHERE ur.user_id = $1
-ORDER BY r.code ASC
-`
-
-func (q *Queries) ListUserRoleCodes(ctx context.Context, userID uuid.UUID) ([]string, error) {
-	rows, err := q.db.Query(ctx, listUserRoleCodes, userID)
+func (q *Queries) ListUserRolesAndPermissions(ctx context.Context, userID uuid.UUID) ([]ListUserRolesAndPermissionsRow, error) {
+	rows, err := q.db.Query(ctx, listUserRolesAndPermissions, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []ListUserRolesAndPermissionsRow
 	for rows.Next() {
-		var code string
-		if err := rows.Scan(&code); err != nil {
+		var i ListUserRolesAndPermissionsRow
+		if err := rows.Scan(&i.RoleCode, &i.PermissionCode); err != nil {
 			return nil, err
 		}
-		items = append(items, code)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
