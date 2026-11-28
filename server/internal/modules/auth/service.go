@@ -55,6 +55,8 @@ type accountRateLimiter struct {
 	buckets map[string]accountRateBucket
 	limit   int
 	window  time.Duration
+	// capOverride bounds map size; zero means accountRateMaxEntries. Non-zero only in tests.
+	capOverride int
 }
 
 func newAccountRateLimiter(limit int, window time.Duration) *accountRateLimiter {
@@ -63,6 +65,13 @@ func newAccountRateLimiter(limit int, window time.Duration) *accountRateLimiter 
 		limit:   limit,
 		window:  window,
 	}
+}
+
+func (l *accountRateLimiter) maxEntries() int {
+	if l.capOverride > 0 {
+		return l.capOverride
+	}
+	return accountRateMaxEntries
 }
 
 func (l *accountRateLimiter) peek(key string, now time.Time) int {
@@ -99,12 +108,17 @@ func (l *accountRateLimiter) allow(key string, now time.Time) (bool, int) {
 
 	bucket, ok := l.buckets[key]
 	if !ok || !now.Before(bucket.resetAt) {
-		if !ok && len(l.buckets) >= accountRateMaxEntries {
-			// Drop one bucket to bound memory under high-cardinality identifier spraying.
-			for k := range l.buckets {
-				delete(l.buckets, k)
-				break
+		if !ok && len(l.buckets) >= l.maxEntries() {
+			// At capacity, evict the earliest-resetting bucket (oldest window) instead of an
+			// arbitrary entry so an attacker cannot spray identifiers to randomly drop a target's counter.
+			var oldestKey string
+			var oldestReset time.Time
+			for k, b := range l.buckets {
+				if oldestKey == "" || b.resetAt.Before(oldestReset) {
+					oldestKey, oldestReset = k, b.resetAt
+				}
 			}
+			delete(l.buckets, oldestKey)
 		}
 		l.buckets[key] = accountRateBucket{
 			count:   1,
@@ -458,6 +472,19 @@ func (s *Service) rotateActiveSession(
 	oldHash string,
 	input RefreshInput,
 ) (refreshOutcome, error) {
+	// The row was locked by refresh_token_hash, but defend against a stale-read/hash-swap race:
+	// the locked session must still own exactly this token, otherwise treat it as historical.
+	if sess.RefreshTokenHash != oldHash {
+		hist, histErr := s.store.GetRefreshTokenHistoryByHash(txCtx, oldHash)
+		if errors.Is(histErr, errHistoryNotFound) {
+			return refreshOutcome{authErr: apperr.Unauthorized(apperr.CodeUnauthorized)}, nil
+		}
+		if histErr != nil {
+			return refreshOutcome{}, apperr.Internal(fmt.Errorf("lookup refresh token history: %w", histErr))
+		}
+		return s.handleHistoricalToken(txCtx, hist, input)
+	}
+
 	now := s.now().UTC()
 	if sess.RevokedAt != nil || !now.Before(sess.ExpiresAt) {
 		return refreshOutcome{authErr: apperr.Unauthorized(apperr.CodeUnauthorized)}, nil
@@ -727,7 +754,18 @@ func (s *Service) recordAuditBestEffort(ctx context.Context, entry AuditEntry) {
 }
 
 // Me returns the authenticated user's profile together with fresh roles and permissions.
-func (s *Service) Me(ctx context.Context, userID uuid.UUID) (MeResult, error) {
+// It verifies the caller's session_id is still active so a device kicked offline during the
+// residual access-token window cannot keep using this endpoint to restore an authenticated state.
+func (s *Service) Me(ctx context.Context, userID, sessionID uuid.UUID) (MeResult, error) {
+	active, err := s.IsSessionActive(ctx, userID, sessionID)
+	if err != nil {
+		return MeResult{}, err
+	}
+	if !active {
+		// Session revoked/expired: surface as unauthenticated so the client clears local state.
+		return MeResult{}, apperr.Unauthorized(apperr.CodeUnauthorized)
+	}
+
 	user, err := s.identity.GetByID(ctx, userID)
 	if err != nil {
 		if appErr, ok := apperr.As(err); ok && appErr.Status == http.StatusNotFound {
@@ -1032,7 +1070,8 @@ func truncateUA(ua string) string {
 		return cleaned
 	}
 	cut := maxUserAgentBytes
-	for cut > 0 && !utf8.RuneStart(cleaned[cut]) {
+	// Step back to a rune boundary; guard cut >= len in case maxUserAgentBytes is later retuned.
+	for cut > 0 && (cut >= len(cleaned) || !utf8.RuneStart(cleaned[cut])) {
 		cut--
 	}
 	return cleaned[:cut]

@@ -310,6 +310,10 @@ func (c Config) Validate() error {
 	if c.IsProduction() && c.Auth.JWTSecret == defaultDevJWTSecret {
 		return errors.New("auth.jwt_secret must not use the default development secret in production")
 	}
+	// Production must mark the refresh-token cookie Secure so it never traverses plaintext HTTP.
+	if c.IsProduction() && !c.Auth.CookieSecure {
+		return errors.New("auth.cookie_secure must be true in production")
+	}
 
 	hasAnyBootstrap := strings.TrimSpace(c.Bootstrap.AdminUsername) != "" ||
 		strings.TrimSpace(c.Bootstrap.AdminEmail) != "" ||

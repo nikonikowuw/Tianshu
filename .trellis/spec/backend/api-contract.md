@@ -296,6 +296,8 @@
 
 以下端点挂载于 `/api/v1/profile`（`identity` 模块），仅要求已登录（Bearer JWT），不要求额外管理员权限码；同时 `POST /api/v1/auth/login` 与 `GET /api/v1/auth/me` 中的 `user` 对象新增兼容字段 `avatarFileId`（UUID 或 `null`）与 `avatarUrl`（短时签名路径或 `null`）。
 
+`GET /api/v1/auth/me` 除 Bearer JWT 验签外，还要求令牌 `sid` 对应的会话仍处于未吊销且未过期状态；会话失效返回 `401 AUTH_UNAUTHORIZED`，用于前端“被踢下线后不再恢复登录态”。
+
 - `GET /api/v1/profile`：返回 `200 ProfileDTO`（`id`, `username`, `email`, `displayName`, `avatarFileId`, `avatarUrl`, `status`, `lastLoginAt`, `roles`（系统角色名按 `Accept-Language` 翻译）, `createdAt`, `updatedAt`）。
 - `PATCH /api/v1/profile`：请求 `{ displayName?, email?, avatarFileId? }`（均可选；`avatarFileId` 区分缺省不改、`null`/空串清空、UUID 绑定）；绑定头像在事务内对 `files` 行加 `FOR SHARE` 锁并校验 `status='ready'`、安全图片 MIME、归属当前用户且位于 `avatars/` 前缀下（失败返 `422` `avatarFileId: PROFILE_INVALID_AVATAR`）；邮箱唯一冲突返 `409 USERS_EMAIL_CONFLICT`；写 `profile.update` 审计；返回 `200 ProfileDTO`。
 - `PUT /api/v1/profile/password`（限流 5 次/分钟/用户，超限 `429 RATE_LIMITED` + `Retry-After`）：请求 `{ currentPassword, newPassword, revokeOtherSessions? }`（`revokeOtherSessions` 默认 `true`）；旧密码错误写失败审计并返 `400 PROFILE_INVALID_CURRENT_PASSWORD`；新旧相同返 `422` `newPassword: PROFILE_PASSWORD_UNCHANGED`；成功后更新 Argon2id 哈希、按开关吊销除当前会话外的活跃会话并写 `profile.change_password` 审计，返回 `200 { "revokedSessions": N }`。

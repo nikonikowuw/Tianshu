@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,8 @@ type fakeAuthStore struct {
 	history         map[string]refreshHistoryRecord
 	now             func() time.Time
 	revokeByIDCalls int
+	// revokeErr, when set, is returned by every revoke path to exercise transaction rollback branches.
+	revokeErr error
 }
 
 func newFakeAuthStore(nowFn func() time.Time) *fakeAuthStore {
@@ -103,6 +106,9 @@ func (f *fakeAuthStore) GetRefreshTokenHistoryByHash(_ context.Context, tokenHas
 }
 
 func (f *fakeAuthStore) RevokeSession(_ context.Context, sessionID uuid.UUID) (revokedSession, bool, error) {
+	if f.revokeErr != nil {
+		return revokedSession{}, false, f.revokeErr
+	}
 	f.revokeByIDCalls++
 	if s, ok := f.sessions[sessionID]; ok && s.RevokedAt == nil {
 		t := f.now()
@@ -114,6 +120,9 @@ func (f *fakeAuthStore) RevokeSession(_ context.Context, sessionID uuid.UUID) (r
 }
 
 func (f *fakeAuthStore) RevokeSessionByRefreshHash(_ context.Context, tokenHash string) (revokedSession, bool, error) {
+	if f.revokeErr != nil {
+		return revokedSession{}, false, f.revokeErr
+	}
 	for id, s := range f.sessions {
 		if s.RefreshTokenHash == tokenHash && s.RevokedAt == nil {
 			t := f.now()
@@ -126,6 +135,9 @@ func (f *fakeAuthStore) RevokeSessionByRefreshHash(_ context.Context, tokenHash 
 }
 
 func (f *fakeAuthStore) RevokeAllUserSessions(_ context.Context, userID uuid.UUID) error {
+	if f.revokeErr != nil {
+		return f.revokeErr
+	}
 	for id, s := range f.sessions {
 		if s.UserID == userID && s.RevokedAt == nil {
 			t := f.now()
@@ -491,6 +503,50 @@ func TestLoginRefreshGraceWindowAndReplayRevocation(t *testing.T) {
 		ClientIP:     "127.0.0.1",
 	}); err == nil {
 		t.Fatal("expected revoked session to reject previously rotated token")
+	}
+}
+
+// TestRefreshGraceWindowBoundary pins the exact refreshGraceWindow edge so a future tuning
+// that silently widens or narrows the window cannot slip past the suite.
+func TestRefreshGraceWindowBoundary(t *testing.T) {
+	cases := []struct {
+		name       string
+		offset     time.Duration
+		wantReplay bool
+	}{
+		{"just inside window", refreshGraceWindow - time.Nanosecond, false},
+		{"exactly at window", refreshGraceWindow, false},
+		{"just past window", refreshGraceWindow + time.Nanosecond, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, _, now := newTestAuthHarness(t)
+			loginRes, err := svc.Login(t.Context(), LoginInput{
+				Identifier: "admin",
+				Password:   "correct-password-123",
+				ClientIP:   "127.0.0.1",
+			})
+			if err != nil {
+				t.Fatalf("Login() error = %v", err)
+			}
+			if _, err := svc.Refresh(t.Context(), RefreshInput{RefreshToken: loginRes.RefreshToken, ClientIP: "127.0.0.1"}); err != nil {
+				t.Fatalf("first Refresh() error = %v", err)
+			}
+
+			*now = now.Add(tc.offset)
+			_, err = svc.Refresh(t.Context(), RefreshInput{RefreshToken: loginRes.RefreshToken, ClientIP: "127.0.0.1"})
+			appErr, ok := apperr.As(err)
+			if tc.wantReplay {
+				if !ok || appErr.Code != ErrCodeRefreshReused {
+					t.Fatalf("err = %v, want %s", err, ErrCodeRefreshReused)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected grace-window success, got %v", err)
+			}
+		})
 	}
 }
 
@@ -1008,12 +1064,54 @@ func TestLogoutHistoricalCookieIdempotencyAndAuditHygiene(t *testing.T) {
 	}
 }
 
+// TestLogoutRevokeFailureRollsBack verifies a store-level revocation failure aborts the transaction,
+// surfaces a 500, and writes no audit entry (no partial success).
+func TestLogoutRevokeFailureRollsBack(t *testing.T) {
+	svc, st, _, _ := newTestAuthHarness(t)
+	auditRec := &fakeAuditRecorder{}
+	svc.audit = auditRec
+
+	loginRes, err := svc.Login(t.Context(), LoginInput{Identifier: "admin", Password: "correct-password-123"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	st.revokeErr = errors.New("simulated db failure")
+	err = svc.Logout(t.Context(), LogoutInput{RefreshToken: loginRes.RefreshToken})
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Status != http.StatusInternalServerError {
+		t.Fatalf("Logout() err = %v, want 500", err)
+	}
+	// No audit entry should be emitted for a rolled-back logout.
+	for _, e := range auditRec.entries {
+		if e.Action == "auth.logout" {
+			t.Fatalf("unexpected auth.logout audit on rolled-back logout: %+v", e)
+		}
+	}
+	// Session must remain active because the transaction rolled back.
+	st.revokeErr = nil
+	if _, err := svc.Refresh(t.Context(), RefreshInput{RefreshToken: loginRes.RefreshToken}); err != nil {
+		t.Fatalf("session should still be active after rolled-back logout, got %v", err)
+	}
+}
+
 func TestMeAndServiceErrorWrappingEdgeCases(t *testing.T) {
 	svc, st, idProv, now := newTestAuthHarness(t)
 	var adminID uuid.UUID
 	for id := range idProv.users {
 		adminID = id
 	}
+
+	// Establish a real session so Me()'s active-session guard passes for the happy path.
+	login, err := svc.Login(t.Context(), LoginInput{Identifier: "admin", Password: "correct-password-123", ClientIP: "10.0.0.1"})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	claims, err := svc.jwt.Verify(login.AccessToken)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	sessionID := claims.SessionID
 
 	// Nil roles/permissions normalize to non-nil empty slices, and avatar signing failure degrades to nil.
 	avatarID := uuid.Must(uuid.NewV7())
@@ -1023,7 +1121,7 @@ func TestMeAndServiceErrorWrappingEdgeCases(t *testing.T) {
 	svc.access = &fakeAccessProvider{access: UserAccess{Roles: nil, Permissions: nil}}
 	svc.avatarSigner = fakeAvatarSigner{err: errors.New("signer down")}
 
-	meRes, err := svc.Me(t.Context(), adminID)
+	meRes, err := svc.Me(t.Context(), adminID, sessionID)
 	if err != nil {
 		t.Fatalf("Me() error = %v", err)
 	}
@@ -1031,17 +1129,37 @@ func TestMeAndServiceErrorWrappingEdgeCases(t *testing.T) {
 		t.Fatalf("unexpected Me result: %+v", meRes)
 	}
 
+	// Revoked session returns 401 AUTH_UNAUTHORIZED even for an active user.
+	if _, _, revErr := st.RevokeSession(t.Context(), sessionID); revErr != nil {
+		t.Fatalf("RevokeSession() error = %v", revErr)
+	}
+	if _, err := svc.Me(t.Context(), adminID, sessionID); err == nil {
+		t.Fatal("expected 401 for revoked session")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != http.StatusUnauthorized {
+		t.Fatalf("Me(revoked session) err = %v, want 401", err)
+	}
+	// Re-establish an active session for the remaining assertions.
+	login, err = svc.Login(t.Context(), LoginInput{Identifier: "admin", Password: "correct-password-123", ClientIP: "10.0.0.2"})
+	if err != nil {
+		t.Fatalf("Login(2) error = %v", err)
+	}
+	claims, err = svc.jwt.Verify(login.AccessToken)
+	if err != nil {
+		t.Fatalf("Verify(2) error = %v", err)
+	}
+	sessionID = claims.SessionID
+
 	// Disabled user returns 403 AUTH_ACCOUNT_DISABLED.
 	u.User.Status = userStatusDisabled
 	idProv.users[adminID] = u
-	if _, err := svc.Me(t.Context(), adminID); err == nil {
+	if _, err := svc.Me(t.Context(), adminID, sessionID); err == nil {
 		t.Fatal("expected 403 for disabled user")
 	} else if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrCodeAccountDisabled {
 		t.Fatalf("Me(disabled) err = %v, want %s", err, ErrCodeAccountDisabled)
 	}
 
 	// Deleted/missing user returns 401 AUTH_UNAUTHORIZED.
-	if _, err := svc.Me(t.Context(), uuid.Must(uuid.NewV7())); err == nil {
+	if _, err := svc.Me(t.Context(), uuid.Must(uuid.NewV7()), sessionID); err == nil {
 		t.Fatal("expected 401 for missing user")
 	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != http.StatusUnauthorized {
 		t.Fatalf("Me(missing) err = %v, want 401", err)
@@ -1201,6 +1319,17 @@ func TestAuthLocalesComplete(t *testing.T) {
 	if err := bundle.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
+
+	// Every declared auth error code must resolve to a real translation in both shipped languages;
+	// a missing key would otherwise silently fall back to the raw code at runtime.
+	for _, lang := range []string{"zh-CN", "en-US"} {
+		for _, code := range authErrorCodes {
+			got := bundle.Translate(lang, code, nil)
+			if got == "" || got == code {
+				t.Fatalf("auth error code %q missing %s translation (got %q)", code, lang, got)
+			}
+		}
+	}
 }
 
 type fakeAvatarSigner struct {
@@ -1248,7 +1377,7 @@ func TestActiveSessionsRevokePurgeAndAvatarURL(t *testing.T) {
 		t.Fatalf("Verify(1): %v", err)
 	}
 
-	meRes, err := svc.Me(t.Context(), adminID)
+	meRes, err := svc.Me(t.Context(), adminID, claims1.SessionID)
 	if err != nil {
 		t.Fatalf("Me() error = %v", err)
 	}
@@ -1354,5 +1483,35 @@ func TestActiveSessionsRevokePurgeAndAvatarURL(t *testing.T) {
 	}
 	if _, exists := st.sessions[expiredID]; exists {
 		t.Fatal("expected expired session to be purged")
+	}
+}
+
+// TestAccountRateLimiterDeterministicEviction ensures capacity eviction drops the oldest window,
+// not an arbitrary bucket, so identifier spraying cannot randomly clear a target's counter.
+func TestAccountRateLimiterDeterministicEviction(t *testing.T) {
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	// minCap keeps the test cheap while exercising the eviction branch at the configured cap.
+	minCap := 3
+	lim := newAccountRateLimiter(2, time.Minute)
+	lim.capOverride = minCap
+
+	// Seed distinct keys with strictly increasing reset times; "oldest" resets earliest.
+	for i := range minCap {
+		lim.buckets["ident:user-"+strconv.Itoa(i)] = accountRateBucket{
+			count:   1,
+			resetAt: now.Add(time.Duration(i+1) * time.Second),
+		}
+	}
+
+	// Admitting a new key at capacity must evict the earliest-resetting bucket (ident:user-0).
+	lim.allow("ident:new-key", now)
+	if _, exists := lim.buckets["ident:user-0"]; exists {
+		t.Fatal("expected oldest bucket (ident:user-0) to be evicted deterministically")
+	}
+	if _, exists := lim.buckets["ident:new-key"]; !exists {
+		t.Fatal("expected new key to be admitted after eviction")
+	}
+	if len(lim.buckets) != minCap {
+		t.Fatalf("bucket count = %d, want %d after eviction", len(lim.buckets), minCap)
 	}
 }

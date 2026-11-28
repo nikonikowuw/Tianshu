@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"fmt"
 	"net/http"
 	"slices"
 
@@ -11,23 +10,33 @@ import (
 	"tianshu/internal/shared/authctx"
 )
 
-const (
-	refreshCookieName = "tianshu_refresh_token"
-	refreshCookiePath = "/api/v1/auth"
-)
+const refreshCookieName = "tianshu_refresh_token"
 
 // Handler exposes HTTP authentication and session endpoints.
 type Handler struct {
 	service        *Service
 	allowedOrigins []string
+	cookiePath     string
 }
 
-// NewHandler creates an auth Handler.
-func NewHandler(service *Service, allowedOrigins []string) *Handler {
+// NewHandler creates an auth Handler. cookiePath is the injected cookie Path (e.g. /api/v1/auth)
+// so the handler never hard-codes the API version prefix owned by internal/app.
+func NewHandler(service *Service, allowedOrigins []string, cookiePath string) *Handler {
 	return &Handler{
 		service:        service,
 		allowedOrigins: slices.Clone(allowedOrigins),
+		cookiePath:     cookiePath,
 	}
+}
+
+// shouldClearRefreshCookie reports whether a failed refresh should drop the client's refresh cookie.
+// It covers rejected/expired/reused tokens (401) and disabled accounts (403) so the browser stops replaying it.
+func shouldClearRefreshCookie(err error) bool {
+	appErr, ok := apperr.As(err)
+	if !ok {
+		return false
+	}
+	return appErr.Status == http.StatusUnauthorized || appErr.Code == ErrCodeAccountDisabled
 }
 
 func (h *Handler) login(c *gin.Context) {
@@ -44,11 +53,7 @@ func (h *Handler) login(c *gin.Context) {
 		UserAgent:  c.GetHeader("User-Agent"),
 	})
 	if err != nil {
-		if appErr, ok := apperr.As(err); ok && appErr.Status == http.StatusTooManyRequests {
-			if retry, exists := appErr.Params["retry_after"]; exists {
-				c.Header("Retry-After", fmt.Sprint(retry))
-			}
-		}
+		// Retry-After for 429 is rendered uniformly by errorHandlerMiddleware from apperr params.
 		_ = c.Error(err)
 		return
 	}
@@ -65,11 +70,8 @@ func (h *Handler) refresh(c *gin.Context) {
 		UserAgent:    c.GetHeader("User-Agent"),
 	})
 	if err != nil {
-		if cookieToken != "" {
-			if appErr, ok := apperr.As(err); ok &&
-				(appErr.Status == http.StatusUnauthorized || appErr.Code == ErrCodeAccountDisabled) {
-				h.clearRefreshCookie(c)
-			}
+		if cookieToken != "" && shouldClearRefreshCookie(err) {
+			h.clearRefreshCookie(c)
 		}
 		_ = c.Error(err)
 		return
@@ -106,7 +108,7 @@ func (h *Handler) me(c *gin.Context) {
 		return
 	}
 
-	res, err := h.service.Me(c.Request.Context(), identity.UserID)
+	res, err := h.service.Me(c.Request.Context(), identity.UserID, identity.SessionID)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -121,7 +123,7 @@ func (h *Handler) setRefreshCookie(c *gin.Context, token string) {
 		refreshCookieName,
 		token,
 		maxAge,
-		refreshCookiePath,
+		h.cookiePath,
 		"",
 		h.service.cookieSecure(),
 		true,
@@ -134,7 +136,7 @@ func (h *Handler) clearRefreshCookie(c *gin.Context) {
 		refreshCookieName,
 		"",
 		-1,
-		refreshCookiePath,
+		h.cookiePath,
 		"",
 		h.service.cookieSecure(),
 		true,

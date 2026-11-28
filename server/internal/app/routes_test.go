@@ -136,7 +136,7 @@ func buildWiredTestApp(t *testing.T, mutateCfg func(*config.Config)) (*App, *cac
 		files:            filesSvc,
 		filesHandler:     files.NewHandler(filesSvc),
 		auth:             authSvc,
-		authHandler:      auth.NewHandler(authSvc, nil),
+		authHandler:      auth.NewHandler(authSvc, nil, apiV1Prefix+"/auth"),
 		dashboardHandler: dashboard.NewHandler(dashboardSvc),
 		setupHandler:     setup.NewHandler(setupSvc),
 		engine:           engine,
