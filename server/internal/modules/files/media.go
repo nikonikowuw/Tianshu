@@ -36,10 +36,11 @@ const (
 	mimeXLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 	mimePPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
-	maxAvatarEdgePixels  = 512
-	maxDecodeDimension   = 4096
-	maxDecodeTotalPixels = 16_000_000
-	maxOriginalNameRunes = 255
+	maxAvatarEdgePixels    = 512
+	maxDecodeDimension     = 4096
+	activeMarkupSniffBytes = 4096
+	maxDecodeTotalPixels   = 16_000_000
+	maxOriginalNameRunes   = 255
 )
 
 type mimeRule struct {
@@ -530,12 +531,11 @@ func hasActiveMarkupPrefix(f *os.File) (bool, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return false, fmt.Errorf("seek for active markup check: %w", err)
 	}
-	buf := make([]byte, 1024)
-	n, err := f.Read(buf)
-	if err != nil && !errors.Is(err, io.EOF) {
+	buf, err := io.ReadAll(io.LimitReader(f, activeMarkupSniffBytes))
+	if err != nil {
 		return false, fmt.Errorf("read for active markup check: %w", err)
 	}
-	sample := strings.ToLower(strings.TrimSpace(string(buf[:n])))
+	sample := strings.ToLower(strings.TrimSpace(string(buf)))
 	return strings.Contains(sample, "<svg") ||
 		strings.Contains(sample, "<html") ||
 		strings.Contains(sample, "<!doctype html") ||

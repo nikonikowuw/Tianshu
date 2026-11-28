@@ -406,7 +406,14 @@ func TestFilesPostgresLifecycleFiltersRollbackConcurrencyAndOrphanCleanup(t *tes
 waitForLock:
 	for {
 		var waiting bool
-		if qErr := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE NOT granted)`).Scan(&waiting); qErr == nil && waiting {
+		if qErr := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_locks
+				WHERE NOT granted
+				  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+				  AND relation = 'files'::regclass
+			)`).Scan(&waiting); qErr == nil && waiting {
 			break waitForLock
 		}
 		select {

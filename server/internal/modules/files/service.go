@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	signedURLPathPrefix = "/api/v1/files/signed/"
+	defaultSignedURLPathPrefix = "/api/v1/files/signed/"
 
 	defaultMaxFileSizeBytes     = int64(10 << 20)
 	defaultMaxAvatarSizeBytes   = int64(2 << 20)
@@ -39,11 +39,12 @@ const (
 
 // ServiceConfig configures file size limits, extra allowed MIME types, and signed URL parameters.
 type ServiceConfig struct {
-	MaxFileSizeBytes   int64
-	MaxAvatarSizeBytes int64
-	AllowedMIMETypes   []string
-	SignedURLSecret    string
-	SignedURLTTL       time.Duration
+	MaxFileSizeBytes    int64
+	MaxAvatarSizeBytes  int64
+	AllowedMIMETypes    []string
+	SignedURLSecret     string
+	SignedURLTTL        time.Duration
+	SignedURLPathPrefix string
 }
 
 // ServiceDeps holds optional cross-cutting dependencies for files.Service.
@@ -58,21 +59,22 @@ type ServiceDeps struct {
 
 // Service orchestrates file validation, multi-driver storage persistence, signed URLs, and orphan cleanup.
 type Service struct {
-	store              store
-	storage            *storage.Registry
-	tx                 TxRunner
-	actors             ActorResolver
-	avatarRef          AvatarRefChecker
-	avatarCaller       AvatarCallerValidator
-	audit              AuditRecorder
-	log                *slog.Logger
-	signer             *urlSigner
-	maxFileSizeBytes   int64
-	maxAvatarSizeBytes int64
-	signedURLTTL       time.Duration
-	allowedMIMETypes   map[string]mimeRule
-	allowedExtensions  []string
-	now                func() time.Time
+	store               store
+	storage             *storage.Registry
+	tx                  TxRunner
+	actors              ActorResolver
+	avatarRef           AvatarRefChecker
+	avatarCaller        AvatarCallerValidator
+	audit               AuditRecorder
+	log                 *slog.Logger
+	signer              *urlSigner
+	signedURLPathPrefix string
+	maxFileSizeBytes    int64
+	maxAvatarSizeBytes  int64
+	signedURLTTL        time.Duration
+	allowedMIMETypes    map[string]mimeRule
+	allowedExtensions   []string
+	now                 func() time.Time
 }
 
 // NewService constructs a PostgreSQL-backed files Service.
@@ -117,22 +119,34 @@ func newServiceWithStore(
 
 	allowedMIMETypes := buildAllowedMIMEMap(cfg.AllowedMIMETypes)
 	return &Service{
-		store:              s,
-		storage:            reg,
-		tx:                 deps.Tx,
-		actors:             deps.Actors,
-		avatarRef:          deps.AvatarRef,
-		avatarCaller:       deps.AvatarCaller,
-		audit:              deps.Audit,
-		log:                log,
-		signer:             newURLSigner(cfg.SignedURLSecret),
-		maxFileSizeBytes:   maxFile,
-		maxAvatarSizeBytes: maxAvatar,
-		signedURLTTL:       ttl,
-		allowedMIMETypes:   allowedMIMETypes,
-		allowedExtensions:  buildAllowedExtensions(allowedMIMETypes),
-		now:                time.Now,
+		store:               s,
+		storage:             reg,
+		tx:                  deps.Tx,
+		actors:              deps.Actors,
+		avatarRef:           deps.AvatarRef,
+		avatarCaller:        deps.AvatarCaller,
+		audit:               deps.Audit,
+		log:                 log,
+		signer:              newURLSigner(cfg.SignedURLSecret),
+		signedURLPathPrefix: normalizeSignedURLPathPrefix(cfg.SignedURLPathPrefix),
+		maxFileSizeBytes:    maxFile,
+		maxAvatarSizeBytes:  maxAvatar,
+		signedURLTTL:        ttl,
+		allowedMIMETypes:    allowedMIMETypes,
+		allowedExtensions:   buildAllowedExtensions(allowedMIMETypes),
+		now:                 time.Now,
 	}
+}
+
+func normalizeSignedURLPathPrefix(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return defaultSignedURLPathPrefix
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		trimmed = "/" + trimmed
+	}
+	return strings.TrimRight(trimmed, "/") + "/"
 }
 
 // MaxFileSizeBytes returns the configured general upload byte limit.
@@ -426,7 +440,7 @@ func (s *Service) CreateSignedURL(ctx context.Context, id uuid.UUID, requestedDi
 		return SignedURLResult{}, apperr.Internal(fmt.Errorf("sign file url: %w", err))
 	}
 	return SignedURLResult{
-		URL:       signedURLPathPrefix + token,
+		URL:       s.signedURLPathPrefix + token,
 		ExpiresAt: expiresAt,
 	}, nil
 }

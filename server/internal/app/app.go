@@ -207,11 +207,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			pool,
 			storeReg,
 			files.ServiceConfig{
-				MaxFileSizeBytes:   cfg.Storage.MaxFileSizeBytes,
-				MaxAvatarSizeBytes: cfg.Storage.MaxAvatarSizeBytes,
-				AllowedMIMETypes:   cfg.Storage.AllowedMIMETypes,
-				SignedURLSecret:    signedURLSecret,
-				SignedURLTTL:       cfg.Storage.SignedURLTTL,
+				MaxFileSizeBytes:    cfg.Storage.MaxFileSizeBytes,
+				MaxAvatarSizeBytes:  cfg.Storage.MaxAvatarSizeBytes,
+				AllowedMIMETypes:    cfg.Storage.AllowedMIMETypes,
+				SignedURLSecret:     signedURLSecret,
+				SignedURLTTL:        cfg.Storage.SignedURLTTL,
+				SignedURLPathPrefix: apiV1Prefix + "/files/signed/",
 			},
 			files.ServiceDeps{
 				Tx:           tx,
@@ -257,7 +258,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		CORS:               cfg.CORS,
 		Logger:             log,
 		I18n:               bundle,
-		RedactPathPrefixes: []string{"/api/v1/files/signed/"},
+		RedactPathPrefixes: []string{apiV1Prefix + "/files/signed/"},
 	})
 	if err != nil {
 		closeInitResources(pool, memCache, storeReg)

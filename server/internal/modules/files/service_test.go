@@ -1059,8 +1059,17 @@ func TestValidateAndLockAvatarFileAndSignURL(t *testing.T) {
 		t.Fatalf("ValidateAndLockAvatarFile(ownerA) = %v, want nil", err)
 	}
 	signedURL, err := svc.SignAvatarURL(t.Context(), avatarRec.ID)
-	if err != nil || !strings.HasPrefix(signedURL, signedURLPathPrefix) {
+	if err != nil || !strings.HasPrefix(signedURL, defaultSignedURLPathPrefix) {
 		t.Fatalf("SignAvatarURL() = (%q, %v), want signed prefix", signedURL, err)
+	}
+
+	customPrefixSvc := newServiceWithStore(st, reg, ServiceConfig{
+		SignedURLSecret:     "unit-test-secret-at-least-32-bytes",
+		SignedURLPathPrefix: "api/v2/files/signed",
+	}, ServiceDeps{})
+	customSigned, err := customPrefixSvc.CreateSignedURL(t.Context(), avatarRec.ID, DispositionInline)
+	if err != nil || !strings.HasPrefix(customSigned.URL, "/api/v2/files/signed/") {
+		t.Fatalf("CreateSignedURL() with custom prefix = (%q, %v), want /api/v2/files/signed/ prefix", customSigned.URL, err)
 	}
 
 	// Foreign owner must be rejected with 404 (no existence leak).
