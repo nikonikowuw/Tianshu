@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -391,6 +392,8 @@ func TestIdentityConcurrentLastSuperAdminAndSoftDeleteRebuild(t *testing.T) {
 	// Active session must be revoked on soft delete.
 	if _, err := authSvc.Refresh(ctx, auth.RefreshInput{RefreshToken: aliceLogin.RefreshToken}); err == nil {
 		t.Fatal("expected soft-deleted user's refresh token to fail")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+		t.Fatalf("expected 401 on soft-deleted refresh, got %v", err)
 	}
 	// Clearing user_roles on soft delete releases ROLES_IN_USE so customRole can be deleted.
 	if err := accessSvc.DeleteRole(ctx, access.DeleteRoleInput{RoleID: customRole.ID}); err != nil {
@@ -409,6 +412,146 @@ func TestIdentityConcurrentLastSuperAdminAndSoftDeleteRebuild(t *testing.T) {
 	}
 	if alice2.ID == alice.ID {
 		t.Fatalf("expected new UUIDv7 for recreated user")
+	}
+
+	// Concurrent mutual DeleteUser between active super_admins must leave exactly 1 active super_admin.
+	if err := idSvc.DeleteUser(ctx, identity.DeleteUserInput{
+		UserID:         disabledID,
+		ActorID:        &activeID,
+		ActorSessionID: activeSess,
+	}); err != nil {
+		t.Fatalf("cleanup disabled super_admin: %v", err)
+	}
+	ds2, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username:       "super_del2",
+		Email:          "super_del2@example.com",
+		Password:       "password123",
+		RoleIDs:        []uuid.UUID{superRoleID},
+		ActorID:        &activeID,
+		ActorSessionID: activeSess,
+	})
+	if err != nil {
+		t.Fatalf("create super_del2: %v", err)
+	}
+	ds2Login, err := authSvc.Login(ctx, auth.LoginInput{Identifier: "super_del2", Password: "password123", ClientIP: "127.0.0.1", UserAgent: "Del2"})
+	if err != nil {
+		t.Fatalf("login super_del2: %v", err)
+	}
+	ds2Claims, err := jwtMgr.Verify(ds2Login.AccessToken)
+	if err != nil {
+		t.Fatalf("verify super_del2: %v", err)
+	}
+
+	delStart := make(chan struct{})
+	var delWG sync.WaitGroup
+	delErrs := make([]error, 2)
+	delWG.Add(2)
+	go func() {
+		defer delWG.Done()
+		<-delStart
+		delErrs[0] = idSvc.DeleteUser(ctx, identity.DeleteUserInput{
+			UserID:         activeID,
+			ActorID:        &ds2.ID,
+			ActorSessionID: ds2Claims.SessionID,
+		})
+	}()
+	go func() {
+		defer delWG.Done()
+		<-delStart
+		delErrs[1] = idSvc.DeleteUser(ctx, identity.DeleteUserInput{
+			UserID:         ds2.ID,
+			ActorID:        &activeID,
+			ActorSessionID: activeSess,
+		})
+	}()
+	close(delStart)
+	delWG.Wait()
+
+	var delOK, delRejected int
+	for _, e := range delErrs {
+		if e == nil {
+			delOK++
+			continue
+		}
+		appErr, ok := apperr.As(e)
+		if !ok {
+			t.Fatalf("expected *apperr.Error from concurrent DeleteUser, got %v", e)
+		}
+		if appErr.Code == apperr.CodeUnauthorized || appErr.Code == identity.ErrCodeLastSuperAdmin || appErr.Code == identity.ErrCodeSuperAdminProtect {
+			delRejected++
+		} else {
+			t.Fatalf("unexpected concurrent DeleteUser error: %v", e)
+		}
+	}
+	if delOK != 1 || delRejected != 1 {
+		t.Fatalf("concurrent mutual DeleteUser: ok=%d rejected=%d errs=%v", delOK, delRejected, delErrs)
+	}
+
+	// Surviving super_admin + newly created third super_admin: concurrent DeleteUser vs role-demote UpdateUser.
+	survivorID, survivorSess := activeID, activeSess
+	if delErrs[0] == nil {
+		survivorID, survivorSess = ds2.ID, ds2Claims.SessionID
+	}
+	ds3, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username:       "super_del3",
+		Email:          "super_del3@example.com",
+		Password:       "password123",
+		RoleIDs:        []uuid.UUID{superRoleID},
+		ActorID:        &survivorID,
+		ActorSessionID: survivorSess,
+	})
+	if err != nil {
+		t.Fatalf("create super_del3: %v", err)
+	}
+	ds3Login, err := authSvc.Login(ctx, auth.LoginInput{Identifier: "super_del3", Password: "password123", ClientIP: "127.0.0.1", UserAgent: "Del3"})
+	if err != nil {
+		t.Fatalf("login super_del3: %v", err)
+	}
+	ds3Claims, err := jwtMgr.Verify(ds3Login.AccessToken)
+	if err != nil {
+		t.Fatalf("verify super_del3: %v", err)
+	}
+
+	raceStart := make(chan struct{})
+	var raceWG sync.WaitGroup
+	raceErrs := make([]error, 2)
+	emptyRoles := []uuid.UUID{}
+	raceWG.Add(2)
+	go func() {
+		defer raceWG.Done()
+		<-raceStart
+		raceErrs[0] = idSvc.DeleteUser(ctx, identity.DeleteUserInput{
+			UserID:         survivorID,
+			ActorID:        &ds3.ID,
+			ActorSessionID: ds3Claims.SessionID,
+		})
+	}()
+	go func() {
+		defer raceWG.Done()
+		<-raceStart
+		_, raceErrs[1] = idSvc.UpdateUser(ctx, identity.UpdateUserInput{
+			UserID:         ds3.ID,
+			RoleIDs:        &emptyRoles,
+			ActorID:        &survivorID,
+			ActorSessionID: survivorSess,
+		})
+	}()
+	close(raceStart)
+	raceWG.Wait()
+
+	var raceOK, raceRej int
+	for _, e := range raceErrs {
+		if e == nil {
+			raceOK++
+			continue
+		}
+		if _, ok := apperr.As(e); !ok {
+			t.Fatalf("expected *apperr.Error in DeleteUser vs UpdateUser race, got %v", e)
+		}
+		raceRej++
+	}
+	if raceOK != 1 || raceRej != 1 {
+		t.Fatalf("concurrent DeleteUser vs UpdateUser: ok=%d rej=%d errs=%v", raceOK, raceRej, raceErrs)
 	}
 }
 
@@ -516,8 +659,35 @@ func TestIdentityUniqueConflictsListSQLAndTxRollbackPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser(uLoggedIn): %v", err)
 	}
-	if err := idSvc.RecordLogin(ctx, uLoggedIn.ID); err != nil {
-		t.Fatalf("RecordLogin: %v", err)
+	// Mixed-case email lookup + CompleteLogin (with CAS rehash) in real Postgres transaction.
+	zetaCreds, err := idSvc.GetAuthCredentials(ctx, "  ZETA@EXAMPLE.COM ")
+	if err != nil || zetaCreds.ID != uLoggedIn.ID {
+		t.Fatalf("GetAuthCredentials(mixed-case email) = (%+v, %v)", zetaCreds, err)
+	}
+	rehashed, err := hasher.Hash("password123")
+	if err != nil {
+		t.Fatalf("hasher.Hash: %v", err)
+	}
+	if err := tx.WithinTx(ctx, func(txCtx context.Context) error {
+		return idSvc.CompleteLogin(txCtx, identity.CompleteLoginInput{
+			UserID:               uLoggedIn.ID,
+			ExpectedPasswordHash: zetaCreds.PasswordHash,
+			UpgradedPasswordHash: rehashed,
+		})
+	}); err != nil {
+		t.Fatalf("CompleteLogin: %v", err)
+	}
+	// Mismatched expected hash returns 401 without overwriting stored hash.
+	if err := tx.WithinTx(ctx, func(txCtx context.Context) error {
+		return idSvc.CompleteLogin(txCtx, identity.CompleteLoginInput{
+			UserID:               uLoggedIn.ID,
+			ExpectedPasswordHash: "wrong-hash",
+			UpgradedPasswordHash: "should-not-apply",
+		})
+	}); err == nil {
+		t.Fatal("expected 401 on mismatched CompleteLogin")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+		t.Fatalf("expected 401 on mismatched CompleteLogin, got %v", err)
 	}
 
 	// Duplicate email on UpdateUser triggers real Postgres 23505 -> 409 USERS_EMAIL_CONFLICT.
@@ -546,15 +716,41 @@ func TestIdentityUniqueConflictsListSQLAndTxRollbackPostgres(t *testing.T) {
 		t.Fatalf("expected LEFT JOIN createdBy projection, got %+v", escaped.Items[0].CreatedBy)
 	}
 
-	// Sort by username ASC and last_login_at DESC (non-null first, NULLS LAST).
-	byUsername, err := idSvc.ListUsers(ctx, identity.UserListFilter{
+	// Sort by username DESC, updated_at ASC/DESC, last_login_at ASC NULLS LAST, and DESC NULLS LAST.
+	byUsernameDesc, err := idSvc.ListUsers(ctx, identity.UserListFilter{
 		Pagination: pagination.Normalize(1, 20),
 		Sort:       "username",
+		Order:      "desc",
+	})
+	if err != nil || len(byUsernameDesc.Items) != 3 || byUsernameDesc.Items[0].Username != "zeta_user" || byUsernameDesc.Items[2].Username != "alpha_user" {
+		t.Fatalf("sort username desc = (%+v, %v)", byUsernameDesc, err)
+	}
+	// Touch uSpecial so its updated_at is strictly newest, and verify updated_by LEFT JOIN.
+	updatedDisplay := `100%_match\display`
+	if _, err := idSvc.UpdateUser(ctx, identity.UpdateUserInput{
+		UserID:      uSpecial.ID,
+		DisplayName: &updatedDisplay,
+		ActorID:     &admin.ID,
+	}); err != nil {
+		t.Fatalf("touch uSpecial updated_at: %v", err)
+	}
+	byUpdatedDesc, err := idSvc.ListUsers(ctx, identity.UserListFilter{
+		Pagination: pagination.Normalize(1, 20),
+		Sort:       "updated_at",
+		Order:      "desc",
+	})
+	if err != nil || len(byUpdatedDesc.Items) != 3 || byUpdatedDesc.Items[0].ID != uSpecial.ID || byUpdatedDesc.Items[0].UpdatedBy == nil || byUpdatedDesc.Items[0].UpdatedBy.Username != "root_sql" {
+		t.Fatalf("sort updated_at desc = (%+v, %v)", byUpdatedDesc, err)
+	}
+	byUpdatedAsc, err := idSvc.ListUsers(ctx, identity.UserListFilter{
+		Pagination: pagination.Normalize(1, 20),
+		Sort:       "updated_at",
 		Order:      "asc",
 	})
-	if err != nil || len(byUsername.Items) != 3 || byUsername.Items[0].Username != "alpha_user" || byUsername.Items[2].Username != "zeta_user" {
-		t.Fatalf("sort username asc = (%+v, %v)", byUsername, err)
+	if err != nil || len(byUpdatedAsc.Items) != 3 || byUpdatedAsc.Items[2].ID != uSpecial.ID {
+		t.Fatalf("sort updated_at asc = (%+v, %v)", byUpdatedAsc, err)
 	}
+
 	byLogin, err := idSvc.ListUsers(ctx, identity.UserListFilter{
 		Pagination: pagination.Normalize(1, 20),
 		Sort:       "last_login_at",
@@ -563,6 +759,15 @@ func TestIdentityUniqueConflictsListSQLAndTxRollbackPostgres(t *testing.T) {
 	if err != nil || len(byLogin.Items) != 3 || byLogin.Items[0].ID != uLoggedIn.ID {
 		t.Fatalf("sort last_login_at desc (NULLS LAST) = (%+v, %v)", byLogin, err)
 	}
+	byLoginAsc, err := idSvc.ListUsers(ctx, identity.UserListFilter{
+		Pagination: pagination.Normalize(1, 20),
+		Sort:       "last_login_at",
+		Order:      "asc",
+	})
+	if err != nil || len(byLoginAsc.Items) != 3 || byLoginAsc.Items[0].ID != uLoggedIn.ID ||
+		byLoginAsc.Items[1].LastLoginAt != nil || byLoginAsc.Items[2].LastLoginAt != nil {
+		t.Fatalf("sort last_login_at asc (NULLS LAST) = (%+v, %v)", byLoginAsc, err)
+	}
 	// Empty sort with order=asc sorts created_at ASC (admin created first).
 	byDefaultAsc, err := idSvc.ListUsers(ctx, identity.UserListFilter{
 		Pagination: pagination.Normalize(1, 20),
@@ -570,6 +775,49 @@ func TestIdentityUniqueConflictsListSQLAndTxRollbackPostgres(t *testing.T) {
 	})
 	if err != nil || len(byDefaultAsc.Items) != 3 || byDefaultAsc.Items[0].ID != admin.ID {
 		t.Fatalf("default sort order=asc = (%+v, %v), want admin first", byDefaultAsc, err)
+	}
+
+	// CountUsers, multi-page LIMIT/OFFSET pagination (pageSize=10 across 11 users), and ListUsernamesByIDs with soft-deleted creator.
+	var extraIDs []uuid.UUID
+	for i := range 8 {
+		u, createErr := idSvc.CreateUser(ctx, identity.CreateUserInput{
+			Username: fmt.Sprintf("page_user_%02d", i),
+			Email:    fmt.Sprintf("page_user_%02d@example.com", i),
+			Password: "password123",
+			ActorID:  &admin.ID,
+		})
+		if createErr != nil {
+			t.Fatalf("CreateUser(page_user_%02d): %v", i, createErr)
+		}
+		extraIDs = append(extraIDs, u.ID)
+	}
+	totalCount, err := idSvc.CountUsers(ctx)
+	if err != nil || totalCount != 11 {
+		t.Fatalf("CountUsers = (%d, %v), want 11", totalCount, err)
+	}
+	page1, err := idSvc.ListUsers(ctx, identity.UserListFilter{
+		Pagination: pagination.Normalize(1, 10),
+		Sort:       "username",
+		Order:      "asc",
+	})
+	page2, err2 := idSvc.ListUsers(ctx, identity.UserListFilter{
+		Pagination: pagination.Normalize(2, 10),
+		Sort:       "username",
+		Order:      "asc",
+	})
+	if err != nil || err2 != nil || page1.Total != 11 || len(page1.Items) != 10 || page2.Total != 11 || len(page2.Items) != 1 || page2.Items[0].Username != "zeta_user" {
+		t.Fatalf("multi-page ListUsers failed: p1=(%+v, %v) p2=(%+v, %v)", page1, err, page2, err2)
+	}
+	// Soft-delete one extra user and confirm ListUsernamesByIDs retains its username.
+	if err := idSvc.DeleteUser(ctx, identity.DeleteUserInput{
+		UserID:  extraIDs[0],
+		ActorID: &admin.ID,
+	}); err != nil {
+		t.Fatalf("DeleteUser(extra): %v", err)
+	}
+	namesMap, err := idSvc.ListUsernamesByIDs(ctx, []uuid.UUID{admin.ID, extraIDs[0]})
+	if err != nil || namesMap[admin.ID] != "root_sql" || namesMap[extraIDs[0]] != "page_user_00" {
+		t.Fatalf("ListUsernamesByIDs = (%+v, %v)", namesMap, err)
 	}
 
 	// 3. Cross-module tx rollback: prime access cache, then trigger failing AuditRecorder inside UpdateUser.
@@ -592,6 +840,8 @@ func TestIdentityUniqueConflictsListSQLAndTxRollbackPostgres(t *testing.T) {
 		ActorID:     &admin.ID,
 	}); err == nil {
 		t.Fatal("expected rollback error from failing AuditRecorder")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 500 || appErr.Code != apperr.CodeInternal {
+		t.Fatalf("expected 500 INTERNAL_ERROR from failing AuditRecorder, got %v", err)
 	}
 	reloaded, err := idSvc.GetUser(ctx, uSpecial.ID)
 	if err != nil {
@@ -653,7 +903,11 @@ type filesAvatarAdapter struct {
 }
 
 func (a *filesAvatarAdapter) ValidateAndLockAvatarFile(ctx context.Context, fileID, ownerID uuid.UUID) error {
-	return a.svc.ValidateAndLockAvatarFile(ctx, fileID, ownerID)
+	err := a.svc.ValidateAndLockAvatarFile(ctx, fileID, ownerID)
+	if appErr, ok := apperr.As(err); ok && appErr.Code == files.ErrCodeNotFound {
+		return identity.ErrInvalidAvatarFile
+	}
+	return err
 }
 
 func (a *filesAvatarAdapter) SignAvatarURL(ctx context.Context, fileID uuid.UUID) (string, error) {
@@ -1004,6 +1258,8 @@ func TestProfileAvatarLockPasswordAndSessionInvalidationPostgres(t *testing.T) {
 	}
 	if _, err := authSvc.Refresh(ctx, auth.RefreshInput{RefreshToken: login2.RefreshToken}); err == nil {
 		t.Fatal("expected kicked device 2 refresh to fail")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+		t.Fatalf("expected 401 on kicked device 2 refresh, got %v", err)
 	}
 
 	// Revoked device 2 must NOT be able to view/modify profile or retaliate against device 1.
@@ -1072,11 +1328,82 @@ func TestProfileAvatarLockPasswordAndSessionInvalidationPostgres(t *testing.T) {
 	}
 	if _, err := authSvc.Refresh(ctx, auth.RefreshInput{RefreshToken: login3.RefreshToken}); err == nil {
 		t.Fatal("expected device 3 refresh to fail after ChangePassword")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+		t.Fatalf("expected 401 on device 3 refresh after ChangePassword, got %v", err)
 	}
 	if _, err := authSvc.Login(ctx, auth.LoginInput{Identifier: "profileuser", Password: "OldPassword123"}); err == nil {
 		t.Fatal("expected old password login to fail")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 401 {
+		t.Fatalf("expected 401 on old password login, got %v", err)
 	}
 	if _, err := authSvc.Login(ctx, auth.LoginInput{Identifier: "profileuser", Password: "NewPassword456"}); err != nil {
 		t.Fatalf("expected new password login to succeed, got %v", err)
+	}
+
+	// 4. Real Postgres UpdateOwnProfile email conflict + concurrent ChangePassword vs admin password reset serialization.
+	otherUser, err := idSvc.CreateUser(ctx, identity.CreateUserInput{
+		Username: "otherprofile",
+		Email:    "other.profile@example.com",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser(otherprofile): %v", err)
+	}
+	conflictEmail := "OTHER.PROFILE@EXAMPLE.COM"
+	if _, err := idSvc.UpdateProfile(ctx, identity.UpdateProfileInput{
+		UserID:           user.ID,
+		CurrentSessionID: claims1.SessionID,
+		Email:            &conflictEmail,
+	}); err == nil {
+		t.Fatal("expected 409 email conflict on UpdateProfile")
+	} else if appErr, ok := apperr.As(err); !ok || appErr.Status != 409 || appErr.Code != identity.ErrCodeEmailConflict {
+		t.Fatalf("expected 409 %s, got %v", identity.ErrCodeEmailConflict, err)
+	}
+
+	// Concurrent ChangePassword vs admin UpdateUser(password reset) on user.ID under FOR UPDATE row lock.
+	_ = otherUser
+	pwRaceStart := make(chan struct{})
+	var pwWG sync.WaitGroup
+	var chgErr, resetErr error
+	adminResetPw := "AdminReset789"
+	pwWG.Add(2)
+	go func() {
+		defer pwWG.Done()
+		<-pwRaceStart
+		_, chgErr = idSvc.ChangePassword(ctx, identity.ChangePasswordInput{
+			UserID:           user.ID,
+			CurrentSessionID: claims1.SessionID,
+			CurrentPassword:  "NewPassword456",
+			NewPassword:      "SelfChosen999",
+		})
+	}()
+	go func() {
+		defer pwWG.Done()
+		<-pwRaceStart
+		_, resetErr = idSvc.UpdateUser(ctx, identity.UpdateUserInput{
+			UserID:   user.ID,
+			Password: &adminResetPw,
+		})
+	}()
+	close(pwRaceStart)
+	pwWG.Wait()
+
+	if resetErr != nil {
+		t.Fatalf("admin password reset failed: %v", resetErr)
+	}
+	if chgErr != nil {
+		// Admin reset committed first (or invalidated claims1 session before/inside lock); self-change must fail cleanly with 400 or 401 and NOT overwrite AdminReset789.
+		appErr, ok := apperr.As(chgErr)
+		if !ok || (appErr.Code != identity.ErrCodeProfileInvalidCurrentPassword && appErr.Status != 401) {
+			t.Fatalf("unexpected concurrent ChangePassword error: %v", chgErr)
+		}
+		if _, err := authSvc.Login(ctx, auth.LoginInput{Identifier: "profileuser", Password: adminResetPw}); err != nil {
+			t.Fatalf("admin reset password should remain effective: %v", err)
+		}
+	} else {
+		// ChangePassword committed first; admin reset ran second and revoked sessions, so AdminReset789 must be effective.
+		if _, err := authSvc.Login(ctx, auth.LoginInput{Identifier: "profileuser", Password: adminResetPw}); err != nil {
+			t.Fatalf("final admin reset password should be effective: %v", err)
+		}
 	}
 }

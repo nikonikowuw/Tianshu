@@ -2,10 +2,15 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrInvalidAvatarFile indicates the requested avatar file does not exist, is not ready,
+// is not an avatar image, or is not owned by the caller.
+var ErrInvalidAvatarFile = errors.New("identity: invalid avatar file")
 
 // PasswordHasher hashes and verifies user passwords.
 type PasswordHasher interface {

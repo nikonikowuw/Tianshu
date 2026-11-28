@@ -341,7 +341,14 @@ func (a *identityFilesAdapter) ValidateAndLockAvatarFile(ctx context.Context, fi
 	if a.svc == nil {
 		return apperr.Internal(errors.New("identity files adapter: files service not initialized"))
 	}
-	return a.svc.ValidateAndLockAvatarFile(ctx, fileID, ownerID)
+	return mapValidateAvatarFileErr(a.svc.ValidateAndLockAvatarFile(ctx, fileID, ownerID))
+}
+
+func mapValidateAvatarFileErr(err error) error {
+	if appErr, ok := apperr.As(err); ok && appErr.Code == files.ErrCodeNotFound {
+		return identity.ErrInvalidAvatarFile
+	}
+	return err
 }
 
 func (a *identityFilesAdapter) SignAvatarURL(ctx context.Context, fileID uuid.UUID) (string, error) {
@@ -373,6 +380,9 @@ type identityAuditAdapter struct {
 var _ identity.AuditRecorder = (*identityAuditAdapter)(nil)
 
 func (a *identityAuditAdapter) Record(ctx context.Context, entry identity.AuditEntry) error {
+	if a.svc == nil {
+		return apperr.Internal(errors.New("identity audit adapter: audit service not initialized"))
+	}
 	return a.svc.Record(ctx, audit.RecordInput{
 		ActorID:       entry.ActorID,
 		ActorUsername: entry.ActorUsername,

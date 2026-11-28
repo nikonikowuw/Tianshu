@@ -37,7 +37,7 @@
             ├── model.go             # 领域模型与状态常量
             ├── errors.go            # 本模块错误码常量（大写模块前缀）与错误构造函数
             ├── locales/             # 本模块多语言文案（zh-CN.toml / en-US.toml）
-            ├── locales.go           # //go:embed locales/*.toml，导出 Messages() 或 LocaleFS() 供 app 注册
+            ├── locales.go           # //go:embed locales/*.toml，导出 LocalesFS（或 Messages()）供 app 注册
             ├── deps.go              # 仅当本模块依赖其他模块时创建：声明最小私有接口与所需局部结构
             ├── store.go             # 封装 dbgen、从 ctx 自动拾取事务、翻译 DB 错误与行映射
             ├── service.go           # 业务逻辑、状态校验与事务编排（TxManager.WithinTx）
@@ -70,7 +70,7 @@
 ### 模块内调用链与可见性
 
 - 严格单向调用：`router.go` → `handler.go` → `service.go` → `store.go` → `internal/dbgen`。
-- **必须导出**：`Service`、`NewService`、`Handler`、`NewHandler`、`Messages()`、`RegisterRoutes`（如需公开接口则另增 `RegisterPublicRoutes`）、供 `app` 适配或测试引用的领域模型、错误码与 `deps.go` 中的消费方窄接口/局部结构（用于 `ServiceDeps` 注入与 `internal/app/adapters.go` 编译期接口断言）。
+- **必须导出**：`Service`、`NewService`、`Handler`、`NewHandler`、`LocalesFS`、`RegisterRoutes`（如需公开接口则另增 `RegisterPublicRoutes`）、供 `app` 适配或测试引用的领域模型、错误码与 `deps.go` 中的消费方窄接口/局部结构（用于 `ServiceDeps` 注入与 `internal/app/adapters.go` 编译期接口断言）。
 - **必须私有（小写）**：`store` 结构体及 `newStore`（仅在 `NewService` 内部实例化）、`request.go`/`response.go` 结构体、`handler.go` 中的具体接口方法。
 
 ## 3. 运行时收口契约

@@ -77,7 +77,6 @@ type store interface {
 	GetUserPasswordHashByID(ctx context.Context, id uuid.UUID) (userPasswordRecord, error)
 	GetUserPasswordHashByIDForUpdate(ctx context.Context, id uuid.UUID) (userPasswordRecord, error)
 	UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error
-	UpdateUserPasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error
 	UpdateUserPasswordHashIfMatches(ctx context.Context, id uuid.UUID, expectedHash, newHash string) (int64, error)
 
 	CountUsersFiltered(ctx context.Context, q listUsersQuery) (int64, error)
@@ -213,13 +212,6 @@ func (s *pgStore) GetUserPasswordHashByIDForUpdate(ctx context.Context, id uuid.
 
 func (s *pgStore) UpdateUserLastLogin(ctx context.Context, id uuid.UUID) error {
 	return s.queries(ctx).UpdateUserLastLogin(ctx, id)
-}
-
-func (s *pgStore) UpdateUserPasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error {
-	return s.queries(ctx).UpdateUserPasswordHash(ctx, dbgen.UpdateUserPasswordHashParams{
-		ID:           id,
-		PasswordHash: passwordHash,
-	})
 }
 
 func (s *pgStore) UpdateUserPasswordHashIfMatches(ctx context.Context, id uuid.UUID, expectedHash, newHash string) (int64, error) {

@@ -266,6 +266,8 @@
 
 - 响应 `204`（无响应体）。软删除用户，同事务内清空 `user_roles` 并吊销全部活跃会话。
 - 约束：事务内校验操作者未软删除、处于 `active` 且当前会话有效（分别返回 `401` / `403 AUTH_ACCOUNT_DISABLED`）；禁止删除自身（`409 USERS_SELF_OPERATION_FORBIDDEN`）；禁止非超管删除超管（`403 USERS_SUPER_ADMIN_PROTECTED`）；禁止删除最后一名活跃超管（`409 USERS_LAST_SUPER_ADMIN`）。
+- `identity` 用户管理字段级校验键（通过 `422 VALIDATION_FAILED` 的 `errors[].message` 翻译返回）：`USERS_INVALID_USERNAME`、`USERS_INVALID_EMAIL`、`USERS_INVALID_DISPLAY_NAME`、`USERS_INVALID_STATUS`、`USERS_INVALID_PASSWORD`、`USERS_INVALID_ROLE`、`USERS_INVALID_PAGE`、`USERS_INVALID_PAGE_SIZE`、`USERS_QUERY_TOO_LONG`、`USERS_TOO_MANY_ROLE_FILTERS`。
+- 审计动作：`POST /users` 写 `user.create`，`PATCH /users/:id` 写 `user.update`（含 `changedFields` 及状态/角色/重置密码变更详情），`DELETE /users/:id` 写 `user.delete`。
 
 ## 12. Menus 端点契约
 
