@@ -61,6 +61,7 @@ export function useCreateRoleMutation() {
     meta: { silent: true },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: rolesKeys.all })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     },
   })
 }
@@ -91,6 +92,7 @@ export function useDeleteRoleMutation() {
       void queryClient.invalidateQueries({ queryKey: rolesKeys.all })
       void queryClient.invalidateQueries({ queryKey: ['users'] })
       void queryClient.invalidateQueries({ queryKey: ['menus', 'user'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     },
   })
 }

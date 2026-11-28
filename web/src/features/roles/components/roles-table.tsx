@@ -214,6 +214,7 @@ export function RolesTable({
           <div className='flex items-center gap-2'>
             {isFetching && !isLoading && (
               <Loader2
+                role='status'
                 className='size-4 animate-spin text-muted-foreground'
                 aria-label={tCommon('loading')}
               />

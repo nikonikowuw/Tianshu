@@ -28,10 +28,15 @@ export const rolesSearchSchema = z.object({
     .transform((v) => v ?? 20)
     .catch(20),
   q: z
-    .string()
-    .trim()
-    .max(100)
-    .transform((v) => (v === '' ? undefined : v))
+    .preprocess(
+      (val) =>
+        typeof val === 'number' || typeof val === 'boolean' ? String(val) : val,
+      z
+        .string()
+        .trim()
+        .max(100)
+        .transform((v) => (v === '' ? undefined : v))
+    )
     .optional()
     .catch(undefined),
   type: stringOrArray

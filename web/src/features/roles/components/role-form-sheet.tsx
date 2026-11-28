@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -7,6 +7,8 @@ import { AlertCircle, Loader2, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { normalizeApiError } from '@/lib/api/error'
 import { formatServerErrorMessage } from '@/lib/handle-server-error'
+import { cn } from '@/lib/utils'
+import { useRetryCountdown } from '@/hooks/use-retry-countdown'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -18,6 +20,7 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
+  useFormField,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -32,6 +35,7 @@ import {
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
+import { RateLimitAlert } from '@/components/shared/auth-alert'
 import {
   permissionsCatalogQueryOptions,
   roleMenuTreeQueryOptions,
@@ -124,10 +128,12 @@ export function RoleFormSheet({
 
   const createMutation = useCreateRoleMutation()
   const updateMutation = useUpdateRoleMutation()
+  const cooldown = useRetryCountdown()
   const isSubmitting = createMutation.isPending || updateMutation.isPending
 
   useEffect(() => {
     if (!open) {
+      form.reset(EMPTY_VALUES)
       return
     }
     if (role && (mode === 'edit' || mode === 'view')) {
@@ -162,8 +168,11 @@ export function RoleFormSheet({
 
   const allPermissionCodes = useMemo(() => {
     if (!catalog) return []
-    return catalog.groups.flatMap((g) => g.permissions.map((p) => p.code))
+    return Array.from(
+      new Set(catalog.groups.flatMap((g) => g.permissions.map((p) => p.code)))
+    ).sort()
   }, [catalog])
+  const catalogReady = !isCatalogLoading && !isCatalogError && Boolean(catalog)
 
   const updatePermissionsField = (next: string[]) => {
     setBannerError(null)
@@ -200,9 +209,13 @@ export function RoleFormSheet({
       onOpenChange(false)
     } catch (err) {
       const apiErr = normalizeApiError(err)
+      if (apiErr.status === 429) {
+        cooldown.start(apiErr.retryAfter)
+        return
+      }
       const entries = Object.entries(apiErr.fieldErrors)
       if (apiErr.status === 422 && entries.length > 0) {
-        let mapped = false
+        let allMapped = true
         for (const [field, message] of entries) {
           if (
             field === 'code' ||
@@ -211,10 +224,11 @@ export function RoleFormSheet({
             field === 'permissions'
           ) {
             form.setError(field, { message })
-            mapped = true
+          } else {
+            allMapped = false
           }
         }
-        if (!mapped) {
+        if (!allMapped) {
           setBannerError(formatServerErrorMessage(err))
         }
       } else {
@@ -271,7 +285,10 @@ export function RoleFormSheet({
           >
             <ScrollArea className='min-h-0 flex-1'>
               <div className='space-y-5 px-6 py-5'>
-                {bannerError && (
+                {cooldown.isCoolingDown && (
+                  <RateLimitAlert seconds={cooldown.remaining} />
+                )}
+                {!cooldown.isCoolingDown && bannerError && (
                   <Alert variant='destructive'>
                     <AlertCircle className='size-4' />
                     <AlertDescription>{bannerError}</AlertDescription>
@@ -347,86 +364,39 @@ export function RoleFormSheet({
                   name='permissions'
                   render={() => (
                     <FormItem className='space-y-3'>
-                      <div className='flex flex-wrap items-center justify-between gap-2'>
-                        <div className='flex items-center gap-2'>
-                          <FormLabel className='text-sm font-medium'>
-                            {t('sheet.permissionsLabel')}
-                          </FormLabel>
-                          <Badge
-                            variant='outline'
-                            className='font-mono text-xs tabular-nums'
-                          >
-                            {t('sheet.selectedSummary', {
-                              selected: selectedPermissions.length,
-                              total: allPermissionCodes.length,
-                            })}
-                          </Badge>
-                        </div>
-
-                        {!isReadOnly && allPermissionCodes.length > 0 && (
-                          <div className='flex items-center gap-1.5'>
-                            <Button
-                              type='button'
-                              variant='ghost'
-                              size='sm'
-                              className='h-7 px-2 text-xs'
-                              disabled={isSubmitting}
-                              onClick={() =>
-                                updatePermissionsField(allPermissionCodes)
-                              }
-                            >
-                              {t('sheet.selectAll')}
-                            </Button>
-                            <Button
-                              type='button'
-                              variant='ghost'
-                              size='sm'
-                              className='h-7 px-2 text-xs'
-                              disabled={isSubmitting}
-                              onClick={() => updatePermissionsField([])}
-                            >
-                              {t('sheet.clearAll')}
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-
-                      {isCatalogError ? (
-                        <Alert variant='destructive'>
-                          <AlertCircle className='size-4' />
-                          <AlertDescription className='flex items-center justify-between gap-2'>
-                            <span>{t('sheet.permissionsLoadFailed')}</span>
-                            <Button
-                              type='button'
-                              variant='outline'
-                              size='sm'
-                              onClick={() => void refetchCatalog()}
-                            >
-                              {tCommon('retry')}
-                            </Button>
-                          </AlertDescription>
-                        </Alert>
-                      ) : isCatalogLoading ||
-                        (isMenuTreeLoading && !isMenuTreeError) ? (
-                        <div className='space-y-3'>
-                          {Array.from({ length: 3 }).map((_, idx) => (
-                            <Skeleton
-                              key={`perm-skel-${idx}`}
-                              className='h-24 w-full rounded-lg'
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        <RolePermissionTree
-                          menuTree={
-                            isMenuTreeError ? [] : (menuTreeData?.items ?? [])
-                          }
-                          groups={catalog?.groups ?? []}
-                          selectedPermissions={selectedPermissions}
-                          disabled={isReadOnly || isSubmitting}
-                          onChange={updatePermissionsField}
-                        />
-                      )}
+                      <PermissionsFieldBody
+                        label={t('sheet.permissionsLabel')}
+                        selectedSummary={t('sheet.selectedSummary', {
+                          selected: selectedPermissions.length,
+                          total: allPermissionCodes.length,
+                        })}
+                        showSummary={catalogReady}
+                        showBulkActions={
+                          !isReadOnly && allPermissionCodes.length > 0
+                        }
+                        selectAllLabel={t('sheet.selectAll')}
+                        clearAllLabel={t('sheet.clearAll')}
+                        loadFailedLabel={t('sheet.permissionsLoadFailed')}
+                        retryLabel={tCommon('retry')}
+                        isSubmitting={isSubmitting}
+                        isReadOnly={isReadOnly}
+                        isCatalogError={isCatalogError}
+                        isLoadingTree={
+                          isCatalogLoading ||
+                          (isMenuTreeLoading && !isMenuTreeError)
+                        }
+                        menuTree={
+                          isMenuTreeError ? [] : (menuTreeData?.items ?? [])
+                        }
+                        groups={catalog?.groups ?? []}
+                        selectedPermissions={selectedPermissions}
+                        onSelectAll={() =>
+                          updatePermissionsField(allPermissionCodes)
+                        }
+                        onClearAll={() => updatePermissionsField([])}
+                        onRetryCatalog={() => void refetchCatalog()}
+                        onChangePermissions={updatePermissionsField}
+                      />
                       <FormMessage />
                     </FormItem>
                   )}
@@ -453,7 +423,10 @@ export function RoleFormSheet({
                   >
                     {tCommon('cancel')}
                   </Button>
-                  <Button type='submit' disabled={isSubmitting}>
+                  <Button
+                    type='submit'
+                    disabled={isSubmitting || cooldown.isCoolingDown}
+                  >
                     {isSubmitting && (
                       <Loader2 className='size-4 animate-spin' />
                     )}
@@ -466,5 +439,137 @@ export function RoleFormSheet({
         </Form>
       </SheetContent>
     </Sheet>
+  )
+}
+
+type PermissionsFieldBodyProps = {
+  label: string
+  selectedSummary: string
+  showSummary: boolean
+  showBulkActions: boolean
+  selectAllLabel: string
+  clearAllLabel: string
+  loadFailedLabel: string
+  retryLabel: string
+  isSubmitting: boolean
+  isReadOnly: boolean
+  isCatalogError: boolean
+  isLoadingTree: boolean
+  menuTree: Parameters<typeof RolePermissionTree>[0]['menuTree']
+  groups: Parameters<typeof RolePermissionTree>[0]['groups']
+  selectedPermissions: string[]
+  onSelectAll: () => void
+  onClearAll: () => void
+  onRetryCatalog: () => void
+  onChangePermissions: (next: string[]) => void
+}
+
+function PermissionsFieldBody({
+  label,
+  selectedSummary,
+  showSummary,
+  showBulkActions,
+  selectAllLabel,
+  clearAllLabel,
+  loadFailedLabel,
+  retryLabel,
+  isSubmitting,
+  isReadOnly,
+  isCatalogError,
+  isLoadingTree,
+  menuTree,
+  groups,
+  selectedPermissions,
+  onSelectAll,
+  onClearAll,
+  onRetryCatalog,
+  onChangePermissions,
+}: PermissionsFieldBodyProps) {
+  const labelId = useId()
+  const { error, formMessageId } = useFormField()
+
+  return (
+    <>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <div className='flex items-center gap-2'>
+          <span
+            id={labelId}
+            className={cn(
+              'text-sm leading-none font-medium',
+              error && 'text-destructive'
+            )}
+          >
+            {label}
+          </span>
+          {showSummary && (
+            <Badge variant='outline' className='font-mono text-xs tabular-nums'>
+              {selectedSummary}
+            </Badge>
+          )}
+        </div>
+
+        {showBulkActions && (
+          <div className='flex items-center gap-1.5'>
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='h-7 px-2 text-xs'
+              disabled={isSubmitting}
+              onClick={onSelectAll}
+            >
+              {selectAllLabel}
+            </Button>
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='h-7 px-2 text-xs'
+              disabled={isSubmitting}
+              onClick={onClearAll}
+            >
+              {clearAllLabel}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {isCatalogError ? (
+        <Alert variant='destructive'>
+          <AlertCircle className='size-4' />
+          <AlertDescription className='flex items-center justify-between gap-2'>
+            <span>{loadFailedLabel}</span>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={onRetryCatalog}
+            >
+              {retryLabel}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : isLoadingTree ? (
+        <div className='space-y-3'>
+          {Array.from({ length: 3 }).map((_, idx) => (
+            <Skeleton
+              key={`perm-skel-${idx}`}
+              className='h-24 w-full rounded-lg'
+            />
+          ))}
+        </div>
+      ) : (
+        <RolePermissionTree
+          ariaLabelledBy={labelId}
+          ariaDescribedBy={error ? formMessageId : undefined}
+          ariaInvalid={Boolean(error)}
+          menuTree={menuTree}
+          groups={groups}
+          selectedPermissions={selectedPermissions}
+          disabled={isReadOnly || isSubmitting}
+          onChange={onChangePermissions}
+        />
+      )}
+    </>
   )
 }

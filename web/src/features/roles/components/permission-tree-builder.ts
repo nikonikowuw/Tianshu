@@ -20,6 +20,49 @@ export function collectCodes(node: PermissionTreeNode): string[] {
   return codes
 }
 
+export function collectDescendantCodesMap(
+  nodes: PermissionTreeNode[]
+): Map<string, string[]> {
+  const map = new Map<string, string[]>()
+
+  const visit = (node: PermissionTreeNode): string[] => {
+    const codeSet = new Set<string>()
+    if (node.permissionCode) {
+      codeSet.add(node.permissionCode)
+    }
+    for (const child of node.children) {
+      for (const code of visit(child)) {
+        codeSet.add(code)
+      }
+    }
+    const list = Array.from(codeSet)
+    map.set(node.id, list)
+    return list
+  }
+
+  for (const root of nodes) {
+    visit(root)
+  }
+  return map
+}
+
+function buildCatalogFallbackTree(
+  groups: PermissionGroup[]
+): PermissionTreeNode[] {
+  return groups.map((g) => ({
+    id: `group:${g.module}`,
+    label: g.label,
+    type: 'directory',
+    children: g.permissions.map((p) => ({
+      id: `perm:${p.code}`,
+      label: p.name,
+      type: 'button',
+      permissionCode: p.code,
+      children: [],
+    })),
+  }))
+}
+
 function mapMenuNode(node: RoleMenuTreeNode): PermissionTreeNode {
   return {
     id: node.id,
@@ -98,18 +141,7 @@ export function buildPermissionTree(
   otherLabel: string
 ): PermissionTreeNode[] {
   if (menuTree.length === 0) {
-    return groups.map((g) => ({
-      id: `group:${g.module}`,
-      label: g.label,
-      type: 'directory',
-      children: g.permissions.map((p) => ({
-        id: `perm:${p.code}`,
-        label: p.name,
-        type: 'button',
-        permissionCode: p.code,
-        children: [],
-      })),
-    }))
+    return buildCatalogFallbackTree(groups)
   }
 
   const permissionLabelByCode = new Map<string, string>()
@@ -123,6 +155,9 @@ export function buildPermissionTree(
     prunePermissionlessNodes(menuTree.map(mapMenuNode)),
     permissionLabelByCode
   )
+  if (tree.length === 0) {
+    return buildCatalogFallbackTree(groups)
+  }
   const boundCodes = new Set<string>()
   for (const root of tree) {
     for (const c of collectCodes(root)) {

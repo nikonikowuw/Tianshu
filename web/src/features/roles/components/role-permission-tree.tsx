@@ -10,11 +10,16 @@ import type { PermissionGroup, RoleMenuTreeNode } from '../types'
 import {
   buildPermissionTree,
   collectCodes,
+  collectDescendantCodesMap,
   collectExpandableIds,
   type PermissionTreeNode,
 } from './permission-tree-builder'
 
 type RolePermissionTreeProps = {
+  id?: string
+  ariaLabelledBy?: string
+  ariaDescribedBy?: string
+  ariaInvalid?: boolean
   menuTree: RoleMenuTreeNode[]
   groups: PermissionGroup[]
   selectedPermissions: string[]
@@ -23,6 +28,10 @@ type RolePermissionTreeProps = {
 }
 
 export function RolePermissionTree({
+  id,
+  ariaLabelledBy,
+  ariaDescribedBy,
+  ariaInvalid,
   menuTree,
   groups,
   selectedPermissions,
@@ -36,6 +45,11 @@ export function RolePermissionTree({
   const treeNodes = useMemo(
     () => buildPermissionTree(menuTree, groups, t('sheet.otherPermissions')),
     [menuTree, groups, t]
+  )
+
+  const codesByNodeId = useMemo(
+    () => collectDescendantCodesMap(treeNodes),
+    [treeNodes]
   )
 
   const expandableIds = useMemo(
@@ -65,7 +79,7 @@ export function RolePermissionTree({
   }
 
   const toggleNode = (node: PermissionTreeNode, checked: boolean) => {
-    const targetCodes = collectCodes(node)
+    const targetCodes = codesByNodeId.get(node.id) ?? collectCodes(node)
     if (targetCodes.length === 0) return
     const next = new Set(selectedPermissions)
     for (const code of targetCodes) {
@@ -82,7 +96,7 @@ export function RolePermissionTree({
     nodes.map((node) => {
       const hasChildren = node.children.length > 0
       const isExpanded = expandedIds.has(node.id)
-      const nodeCodes = collectCodes(node)
+      const nodeCodes = codesByNodeId.get(node.id) ?? []
       const selectedCount = nodeCodes.filter((c) => selectedSet.has(c)).length
       const checkState: boolean | 'indeterminate' =
         nodeCodes.length === 0
@@ -163,7 +177,14 @@ export function RolePermissionTree({
     })
 
   return (
-    <div className='rounded-lg border'>
+    <div
+      id={id}
+      role='group'
+      aria-labelledby={ariaLabelledBy}
+      aria-describedby={ariaDescribedBy}
+      aria-invalid={ariaInvalid || undefined}
+      className={cn('rounded-lg border', ariaInvalid && 'border-destructive')}
+    >
       {expandableIds.length > 0 && (
         <div className='flex items-center justify-end gap-1 border-b bg-muted/30 px-2 py-1'>
           <Button
