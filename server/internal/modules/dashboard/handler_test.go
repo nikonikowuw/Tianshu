@@ -89,23 +89,51 @@ func TestDashboardHTTPRoutesContract(t *testing.T) {
 	authed.Use(mockAuth)
 	NewHandler(svc).RegisterRoutes(authed, mockRequireRead)
 
-	t.Run("rejects unauthenticated with 401 and unauthorized with 403", func(t *testing.T) {
-		req401 := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary", nil)
-		rec401 := httptest.NewRecorder()
-		engine.ServeHTTP(rec401, req401)
-		if rec401.Code != http.StatusUnauthorized {
-			t.Fatalf("401 status = %d, want 401", rec401.Code)
+	assertErrorBody := func(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode, lang string) map[string]any {
+		t.Helper()
+		if rec.Code != wantStatus {
+			t.Fatalf("status = %d, want %d (body=%s)", rec.Code, wantStatus, rec.Body.String())
 		}
-		if rec401.Header().Get("X-Request-Id") == "" {
-			t.Fatal("missing X-Request-Id on 401")
+		if rec.Header().Get("X-Request-Id") == "" {
+			t.Fatal("missing X-Request-Id header")
 		}
+		var raw map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("unmarshal error body: %v (body=%s)", err, rec.Body.String())
+		}
+		if _, hasReqID := raw["request_id"]; hasReqID {
+			t.Fatalf("error body must not duplicate request_id: %s", rec.Body.String())
+		}
+		if raw["code"] != wantCode {
+			t.Fatalf("code = %v, want %s", raw["code"], wantCode)
+		}
+		msg, _ := raw["message"].(string)
+		wantMsg := bundle.Translate(lang, wantCode, nil)
+		if msg == "" || msg == wantCode || msg != wantMsg {
+			t.Fatalf("lang=%s message = %q, want %q", lang, msg, wantMsg)
+		}
+		if wantStatus != http.StatusUnprocessableEntity {
+			if _, hasErrors := raw["errors"]; hasErrors {
+				t.Fatalf("non-422 error body must not include errors: %v", raw)
+			}
+		}
+		return raw
+	}
 
-		req403 := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary", nil)
-		req403.Header.Set("X-Test-User", "forbidden")
-		rec403 := httptest.NewRecorder()
-		engine.ServeHTTP(rec403, req403)
-		if rec403.Code != http.StatusForbidden {
-			t.Fatalf("403 status = %d, want 403", rec403.Code)
+	t.Run("rejects unauthenticated with 401 and unauthorized with 403", func(t *testing.T) {
+		for _, lang := range []string{"en-US", "zh-CN"} {
+			req401 := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary", nil)
+			req401.Header.Set("Accept-Language", lang)
+			rec401 := httptest.NewRecorder()
+			engine.ServeHTTP(rec401, req401)
+			assertErrorBody(t, rec401, http.StatusUnauthorized, apperr.CodeUnauthorized, lang)
+
+			req403 := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary", nil)
+			req403.Header.Set("X-Test-User", "forbidden")
+			req403.Header.Set("Accept-Language", lang)
+			rec403 := httptest.NewRecorder()
+			engine.ServeHTTP(rec403, req403)
+			assertErrorBody(t, rec403, http.StatusForbidden, apperr.CodeForbidden, lang)
 		}
 	})
 
@@ -153,7 +181,7 @@ func TestDashboardHTTPRoutesContract(t *testing.T) {
 		}
 	})
 
-	t.Run("accepts empty days default, days=14, and localizes 422 validation errors including days=0", func(t *testing.T) {
+	t.Run("accepts empty days default, days=14 and days=30, and localizes 422 validation errors including days=0", func(t *testing.T) {
 		reqEmpty := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary?days=", nil)
 		reqEmpty.Header.Set("X-Test-User", "allowed")
 		recEmpty := httptest.NewRecorder()
@@ -168,12 +196,33 @@ func TestDashboardHTTPRoutesContract(t *testing.T) {
 			t.Fatalf("days= empty rangeDays = %d (err=%v), want 7", emptyBody.RangeDays, err)
 		}
 
-		req14 := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary?days=14", nil)
-		req14.Header.Set("X-Test-User", "allowed")
-		rec14 := httptest.NewRecorder()
-		engine.ServeHTTP(rec14, req14)
-		if rec14.Code != http.StatusOK {
-			t.Fatalf("days=14 status = %d, want 200", rec14.Code)
+		for _, days := range []struct {
+			query string
+			want  int
+		}{
+			{query: "14", want: 14},
+			{query: "30", want: 30},
+		} {
+			reqRange := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary?days="+days.query, nil)
+			reqRange.Header.Set("X-Test-User", "allowed")
+			recRange := httptest.NewRecorder()
+			engine.ServeHTTP(recRange, reqRange)
+			if recRange.Code != http.StatusOK {
+				t.Fatalf("days=%s status = %d, want 200", days.query, recRange.Code)
+			}
+			if recRange.Header().Get("X-Request-Id") == "" {
+				t.Fatalf("missing X-Request-Id for days=%s", days.query)
+			}
+			var rangeBody struct {
+				RangeDays     int                     `json:"rangeDays"`
+				ActivityTrend []dailyActivityResponse `json:"activityTrend"`
+			}
+			if err := json.Unmarshal(recRange.Body.Bytes(), &rangeBody); err != nil {
+				t.Fatalf("unmarshal days=%s: %v", days.query, err)
+			}
+			if rangeBody.RangeDays != days.want || len(rangeBody.ActivityTrend) != days.want {
+				t.Fatalf("days=%s got rangeDays=%d len(trend)=%d, want %d", days.query, rangeBody.RangeDays, len(rangeBody.ActivityTrend), days.want)
+			}
 		}
 
 		for _, tc := range []struct {
@@ -191,12 +240,7 @@ func TestDashboardHTTPRoutesContract(t *testing.T) {
 			rec := httptest.NewRecorder()
 			engine.ServeHTTP(rec, req)
 
-			if rec.Code != http.StatusUnprocessableEntity {
-				t.Fatalf("query=%s status = %d, want 422; body=%s", tc.query, rec.Code, rec.Body.String())
-			}
-			if strings.Contains(rec.Body.String(), `"request_id"`) {
-				t.Fatalf("error body must not duplicate request_id: %s", rec.Body.String())
-			}
+			assertErrorBody(t, rec, http.StatusUnprocessableEntity, apperr.CodeValidationFailed, tc.lang)
 			var errResp struct {
 				Code   string `json:"code"`
 				Errors []struct {
@@ -207,12 +251,12 @@ func TestDashboardHTTPRoutesContract(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
 				t.Fatalf("unmarshal 422: %v", err)
 			}
-			if errResp.Code != apperr.CodeValidationFailed || len(errResp.Errors) != 1 || errResp.Errors[0].Field != "days" {
-				t.Fatalf("unexpected 422 payload: %+v", errResp)
+			if len(errResp.Errors) != 1 || errResp.Errors[0].Field != "days" {
+				t.Fatalf("unexpected 422 errors payload: %+v", errResp.Errors)
 			}
 			wantMsg := bundle.Translate(tc.lang, ErrCodeInvalidDays, nil)
 			if errResp.Errors[0].Message != wantMsg {
-				t.Fatalf("lang=%s message = %q, want %q", tc.lang, errResp.Errors[0].Message, wantMsg)
+				t.Fatalf("lang=%s field message = %q, want %q", tc.lang, errResp.Errors[0].Message, wantMsg)
 			}
 		}
 	})
@@ -268,25 +312,17 @@ func TestDashboardHTTPRoutesContract(t *testing.T) {
 		st.userErr = errors.New("sensitive postgres credential detail")
 		t.Cleanup(func() { st.userErr = nil })
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary", nil)
-		req.Header.Set("X-Test-User", "allowed")
-		rec := httptest.NewRecorder()
-		engine.ServeHTTP(rec, req)
+		for _, lang := range []string{"en-US", "zh-CN"} {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary", nil)
+			req.Header.Set("X-Test-User", "allowed")
+			req.Header.Set("Accept-Language", lang)
+			rec := httptest.NewRecorder()
+			engine.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
-		}
-		if strings.Contains(rec.Body.String(), "sensitive postgres credential detail") {
-			t.Fatalf("500 response leaked internal error cause: %s", rec.Body.String())
-		}
-		var errResp struct {
-			Code string `json:"code"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-			t.Fatalf("unmarshal 500: %v", err)
-		}
-		if errResp.Code != apperr.CodeInternal {
-			t.Fatalf("code = %q, want %q", errResp.Code, apperr.CodeInternal)
+			if strings.Contains(rec.Body.String(), "sensitive postgres credential detail") {
+				t.Fatalf("500 response leaked internal error cause: %s", rec.Body.String())
+			}
+			assertErrorBody(t, rec, http.StatusInternalServerError, apperr.CodeInternal, lang)
 		}
 	})
 }

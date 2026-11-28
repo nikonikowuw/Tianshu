@@ -18,6 +18,11 @@ import (
 
 func openDashboardTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	return openDashboardTestPoolWithTimeZone(t, "")
+}
+
+func openDashboardTestPoolWithTimeZone(t *testing.T, timeZone string) *pgxpool.Pool {
+	t.Helper()
 
 	dsn, dsnExplicit := os.LookupEnv("TIANSHU_TEST_DSN")
 	if !dsnExplicit {
@@ -60,6 +65,9 @@ func openDashboardTestPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("parse dsn: %v", err)
 	}
 	poolCfg.ConnConfig.RuntimeParams["search_path"] = schema + ",public"
+	if timeZone != "" {
+		poolCfg.ConnConfig.RuntimeParams["TimeZone"] = timeZone
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		t.Fatalf("open schema pool: %v", err)
@@ -187,6 +195,21 @@ func TestDashboardSummaryPostgresAggregation(t *testing.T) {
 	if len(summary7.ActivityTrend) != 7 {
 		t.Fatalf("len(ActivityTrend) = %d, want 7", len(summary7.ActivityTrend))
 	}
+	todayUTC := time.Date(summary7.GeneratedAt.Year(), summary7.GeneratedAt.Month(), summary7.GeneratedAt.Day(), 0, 0, 0, 0, time.UTC)
+	wantTrend7 := []dashboard.DailyActivityPoint{
+		{Date: todayUTC.AddDate(0, 0, -6).Format("2006-01-02"), Logins: 0, Operations: 0, Failures: 0},
+		{Date: todayUTC.AddDate(0, 0, -5).Format("2006-01-02"), Logins: 0, Operations: 0, Failures: 0},
+		{Date: todayUTC.AddDate(0, 0, -4).Format("2006-01-02"), Logins: 0, Operations: 0, Failures: 0},
+		{Date: todayUTC.AddDate(0, 0, -3).Format("2006-01-02"), Logins: 1, Operations: 2, Failures: 0},
+		{Date: todayUTC.AddDate(0, 0, -2).Format("2006-01-02"), Logins: 0, Operations: 0, Failures: 0},
+		{Date: todayUTC.AddDate(0, 0, -1).Format("2006-01-02"), Logins: 0, Operations: 0, Failures: 0},
+		{Date: todayUTC.Format("2006-01-02"), Logins: 1, Operations: 3, Failures: 1},
+	}
+	for i, want := range wantTrend7 {
+		if summary7.ActivityTrend[i] != want {
+			t.Fatalf("ActivityTrend[%d] = %+v, want %+v", i, summary7.ActivityTrend[i], want)
+		}
+	}
 	if summary7.Audit.TotalInRange != 8 || summary7.Audit.LoginsInRange != 2 || summary7.Audit.FailuresInRange != 1 {
 		t.Fatalf("Audit(7d) = %+v, want {TotalInRange:8 LoginsInRange:2 FailuresInRange:1}", summary7.Audit)
 	}
@@ -208,6 +231,64 @@ func TestDashboardSummaryPostgresAggregation(t *testing.T) {
 	}
 	if summary14.Audit.TotalInRange != 10 || summary14.Audit.LoginsInRange != 3 || summary14.Audit.FailuresInRange != 1 {
 		t.Fatalf("Audit(14d) = %+v, want {TotalInRange:10 LoginsInRange:3 FailuresInRange:1}", summary14.Audit)
+	}
+
+	// Insert a 20-day-old failure and verify the 30-day window picks it up while 14d would not.
+	twentyDaysAgo := today.AddDate(0, 0, -20)
+	mustExec(t, pool, `
+		INSERT INTO audit_logs (id, actor_username, action, resource, status, ip_address, created_at)
+		VALUES ($1, 'admin', 'auth.login', 'session', 'failure', '127.0.0.1', $2)
+	`, uuid.Must(uuid.NewV7()), twentyDaysAgo)
+
+	days30 := 30
+	summary30, err := svc.Summary(ctx, dashboard.SummaryInput{Days: &days30})
+	if err != nil {
+		t.Fatalf("Summary(30) error = %v", err)
+	}
+	if len(summary30.ActivityTrend) != 30 {
+		t.Fatalf("len(ActivityTrend) = %d, want 30", len(summary30.ActivityTrend))
+	}
+	if summary30.Audit.TotalInRange != 11 || summary30.Audit.LoginsInRange != 3 || summary30.Audit.FailuresInRange != 2 {
+		t.Fatalf("Audit(30d) = %+v, want {TotalInRange:11 LoginsInRange:3 FailuresInRange:2}", summary30.Audit)
+	}
+	want20DaysAgoKey := twentyDaysAgo.UTC().Format("2006-01-02")
+	if summary30.ActivityTrend[9].Date != want20DaysAgoKey || summary30.ActivityTrend[9].Failures != 1 {
+		t.Fatalf("ActivityTrend[9] (20d ago) = %+v, want date=%s failures=1", summary30.ActivityTrend[9], want20DaysAgoKey)
+	}
+}
+
+func TestDashboardSummaryPostgresUTCBucketingIgnoresSessionTimeZone(t *testing.T) {
+	pool := openDashboardTestPoolWithTimeZone(t, "Asia/Shanghai")
+	ctx := t.Context()
+	svc := dashboard.NewService(pool)
+
+	now := time.Now().UTC()
+	todayMidnightUTC := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	yesterdayLateUTC := todayMidnightUTC.Add(-5 * time.Minute) // 23:55Z yesterday (= 07:55+08:00 today in Shanghai)
+	todayEarlyUTC := todayMidnightUTC.Add(5 * time.Minute)     // 00:05Z today     (= 08:05+08:00 today in Shanghai)
+
+	mustExec(t, pool, `
+		INSERT INTO audit_logs (id, actor_username, action, resource, status, ip_address, created_at)
+		VALUES
+			($1, 'admin', 'role.update', 'role', 'success', '127.0.0.1', $3),
+			($2, 'admin', 'auth.login', 'session', 'success', '127.0.0.1', $4)
+	`, uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), yesterdayLateUTC, todayEarlyUTC)
+
+	summary, err := svc.Summary(ctx, dashboard.SummaryInput{})
+	if err != nil {
+		t.Fatalf("Summary() error = %v", err)
+	}
+	if len(summary.ActivityTrend) != 7 {
+		t.Fatalf("len(ActivityTrend) = %d, want 7", len(summary.ActivityTrend))
+	}
+
+	yesterdayKey := yesterdayLateUTC.Format("2006-01-02")
+	todayKey := todayEarlyUTC.Format("2006-01-02")
+	if got := summary.ActivityTrend[5]; got.Date != yesterdayKey || got.Operations != 1 || got.Logins != 0 {
+		t.Fatalf("yesterday UTC bucket = %+v, want date=%s operations=1 logins=0", got, yesterdayKey)
+	}
+	if got := summary.ActivityTrend[6]; got.Date != todayKey || got.Logins != 1 || got.Operations != 0 {
+		t.Fatalf("today UTC bucket = %+v, want date=%s logins=1 operations=0", got, todayKey)
 	}
 }
 

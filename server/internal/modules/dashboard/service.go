@@ -52,34 +52,53 @@ func (s *Service) Summary(ctx context.Context, input SummaryInput) (Summary, err
 	rangeEnd := todayStart.AddDate(0, 0, 1)
 	newUsersSince := now.AddDate(0, 0, -defaultRangeDays)
 
-	userStats, err := s.store.GetUserStats(ctx, newUsersSince)
-	if err != nil {
-		return Summary{}, apperr.Internal(fmt.Errorf("load dashboard user stats: %w", err))
-	}
+	var (
+		userStats      UserStats
+		roleStats      RoleStats
+		fileStats      FileStats
+		activeSessions int64
+		rawTrend       []DailyActivityPoint
+		recent         []RecentActivityItem
+	)
 
-	roleStats, err := s.store.GetRoleStats(ctx)
-	if err != nil {
-		return Summary{}, apperr.Internal(fmt.Errorf("load dashboard role stats: %w", err))
-	}
+	err := s.store.WithinReadTx(ctx, func(ctx context.Context, st store) error {
+		var err error
+		userStats, err = st.GetUserStats(ctx, newUsersSince)
+		if err != nil {
+			return apperr.Internal(fmt.Errorf("load dashboard user stats: %w", err))
+		}
 
-	fileStats, err := s.store.GetFileStats(ctx)
-	if err != nil {
-		return Summary{}, apperr.Internal(fmt.Errorf("load dashboard file stats: %w", err))
-	}
+		roleStats, err = st.GetRoleStats(ctx)
+		if err != nil {
+			return apperr.Internal(fmt.Errorf("load dashboard role stats: %w", err))
+		}
 
-	activeSessions, err := s.store.CountActiveSessions(ctx, now)
-	if err != nil {
-		return Summary{}, apperr.Internal(fmt.Errorf("load dashboard active sessions: %w", err))
-	}
+		fileStats, err = st.GetFileStats(ctx)
+		if err != nil {
+			return apperr.Internal(fmt.Errorf("load dashboard file stats: %w", err))
+		}
 
-	rawTrend, err := s.store.ListDailyAuditActivity(ctx, rangeStart, rangeEnd)
-	if err != nil {
-		return Summary{}, apperr.Internal(fmt.Errorf("load dashboard activity trend: %w", err))
-	}
+		activeSessions, err = st.CountActiveSessions(ctx, now)
+		if err != nil {
+			return apperr.Internal(fmt.Errorf("load dashboard active sessions: %w", err))
+		}
 
-	recent, err := s.store.ListRecentAuditActivity(ctx, s.recentLimit)
+		rawTrend, err = st.ListDailyAuditActivity(ctx, rangeStart, rangeEnd)
+		if err != nil {
+			return apperr.Internal(fmt.Errorf("load dashboard activity trend: %w", err))
+		}
+
+		recent, err = st.ListRecentAuditActivity(ctx, s.recentLimit)
+		if err != nil {
+			return apperr.Internal(fmt.Errorf("load dashboard recent activity: %w", err))
+		}
+		return nil
+	})
 	if err != nil {
-		return Summary{}, apperr.Internal(fmt.Errorf("load dashboard recent activity: %w", err))
+		if appErr, ok := apperr.As(err); ok {
+			return Summary{}, appErr
+		}
+		return Summary{}, apperr.Internal(fmt.Errorf("load dashboard summary snapshot: %w", err))
 	}
 	if recent == nil {
 		recent = []RecentActivityItem{}

@@ -2,8 +2,11 @@ package dashboard
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -12,6 +15,7 @@ import (
 )
 
 type store interface {
+	WithinReadTx(ctx context.Context, fn func(ctx context.Context, txStore store) error) error
 	GetUserStats(ctx context.Context, since time.Time) (UserStats, error)
 	GetRoleStats(ctx context.Context) (RoleStats, error)
 	GetFileStats(ctx context.Context) (FileStats, error)
@@ -24,6 +28,7 @@ var _ store = (*pgStore)(nil)
 
 type pgStore struct {
 	pool *pgxpool.Pool
+	tx   pgx.Tx
 }
 
 func newStore(pool *pgxpool.Pool) *pgStore {
@@ -31,7 +36,56 @@ func newStore(pool *pgxpool.Pool) *pgStore {
 }
 
 func (s *pgStore) queries(ctx context.Context) *dbgen.Queries {
+	if s.tx != nil {
+		return dbgen.New(s.tx)
+	}
 	return dbgen.New(database.Executor(ctx, s.pool))
+}
+
+// WithinReadTx runs fn inside a REPEATABLE READ READ ONLY transaction so all dashboard
+// queries observe a consistent point-in-time snapshot without acquiring row locks.
+func (s *pgStore) WithinReadTx(ctx context.Context, fn func(ctx context.Context, txStore store) error) error {
+	if s.tx != nil || s.pool == nil {
+		return fn(ctx, s)
+	}
+	if _, ok := database.TxFromContext(ctx); ok {
+		return fn(ctx, s)
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return fmt.Errorf("begin read-only transaction: %w", err)
+	}
+
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rbCtx)
+	}()
+
+	txStore := &pgStore{pool: s.pool, tx: tx}
+	if err := fn(ctx, txStore); err != nil {
+		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		rbErr := tx.Rollback(rbCtx)
+		cancel()
+		if rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			return fmt.Errorf("rollback read-only transaction after %w: %v", err, rbErr)
+		}
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit read-only transaction: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func (s *pgStore) GetUserStats(ctx context.Context, since time.Time) (UserStats, error) {
