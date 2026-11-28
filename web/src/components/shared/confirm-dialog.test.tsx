@@ -1,12 +1,21 @@
-import type { SubmitEvent } from 'react'
+import type { ReactNode, SubmitEvent } from 'react'
+import { I18nextProvider } from 'react-i18next'
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import i18n from '@/i18n/index'
 import { ConfirmDialog } from './confirm-dialog'
 
+const CANCEL_RE = /cancel|取消/i
+const CONFIRM_RE = /confirm|确认/i
+
+function renderWithI18n(ui: ReactNode) {
+  return render(<I18nextProvider i18n={i18n}>{ui}</I18nextProvider>)
+}
+
 describe('ConfirmDialog', () => {
-  it('renders title, description, and default buttons', async () => {
-    const { getByRole, getByText } = await render(
+  it('renders title, description, and localized default buttons', async () => {
+    const { getByRole, getByText } = await renderWithI18n(
       <ConfirmDialog
         open
         onOpenChange={vi.fn()}
@@ -23,16 +32,16 @@ describe('ConfirmDialog', () => {
       .element(getByText('This action cannot be undone.'))
       .toBeInTheDocument()
     await expect
-      .element(getByRole('button', { name: 'Cancel' }))
+      .element(getByRole('button', { name: CANCEL_RE }))
       .toBeInTheDocument()
     await expect
-      .element(getByRole('button', { name: 'Continue' }))
+      .element(getByRole('button', { name: CONFIRM_RE }))
       .toBeInTheDocument()
   })
 
   it('calls handleConfirm when the confirm button is clicked', async () => {
     const handleConfirm = vi.fn()
-    const { getByRole } = await render(
+    const { getByRole } = await renderWithI18n(
       <ConfirmDialog
         open
         onOpenChange={vi.fn()}
@@ -49,7 +58,7 @@ describe('ConfirmDialog', () => {
 
   it('disables confirm when disabled is true', async () => {
     const handleConfirm = vi.fn()
-    const { getByRole } = await render(
+    const { getByRole } = await renderWithI18n(
       <ConfirmDialog
         open
         onOpenChange={vi.fn()}
@@ -60,17 +69,18 @@ describe('ConfirmDialog', () => {
       />
     )
 
-    const confirm = getByRole('button', { name: 'Continue' })
+    const confirm = getByRole('button', { name: CONFIRM_RE })
     await expect.element(confirm).toBeDisabled()
     expect(handleConfirm).not.toHaveBeenCalled()
   })
 
-  it('when isLoading is true, disables cancel and confirm', async () => {
+  it('when isLoading is true, disables cancel/confirm and blocks Escape dismissal', async () => {
     const handleConfirm = vi.fn()
-    const { getByRole } = await render(
+    const onOpenChange = vi.fn()
+    const { getByRole } = await renderWithI18n(
       <ConfirmDialog
         open
-        onOpenChange={vi.fn()}
+        onOpenChange={onOpenChange}
         title='Loading'
         desc='...'
         isLoading
@@ -78,14 +88,19 @@ describe('ConfirmDialog', () => {
       />
     )
 
-    await expect.element(getByRole('button', { name: 'Cancel' })).toBeDisabled()
     await expect
-      .element(getByRole('button', { name: 'Continue' }))
+      .element(getByRole('button', { name: CANCEL_RE }))
       .toBeDisabled()
+    await expect
+      .element(getByRole('button', { name: CONFIRM_RE }))
+      .toBeDisabled()
+
+    await userEvent.keyboard('{Escape}')
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
 
   it('supports custom button texts', async () => {
-    const { getByRole } = await render(
+    const { getByRole } = await renderWithI18n(
       <ConfirmDialog
         open
         onOpenChange={vi.fn()}
@@ -106,7 +121,7 @@ describe('ConfirmDialog', () => {
   })
 
   it('renders confirm as submit button linked to desc form when `form` is set', async () => {
-    const { getByRole } = await render(
+    const { getByRole } = await renderWithI18n(
       <ConfirmDialog
         open
         onOpenChange={vi.fn()}
@@ -134,7 +149,7 @@ describe('ConfirmDialog', () => {
       e.preventDefault()
     })
 
-    const { getByRole } = await render(
+    const { getByRole } = await renderWithI18n(
       <ConfirmDialog
         open
         onOpenChange={vi.fn()}
@@ -164,7 +179,7 @@ describe('ConfirmDialog', () => {
       e.preventDefault()
     })
 
-    const { getByPlaceholder } = await render(
+    const { getByPlaceholder } = await renderWithI18n(
       <ConfirmDialog
         open
         onOpenChange={vi.fn()}
@@ -194,7 +209,7 @@ describe('ConfirmDialog', () => {
       e.preventDefault()
     })
 
-    const { getByRole } = await render(
+    const { getByRole } = await renderWithI18n(
       <ConfirmDialog
         open
         onOpenChange={vi.fn()}

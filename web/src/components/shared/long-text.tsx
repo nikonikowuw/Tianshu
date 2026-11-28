@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import {
   Popover,
@@ -8,7 +8,6 @@ import {
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
@@ -23,20 +22,39 @@ export function LongText({
   className = '',
   contentClassName = '',
 }: LongTextProps) {
-  const ref = useRef<HTMLDivElement>(null)
+  const singleRef = useRef<HTMLDivElement>(null)
+  const desktopRef = useRef<HTMLDivElement>(null)
+  const mobileRef = useRef<HTMLDivElement>(null)
   const [isOverflown, setIsOverflown] = useState(false)
 
-  // Use ref callback to check overflow when element is mounted
-  const refCallback = (node: HTMLDivElement | null) => {
-    ref.current = node
-    if (node && checkOverflow(node)) {
-      queueMicrotask(() => setIsOverflown(true))
+  useEffect(() => {
+    const measure = () => {
+      const candidates = [
+        singleRef.current,
+        desktopRef.current,
+        mobileRef.current,
+      ].filter(
+        (node): node is HTMLDivElement =>
+          node !== null && node.getClientRects().length > 0
+      )
+      if (candidates.length === 0) return
+      const next = candidates.some((node) => checkOverflow(node))
+      setIsOverflown((prev) => (prev === next ? prev : next))
     }
-  }
+
+    measure()
+
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    if (singleRef.current) observer.observe(singleRef.current)
+    if (desktopRef.current) observer.observe(desktopRef.current)
+    if (mobileRef.current) observer.observe(mobileRef.current)
+    return () => observer.disconnect()
+  }, [children, isOverflown])
 
   if (!isOverflown)
     return (
-      <div ref={refCallback} className={cn('truncate', className)}>
+      <div ref={singleRef} className={cn('truncate', className)}>
         {children}
       </div>
     )
@@ -44,23 +62,28 @@ export function LongText({
   return (
     <>
       <div className='hidden sm:block'>
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div ref={refCallback} className={cn('truncate', className)}>
-                {children}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p className={contentClassName}>{children}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              ref={desktopRef}
+              tabIndex={0}
+              className={cn(
+                'truncate focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
+                className
+              )}
+            >
+              {children}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p className={contentClassName}>{children}</p>
+          </TooltipContent>
+        </Tooltip>
       </div>
       <div className='sm:hidden'>
         <Popover>
           <PopoverTrigger asChild>
-            <div ref={refCallback} className={cn('truncate', className)}>
+            <div ref={mobileRef} className={cn('truncate', className)}>
               {children}
             </div>
           </PopoverTrigger>

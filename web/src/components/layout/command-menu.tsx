@@ -44,7 +44,13 @@ export function CommandMenu({ navGroups }: CommandMenuProps) {
   )
 
   return (
-    <CommandDialog modal open={open} onOpenChange={setOpen}>
+    <CommandDialog
+      modal
+      open={open}
+      onOpenChange={setOpen}
+      title={t('command.title')}
+      description={t('command.description')}
+    >
       <CommandInput placeholder={t('command.placeholder')} />
       <CommandList>
         <ScrollArea type='hover' className='h-72 pe-1'>

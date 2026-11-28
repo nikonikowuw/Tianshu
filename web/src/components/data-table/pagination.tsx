@@ -110,6 +110,7 @@ export function DataTablePagination<TData>({
               pageNumber === '...' ? (
                 <span
                   key={`ellipsis-${index}`}
+                  aria-hidden='true'
                   className='px-1 text-sm text-muted-foreground'
                 >
                   ...
@@ -119,6 +120,7 @@ export function DataTablePagination<TData>({
                   key={pageNumber}
                   type='button'
                   variant={currentPage === pageNumber ? 'default' : 'outline'}
+                  aria-current={currentPage === pageNumber ? 'page' : undefined}
                   className='h-8 min-w-8 px-2 tabular-nums'
                   onClick={() => table.setPageIndex((pageNumber as number) - 1)}
                 >
@@ -128,7 +130,7 @@ export function DataTablePagination<TData>({
                       total: totalPages,
                     })}
                   </span>
-                  {pageNumber}
+                  <span aria-hidden='true'>{pageNumber}</span>
                 </Button>
               )
             )}

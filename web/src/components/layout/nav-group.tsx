@@ -1,11 +1,20 @@
 import { type ReactNode } from 'react'
 import { Link, useLocation } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   SidebarGroup,
   SidebarGroupLabel,
@@ -17,15 +26,6 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from '@/components/ui/sidebar'
-import { Badge } from '../ui/badge'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '../ui/dropdown-menu'
 import {
   type NavCollapsible,
   type NavItem,
@@ -173,7 +173,7 @@ function SidebarMenuCollapsedDropdown({
   )
 }
 
-function checkIsActive(href: string, item: NavItem, mainNav = false) {
+function checkIsActive(href: string, item: NavItem, mainNav = false): boolean {
   const pathname = href.split('?')[0]
   return (
     href === item.url || // /endpoint?search=param
@@ -181,9 +181,10 @@ function checkIsActive(href: string, item: NavItem, mainNav = false) {
     (typeof item.url === 'string' &&
       item.url !== '/' &&
       pathname.startsWith(`${item.url}/`)) || // nested route like /settings/security
-    !!item?.items?.filter((i) => i.url === href).length || // if child nav is active
+    Boolean(item.items?.some((sub) => checkIsActive(href, sub))) || // if child nav is active
     (mainNav &&
-      href.split('/')[1] !== '' &&
-      href.split('/')[1] === item?.url?.split('/')[1])
+      typeof item.url === 'string' &&
+      pathname.split('/')[1] !== '' &&
+      pathname.split('/')[1] === item.url.split('/')[1])
   )
 }

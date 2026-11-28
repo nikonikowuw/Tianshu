@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Loader } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FormControl } from '@/components/ui/form'
@@ -18,6 +19,7 @@ type SelectDropdownProps = {
   disabled?: boolean
   className?: string
   isControlled?: boolean
+  withFormControl?: boolean
 }
 
 export function SelectDropdown({
@@ -29,24 +31,27 @@ export function SelectDropdown({
   disabled,
   className = '',
   isControlled = false,
+  withFormControl = false,
 }: SelectDropdownProps) {
+  const { t } = useTranslation('common')
   const defaultState = isControlled
     ? { value: defaultValue, onValueChange }
     : { defaultValue, onValueChange }
+  const trigger = (
+    <SelectTrigger disabled={disabled} className={cn(className)}>
+      <SelectValue placeholder={placeholder ?? t('selectPlaceholder')} />
+    </SelectTrigger>
+  )
+
   return (
     <Select {...defaultState}>
-      <FormControl>
-        <SelectTrigger disabled={disabled} className={cn(className)}>
-          <SelectValue placeholder={placeholder ?? 'Select'} />
-        </SelectTrigger>
-      </FormControl>
+      {withFormControl ? <FormControl>{trigger}</FormControl> : trigger}
       <SelectContent>
         {isPending ? (
           <SelectItem disabled value='loading' className='h-14'>
             <div className='flex items-center justify-center gap-2'>
-              <Loader className='h-5 w-5 animate-spin' />
-              {'  '}
-              Loading...
+              <Loader className='size-5 animate-spin' />
+              <span>{t('loading')}</span>
             </div>
           </SelectItem>
         ) : (

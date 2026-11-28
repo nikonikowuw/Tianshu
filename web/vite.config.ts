@@ -43,6 +43,8 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // auth-three-backdrop 懒加载引入 three 运行时（约 538 kB），仅在未登录认证页按需加载
+    chunkSizeWarningLimit: 600,
   },
   optimizeDeps: {
     include: [

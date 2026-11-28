@@ -59,6 +59,14 @@ export function DataTableToolbar<TData>({
     setDraftValue(externalValue)
   }
 
+  // 外部筛选值变化时取消未决防抖定时器，避免覆盖浏览器后退/前进恢复的 URL 状态
+  useEffect(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+      debounceTimerRef.current = null
+    }
+  }, [externalValue])
+
   useEffect(() => {
     return () => {
       if (debounceTimerRef.current) {
@@ -68,10 +76,11 @@ export function DataTableToolbar<TData>({
   }, [])
 
   const applySearch = (val: string) => {
+    const trimmed = val.trim()
     if (searchKey) {
-      table.getColumn(searchKey)?.setFilterValue(val || undefined)
+      table.getColumn(searchKey)?.setFilterValue(trimmed ? val : undefined)
     } else {
-      table.setGlobalFilter(val)
+      table.setGlobalFilter(trimmed ? val : '')
     }
   }
 
@@ -79,12 +88,14 @@ export function DataTableToolbar<TData>({
     setDraftValue(next)
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current)
+      debounceTimerRef.current = null
     }
     if (next.trim() === '' || debounceMs <= 0) {
-      applySearch(next)
+      applySearch(next.trim() === '' ? '' : next)
       return
     }
     debounceTimerRef.current = setTimeout(() => {
+      debounceTimerRef.current = null
       applySearch(next)
     }, debounceMs)
   }
@@ -138,7 +149,7 @@ export function DataTableToolbar<TData>({
             className='h-8 px-2 lg:px-3'
           >
             {t('table.reset')}
-            <Cross2Icon className='ms-2 h-4 w-4' />
+            <Cross2Icon className='ms-2 size-4' />
           </Button>
         )}
       </div>
